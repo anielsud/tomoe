@@ -192,6 +192,15 @@ Monitor Capturer → StreamCapturer → VAD → Transcribe(lang) → Embed → C
 | `~/.local/share/tomoe/sessions/` | Saved sessions (JSON + M4A) |
 | `~/.local/share/tomoe/lib/` | GPU libraries (if installed) |
 
+## Session Backup
+
+A ready-made rsync/SSH backup script for the sessions directory lives in
+[`scripts/backup/`](./scripts/backup/). Runs on cron or a systemd timer,
+mirrors transcripts and audio to a remote host, and — after verifying each
+remote copy — prunes local audio older than a configurable retention window.
+Transcript `session.json` files are kept locally forever. See
+[`scripts/backup/README.md`](./scripts/backup/README.md) for setup.
+
 ## Roadmap
 
 - **Cross-platform support** — extend beyond Linux to Windows and macOS (audio capture, hotkeys, tray, and meeting detection abstractions)
