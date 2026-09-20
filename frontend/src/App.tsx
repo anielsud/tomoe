@@ -96,7 +96,7 @@ function App() {
   async function handleStart() {
     try {
       clearTranscript();
-      await window.go.backend.App.StartSession(micDevice, monitorDevice, selectedLang, "");
+      await window.go.backend.App.StartSession(micDevice, monitorDevice, selectedLang, "", "");
     } catch (e) {
       console.error('Failed to start session:', e);
     }

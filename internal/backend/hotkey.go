@@ -127,7 +127,7 @@ func (hk *hotkeyManager) toggleMeeting(lang, platform string) {
 		// Only start if a language is specified (empty = stop-only signal from tray)
 		micDevice := hk.app.cfg.Audio.Device
 		monitorDevice := hk.app.cfg.Meeting.MonitorDevice
-		_ = hk.app.StartSession(micDevice, monitorDevice, lang, platform)
+		_ = hk.app.StartSession(micDevice, monitorDevice, lang, platform, "")
 		if hk.app.tray != nil {
 			hk.app.tray.setMeetingRecording()
 		}
@@ -153,7 +153,7 @@ func (hk *hotkeyManager) handleDetectEvent(evt meeting.MeetingEvent, defaultLang
 		platform := string(evt.Platform)
 		micDevice := hk.app.cfg.Audio.Device
 		monitorDevice := hk.app.cfg.Meeting.MonitorDevice
-		if err := hk.app.StartSession(micDevice, monitorDevice, defaultLang, platform); err != nil {
+		if err := hk.app.StartSession(micDevice, monitorDevice, defaultLang, platform, evt.WindowTitle); err != nil {
 			fmt.Printf("Auto-detect meeting start failed: %v\n", err)
 			return
 		}

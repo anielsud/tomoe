@@ -19,6 +19,31 @@ export interface Session {
   sources: string[];
   segments: Segment[];
   audio_path?: string;
+  // Optional serialization-time enrichment from the local calendar cache
+  // (~/.local/state/tomoe/calendar/). Never part of session.json on disk.
+  calendar_event?: CalendarEvent;
+}
+
+export interface CalendarParticipant {
+  name?: string;
+  email?: string;
+  response_status?: string; // "accepted" | "declined" | "tentative" | "needsAction"
+  is_organizer?: boolean;
+}
+
+export interface CalendarEvent {
+  source: string;
+  provider: string;
+  event_id?: string;
+  title: string;
+  organizer?: CalendarParticipant;
+  participants?: CalendarParticipant[];
+  participant_count?: number;
+  start_time: string;
+  end_time: string;
+  meeting_url?: string;
+  matched_at: string;
+  match_score?: number;
 }
 
 export interface DeviceInfo {

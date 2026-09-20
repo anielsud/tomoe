@@ -90,7 +90,7 @@ func (s *Store) Save(m *CachedMatch) error {
 	defer func() { _ = os.Remove(tmpPath) }()
 
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("calendar store: write temp: %w", err)
 	}
 	if err := tmp.Close(); err != nil {

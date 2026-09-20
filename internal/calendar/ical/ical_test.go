@@ -16,12 +16,12 @@ func openFixture(t *testing.T, name string) io.ReadCloser {
 	if err != nil {
 		t.Fatalf("open fixture %s: %v", name, err)
 	}
+	t.Cleanup(func() { _ = f.Close() })
 	return f
 }
 
 func TestParseICSExtractsSummaryAndTimes(t *testing.T) {
 	f := openFixture(t, "personal.ics")
-	defer f.Close()
 
 	from := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)
@@ -49,7 +49,6 @@ func TestParseICSExtractsSummaryAndTimes(t *testing.T) {
 
 func TestParseICSExtractsAttendees(t *testing.T) {
 	f := openFixture(t, "personal.ics")
-	defer f.Close()
 	from := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)
 
@@ -87,7 +86,6 @@ func TestParseICSExtractsAttendees(t *testing.T) {
 
 func TestParseICSNormalizesStatus(t *testing.T) {
 	f := openFixture(t, "personal.ics")
-	defer f.Close()
 	from := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)
 
@@ -110,7 +108,6 @@ func TestParseICSNormalizesStatus(t *testing.T) {
 
 func TestParseICSPrivacyStripped(t *testing.T) {
 	f := openFixture(t, "privacy-stripped.ics")
-	defer f.Close()
 	from := time.Date(2026, 9, 20, 9, 0, 0, 0, time.UTC)
 	to := from.Add(6 * time.Hour)
 
@@ -135,7 +132,6 @@ func TestParseICSPrivacyStripped(t *testing.T) {
 
 func TestParseICSFiltersByWindow(t *testing.T) {
 	f := openFixture(t, "personal.ics")
-	defer f.Close()
 	// Window only covers the morning event.
 	from := time.Date(2026, 9, 20, 9, 30, 0, 0, time.UTC)
 	to := time.Date(2026, 9, 20, 11, 0, 0, 0, time.UTC)

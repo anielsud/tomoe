@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
-import { Session } from '../types';
+import { CalendarEvent, Session } from '../types';
 
 interface Props {
   onExport: (sessionId: string) => void;
@@ -61,6 +61,52 @@ function LanguageBadge({ language }: { language?: string }) {
       }}
     >
       {language.toUpperCase()}
+    </span>
+  );
+}
+
+// CalendarChip surfaces the linked event on a session row. Rendered only
+// when the backend attached a `calendar_event` via the local cache. Tooltip
+// shows organizer + up to 5 attendees ("+N more").
+function CalendarChip({ event }: { event?: CalendarEvent }) {
+  if (!event) return null;
+  const shown = (event.participants || []).slice(0, 5);
+  const remaining = Math.max(0, (event.participant_count ?? (event.participants?.length ?? 0)) - shown.length);
+  const parts: string[] = [];
+  if (event.organizer?.name || event.organizer?.email) {
+    parts.push(`Organizer: ${event.organizer.name || event.organizer.email}`);
+  }
+  if (shown.length > 0) {
+    const list = shown.map(p => p.name || p.email || '').filter(Boolean).join(', ');
+    parts.push(`Attendees: ${list}${remaining > 0 ? ` +${remaining} more` : ''}`);
+  } else if ((event.participant_count ?? 0) > 0) {
+    parts.push(`Attendees: ${event.participant_count}`);
+  }
+  parts.push(`Start: ${new Date(event.start_time).toLocaleString()}`);
+  if (event.match_score) {
+    parts.push(`Match score: ${event.match_score}`);
+  }
+  const tooltip = parts.join('\n');
+  return (
+    <span
+      title={tooltip}
+      style={{
+        display: 'inline-block',
+        fontSize: 10,
+        fontWeight: 600,
+        padding: '1px 6px',
+        borderRadius: 3,
+        backgroundColor: '#4a4a4a',
+        color: '#fff',
+        marginLeft: 6,
+        verticalAlign: 'middle',
+        maxWidth: 220,
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+        whiteSpace: 'nowrap',
+      }}
+    >
+      📅 {event.title}
     </span>
   );
 }
@@ -255,6 +301,7 @@ export default function SessionList({ onExport }: Props) {
                           {sess.title}
                           <PlatformBadge platform={sess.platform} />
                           <LanguageBadge language={sess.language} />
+                          <CalendarChip event={sess.calendar_event} />
                         </div>
                         <div className="session-meta">
                           {new Date(sess.created_at).toLocaleDateString()}

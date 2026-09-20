@@ -10,7 +10,9 @@ import (
 	"github.com/google/uuid"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/sosuke-ai/tomoe-pc/calendar"
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
+	icalendar "github.com/sosuke-ai/tomoe-pc/internal/calendar"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/gpu"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
@@ -36,12 +38,20 @@ type App struct {
 	modelMgr    *models.Manager
 	detector    *meeting.Detector
 
-	mu              sync.Mutex
-	recording       bool // meeting recording in progress
-	dictating       bool // dictation recording in progress
-	dictCoordinator *live.Coordinator
-	dictCancel      context.CancelFunc
-	currentSess     *session.Session
+	// Calendar enrichment. calendar is the pluggable Enricher — nil disables
+	// enrichment entirely. calendarStore is the ephemeral per-session cache
+	// under $XDG_STATE_HOME/tomoe/calendar. Both are populated in Startup
+	// unless an external embedder called SetCalendar first.
+	calendar      calendar.Enricher
+	calendarStore *icalendar.Store
+
+	mu                 sync.Mutex
+	recording          bool // meeting recording in progress
+	dictating          bool // dictation recording in progress
+	dictCoordinator    *live.Coordinator
+	dictCancel         context.CancelFunc
+	currentSess        *session.Session
+	currentWindowTitle string // captured at MeetingStarted; travels to persistSession via saveRequest
 
 	// trayDictCh is signalled by the tray "Start/Stop Dictation" menu item.
 	// Carries language code; "" = stop.
@@ -62,6 +72,10 @@ type App struct {
 type saveRequest struct {
 	sess        *session.Session
 	coordinator *live.Coordinator
+	// windowTitle is a snapshot captured at StartSession time (from
+	// MeetingEvent.WindowTitle). Used by calendar enrichment to extract a
+	// meeting URL. Empty when no window title was available.
+	windowTitle string
 }
 
 const saveQueueDepth = 16
@@ -73,6 +87,19 @@ func NewApp() *App {
 		trayMeetCh: make(chan string, 1),
 		saveQueue:  make(chan *saveRequest, saveQueueDepth),
 	}
+}
+
+// SetCalendar installs a calendar.Enricher for post-save enrichment. External
+// projects that embed Tomoe call this before Startup to plug in their own
+// resolver — e.g. a directory service or scheduling system in addition to (or
+// in place of) the built-in ICS provider. When called after Startup, the new
+// enricher takes effect on the next persistSession call.
+//
+// Passing nil disables calendar enrichment entirely.
+func (a *App) SetCalendar(e calendar.Enricher) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calendar = e
 }
 
 // Startup is called by Wails when the application starts.
@@ -142,6 +169,20 @@ func (a *App) Startup(ctx context.Context) {
 		if err := a.detector.Start(ctx); err != nil {
 			fmt.Printf("Warning: meeting auto-detect unavailable: %v\n", err)
 			a.detector = nil
+		}
+	}
+
+	// Calendar enrichment. Always construct the local cache store so
+	// existing cached matches can be surfaced. Only build the built-in
+	// enricher when calendar is enabled AND no external embedder has
+	// already installed one via SetCalendar.
+	a.calendarStore = icalendar.NewStore(icalendar.DefaultStoreDir())
+	if a.calendar == nil && cfg.Calendar.Enabled {
+		enricher, err := buildCalendarEnricher(cfg.Calendar)
+		if err != nil {
+			fmt.Printf("Warning: calendar enrichment disabled: %v\n", err)
+		} else {
+			a.calendar = enricher
 		}
 	}
 
@@ -224,8 +265,12 @@ func (a *App) ListMonitorSources() ([]audio.DeviceInfo, error) {
 }
 
 // StartSession begins a new live transcription session.
+//
 // platform is optional — set by auto-detect for meeting title (e.g. "Teams").
-func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) error {
+// windowTitle is optional — captured by auto-detect (X11 only via xdotool),
+// used by calendar match enrichment to extract a meeting URL. Pass "" from
+// manual paths.
+func (a *App) StartSession(micDevice, monitorDevice, lang, platform, windowTitle string) error {
 	a.fixSignals()
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -314,6 +359,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		CreatedAt: time.Now(),
 		Sources:   sources,
 	}
+	a.currentWindowTitle = windowTitle
 
 	a.coordinator = coordinator
 	a.recording = true
@@ -339,8 +385,10 @@ func (a *App) StopSession() (*session.Session, error) {
 
 	coordinator := a.coordinator
 	sess := a.currentSess
+	windowTitle := a.currentWindowTitle
 	a.recording = false
 	a.currentSess = nil
+	a.currentWindowTitle = ""
 	a.coordinator = nil
 	a.mu.Unlock()
 
@@ -356,7 +404,7 @@ func (a *App) StopSession() (*session.Session, error) {
 
 	// Hand off to the serial save worker so the next StartSession can
 	// proceed immediately while encoding + diarization run in the background.
-	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator}
+	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator, windowTitle: windowTitle}
 
 	return sess, nil
 }
@@ -416,25 +464,40 @@ func (a *App) persistSession(req *saveRequest) {
 		}
 	}
 
+	// Calendar enrichment — writes to the ephemeral local cache; never
+	// touches session.json. Failure is logged and swallowed.
+	a.runCalendarEnrichment(sess, req.windowTitle)
+
 	wailsRuntime.EventsEmit(a.ctx, "session:saved", sess.ID)
 }
 
-// GetSessionList returns all stored sessions.
-func (a *App) GetSessionList() ([]*session.Session, error) {
+// GetSessionList returns all stored sessions, augmented with any cached
+// calendar event via the ephemeral local cache. The calendar_event field is a
+// serialization-time enrichment — never part of session.json on disk.
+func (a *App) GetSessionList() ([]*sessionWithCalendar, error) {
 	a.fixSignals()
 	if a.store == nil {
 		return nil, nil
 	}
-	return a.store.List()
+	sessions, err := a.store.List()
+	if err != nil {
+		return nil, err
+	}
+	return a.withCalendarSlice(sessions), nil
 }
 
-// LoadSession returns a stored session by ID.
-func (a *App) LoadSession(id string) (*session.Session, error) {
+// LoadSession returns a stored session by ID, augmented with any cached
+// calendar event. See GetSessionList.
+func (a *App) LoadSession(id string) (*sessionWithCalendar, error) {
 	a.fixSignals()
 	if a.store == nil {
 		return nil, fmt.Errorf("session store not initialized")
 	}
-	return a.store.Load(id)
+	sess, err := a.store.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	return a.withCalendar(sess), nil
 }
 
 // ExportSession exports a session in the specified format and returns the content.
@@ -590,6 +653,21 @@ func (a *App) RetranscribeSession(id, lang string) error {
 			fmt.Printf("Re-transcribe: save error: %v\n", err)
 			wailsRuntime.EventsEmit(a.ctx, "session:retranscribe:error", err.Error())
 			return
+		}
+
+		// Refresh the calendar cache entry when it is missing or has no
+		// matched event. Skips when a prior enrichment already succeeded
+		// so a re-transcribe cannot unlink a match the user may have
+		// relied on.
+		if a.calendarStore != nil {
+			existing, _ := a.calendarStore.Load(id)
+			if existing == nil || existing.CalendarEvent == nil {
+				windowTitle := ""
+				if existing != nil {
+					windowTitle = existing.WindowTitle
+				}
+				a.runCalendarEnrichment(sess, windowTitle)
+			}
 		}
 
 		fmt.Printf("Re-transcribed session %s in %s\n", id, lang)

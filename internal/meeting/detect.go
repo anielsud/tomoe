@@ -31,6 +31,11 @@ const (
 type MeetingEvent struct {
 	Type     EventType
 	Platform Platform
+	// WindowTitle is a best-effort snapshot of the active window's title at
+	// the moment MeetingStarted fires. Populated on X11 via xdotool; empty
+	// on Wayland or when xdotool is unavailable. Used by calendar match
+	// enrichment to extract meeting URLs. Not set on MeetingStopped.
+	WindowTitle string
 }
 
 // streamInfo holds PulseAudio stream metadata.
@@ -200,13 +205,17 @@ func (d *Detector) checkForMeeting() {
 			if d.pendingPID == so.PID && now.Sub(d.pendingTime) >= debounceDelay {
 				// Debounce passed — confirm meeting
 				platform := identifyPlatform(so.AppName, so.PID)
+				// Capture the window title while the meeting is still live —
+				// used by calendar match enrichment to extract a meeting URL.
+				// Best-effort; empty on Wayland or when xdotool is missing.
+				windowTitle := getWindowTitleByPID(so.PID)
 				d.active = &trackedMeeting{pid: so.PID, platform: platform}
 				d.pendingPID = 0
 				d.mu.Unlock()
 
 				fmt.Printf("meeting: detected %s meeting (PID %d)\n", platform, so.PID)
 				select {
-				case d.events <- MeetingEvent{Type: MeetingStarted, Platform: platform}:
+				case d.events <- MeetingEvent{Type: MeetingStarted, Platform: platform, WindowTitle: windowTitle}:
 				default:
 					fmt.Println("meeting: event channel full, dropping start event")
 				}

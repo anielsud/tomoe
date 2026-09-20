@@ -170,7 +170,7 @@ tomoe config              # Print current config
 
 ## Coding Conventions
 
-- Use `internal/` for all non-main packages — nothing is exported outside the module
+- Use `internal/` for all non-main packages — nothing is exported outside the module. **Exception:** the top-level `calendar/` package is intentionally public; it is the seam external projects use to plug in their own `calendar.Enricher` implementation. Concrete providers still live under `internal/calendar/`.
 - Platform-specific code uses `_linux.go` build tag suffix
 - Audio format: 16kHz mono PCM float32 (Parakeet TDT native input)
 - Config format: TOML via `pelletier/go-toml`

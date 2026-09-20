@@ -66,7 +66,7 @@ func (p *Provider) ListEvents(ctx context.Context, from, to time.Time) ([]calend
 	if err != nil {
 		return nil, fmt.Errorf("ical %q: GET: %w", p.name, err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, fmt.Errorf("ical %q: GET returned %s", p.name, resp.Status)
