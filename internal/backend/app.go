@@ -13,6 +13,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/calendar"
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	icalendar "github.com/sosuke-ai/tomoe-pc/internal/calendar"
+	"github.com/sosuke-ai/tomoe-pc/internal/calendar/sock"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/gpu"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
@@ -200,6 +201,16 @@ func (a *App) Startup(ctx context.Context) {
 			fmt.Printf("Warning: calendar enrichment disabled: %v\n", err)
 		} else {
 			a.calendar = enricher
+		}
+	}
+	// Optional out-of-process participant resolver. Same "external
+	// embedder wins" precedence as the Enricher.
+	if a.calendarResolver == nil && cfg.Calendar.Enabled {
+		resolver, err := sock.New(cfg.Calendar.ParticipantResolver)
+		if err != nil {
+			fmt.Printf("Warning: participant resolver disabled: %v\n", err)
+		} else if resolver != nil {
+			a.calendarResolver = resolver
 		}
 	}
 

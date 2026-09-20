@@ -74,14 +74,15 @@ type MeetingConfig struct {
 // CalendarConfig holds calendar-integration settings. Off by default.
 // See docs/calendar-integration-tech-brief.md for the design.
 type CalendarConfig struct {
-	Enabled                 bool          `toml:"enabled"`
-	Providers               []string      `toml:"providers"`                  // ["ical"] in v1; auto-populated when empty and ICS entries exist
-	MatchStartWindowMinutes int           `toml:"match_start_window_minutes"` // tolerance for session-start ↔ event-start
-	MatchEndWindowBound     bool          `toml:"match_end_window_bound"`     // false = unbounded (meetings run long)
-	MatchScoreThreshold     int           `toml:"match_score_threshold"`      // events below this are "no match"
-	CacheTTLSeconds         int           `toml:"cache_ttl_seconds"`          // in-memory provider-result cache TTL
-	Jev                     JevConfig     `toml:"jev"`
-	ICal                    []ICalConfig  `toml:"ical"`
+	Enabled                 bool                      `toml:"enabled"`
+	Providers               []string                  `toml:"providers"`                  // ["ical"] in v1; auto-populated when empty and ICS entries exist
+	MatchStartWindowMinutes int                       `toml:"match_start_window_minutes"` // tolerance for session-start ↔ event-start
+	MatchEndWindowBound     bool                      `toml:"match_end_window_bound"`     // false = unbounded (meetings run long)
+	MatchScoreThreshold     int                       `toml:"match_score_threshold"`      // events below this are "no match"
+	CacheTTLSeconds         int                       `toml:"cache_ttl_seconds"`          // in-memory provider-result cache TTL
+	Jev                     JevConfig                 `toml:"jev"`
+	ICal                    []ICalConfig              `toml:"ical"`
+	ParticipantResolver     ParticipantResolverConfig `toml:"participant_resolver"`
 }
 
 // JevConfig holds settings for optional Jev-based topic adjudication.
@@ -99,6 +100,31 @@ type JevConfig struct {
 type ICalConfig struct {
 	Name string `toml:"name"` // display name, e.g. "Personal", "Work"
 	URL  string `toml:"url"`  // webcal:// or https:// ICS feed
+}
+
+// ParticipantResolverConfig configures an out-of-process resolver Tomoe
+// calls after every calendar match to enrich or replace the event's
+// participant list. See internal/calendar/sock for the client and the
+// documented request/response protocol; anyone can implement a compatible
+// server in any language.
+//
+// Exactly one of SocketPath or URL must be set when Enabled is true.
+type ParticipantResolverConfig struct {
+	Enabled bool `toml:"enabled"`
+	// SocketPath is the absolute path to a Unix domain socket the resolver
+	// listens on. The client POSTs to this socket with an HTTP request.
+	SocketPath string `toml:"socket_path"`
+	// URL is a TCP HTTP endpoint (http:// or https://). Mutually exclusive
+	// with SocketPath.
+	URL string `toml:"url"`
+	// Path is the HTTP request path the client POSTs to. Defaults to
+	// "/resolve". Applies to both SocketPath and URL transports.
+	Path string `toml:"path"`
+	// AuthHeader is sent verbatim in the Authorization header, e.g.
+	// "Bearer $(pass show tomoe-resolver-token)". Supports config expansion.
+	AuthHeader string `toml:"auth_header"`
+	// TimeoutSeconds bounds one resolver call. Default 10.
+	TimeoutSeconds int `toml:"timeout_seconds"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -146,6 +172,11 @@ func DefaultConfig() *Config {
 				Enabled:                  false,
 				TopicWeight:              40,
 				TranscriptContextSeconds: 120,
+			},
+			ParticipantResolver: ParticipantResolverConfig{
+				Enabled:        false,
+				Path:           "/resolve",
+				TimeoutSeconds: 10,
 			},
 		},
 	}
