@@ -10,6 +10,7 @@
 package ical
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -76,8 +77,17 @@ func (p *Provider) ListEvents(ctx context.Context, from, to time.Time) ([]calend
 
 // parseICS reads an ICS document and returns the events whose start falls
 // within [from, to]. Exposed to package-internal tests via fixture files.
+//
+// Buffers the whole document so Windows-style TZIDs (Outlook / Exchange)
+// can be rewritten to IANA before golang-ical parses them. See wintz.go.
 func parseICS(providerName string, r io.Reader, from, to time.Time) ([]calendar.Event, error) {
-	cal, err := ics.ParseCalendar(r)
+	body, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("ical %q: read: %w", providerName, err)
+	}
+	body = rewriteWindowsTZIDs(body)
+
+	cal, err := ics.ParseCalendar(bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("ical %q: parse: %w", providerName, err)
 	}
