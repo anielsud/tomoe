@@ -331,6 +331,144 @@ clipboard = true
 	}
 }
 
+// TestDefaultCalendarConfig covers the Calendar section's factory defaults
+// so a config written before this section shipped continues to behave as
+// before.
+func TestDefaultCalendarConfig(t *testing.T) {
+	cfg := DefaultConfig()
+	if cfg.Calendar.Enabled {
+		t.Error("Calendar.Enabled = true, want false (off by default)")
+	}
+	if cfg.Calendar.MatchStartWindowMinutes != 15 {
+		t.Errorf("MatchStartWindowMinutes = %d, want 15", cfg.Calendar.MatchStartWindowMinutes)
+	}
+	if cfg.Calendar.MatchEndWindowBound {
+		t.Error("MatchEndWindowBound = true, want false (unbounded)")
+	}
+	if cfg.Calendar.MatchScoreThreshold != 40 {
+		t.Errorf("MatchScoreThreshold = %d, want 40", cfg.Calendar.MatchScoreThreshold)
+	}
+	if cfg.Calendar.CacheTTLSeconds != 300 {
+		t.Errorf("CacheTTLSeconds = %d, want 300", cfg.Calendar.CacheTTLSeconds)
+	}
+	if cfg.Calendar.Jev.Enabled {
+		t.Error("Jev.Enabled = true, want false")
+	}
+	if cfg.Calendar.Jev.TopicWeight != 40 {
+		t.Errorf("Jev.TopicWeight = %d, want 40", cfg.Calendar.Jev.TopicWeight)
+	}
+	if cfg.Calendar.Jev.TranscriptContextSeconds != 120 {
+		t.Errorf("Jev.TranscriptContextSeconds = %d, want 120", cfg.Calendar.Jev.TranscriptContextSeconds)
+	}
+}
+
+// TestICSAutoEnable covers the ergonomic shortcut: enabled=true + ICS
+// entries + no explicit providers list should behave as providers=["ical"].
+func TestICSAutoEnable(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	body := `[calendar]
+enabled = true
+
+[[calendar.ical]]
+name = "Personal"
+url = "https://calendar.example.com/basic.ics"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Calendar.Providers) != 1 || cfg.Calendar.Providers[0] != "ical" {
+		t.Errorf("Providers = %v, want [ical] (auto-enable)", cfg.Calendar.Providers)
+	}
+	if len(cfg.Calendar.ICal) != 1 || cfg.Calendar.ICal[0].Name != "Personal" {
+		t.Errorf("ICal = %+v, want one Personal entry", cfg.Calendar.ICal)
+	}
+}
+
+// TestICSAutoEnableRespectsExplicitProviders covers the case where the user
+// has explicitly written providers=[...]. Auto-enable must not clobber it.
+func TestICSAutoEnableRespectsExplicitProviders(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	body := `[calendar]
+enabled = true
+providers = ["ical", "google"]
+
+[[calendar.ical]]
+name = "Personal"
+url = "https://example.com/basic.ics"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if len(cfg.Calendar.Providers) != 2 || cfg.Calendar.Providers[0] != "ical" || cfg.Calendar.Providers[1] != "google" {
+		t.Errorf("Providers = %v, want explicit list preserved", cfg.Calendar.Providers)
+	}
+}
+
+// TestICSAutoEnableSkipsWhenDisabled covers the case where the user has ICS
+// entries but hasn't enabled calendar. Providers stays empty; nothing runs.
+func TestICSAutoEnableSkipsWhenDisabled(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	body := `[[calendar.ical]]
+name = "Personal"
+url = "https://example.com/basic.ics"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Calendar.Enabled {
+		t.Error("Calendar.Enabled = true, want false")
+	}
+	if len(cfg.Calendar.Providers) != 0 {
+		t.Errorf("Providers = %v, want empty (calendar off)", cfg.Calendar.Providers)
+	}
+}
+
+// TestJevAPIKeyExpansion covers the config-expansion synergy: an operator
+// pastes $(pass show ...) into the Jev API key and Load resolves it.
+func TestJevAPIKeyExpansion(t *testing.T) {
+	t.Setenv("TOMOE_TEST_JEV_KEY", "resolved-jev-key")
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+
+	body := `[calendar.jev]
+enabled = true
+api_key = "${TOMOE_TEST_JEV_KEY}"
+`
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.Calendar.Jev.APIKey != "resolved-jev-key" {
+		t.Errorf("Jev.APIKey = %q, want %q", cfg.Calendar.Jev.APIKey, "resolved-jev-key")
+	}
+}
+
 func TestExistsWhenFilePresent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "tomoe", "config.toml")

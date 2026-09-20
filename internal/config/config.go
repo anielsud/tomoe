@@ -17,6 +17,7 @@ type Config struct {
 	Output        OutputConfig        `toml:"output"`
 	Meeting       MeetingConfig       `toml:"meeting"`
 	Multilingual  MultilingualConfig  `toml:"multilingual"`
+	Calendar      CalendarConfig      `toml:"calendar"`
 
 	// resolved records ${VAR} / $(cmd) expansions applied during Load, so
 	// Save can write the original expressions back rather than the resolved
@@ -70,6 +71,36 @@ type MeetingConfig struct {
 	AutoDetect         bool    `toml:"auto_detect"`          // auto-detect meetings via PulseAudio
 }
 
+// CalendarConfig holds calendar-integration settings. Off by default.
+// See docs/calendar-integration-tech-brief.md for the design.
+type CalendarConfig struct {
+	Enabled                 bool          `toml:"enabled"`
+	Providers               []string      `toml:"providers"`                  // ["ical"] in v1; auto-populated when empty and ICS entries exist
+	MatchStartWindowMinutes int           `toml:"match_start_window_minutes"` // tolerance for session-start ↔ event-start
+	MatchEndWindowBound     bool          `toml:"match_end_window_bound"`     // false = unbounded (meetings run long)
+	MatchScoreThreshold     int           `toml:"match_score_threshold"`      // events below this are "no match"
+	CacheTTLSeconds         int           `toml:"cache_ttl_seconds"`          // in-memory provider-result cache TTL
+	Jev                     JevConfig     `toml:"jev"`
+	ICal                    []ICalConfig  `toml:"ical"`
+}
+
+// JevConfig holds settings for optional Jev-based topic adjudication.
+// Off by default. See internal/calendar/jev.go (Phase 2).
+type JevConfig struct {
+	Enabled                  bool   `toml:"enabled"`
+	APIKey                   string `toml:"api_key"` // recommend $(pass show ...) via config expansion
+	Model                    string `toml:"model"`
+	TopicWeight              int    `toml:"topic_weight"`               // points contributed to the match score (0-100)
+	TranscriptContextSeconds int    `toml:"transcript_context_seconds"` // how much of the transcript's start Jev sees
+}
+
+// ICalConfig describes one ICS URL subscription. Multiple entries are
+// fetched in parallel and their events pooled through the same matcher.
+type ICalConfig struct {
+	Name string `toml:"name"` // display name, e.g. "Personal", "Work"
+	URL  string `toml:"url"`  // webcal:// or https:// ICS feed
+}
+
 // DefaultConfig returns a Config with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -104,6 +135,18 @@ func DefaultConfig() *Config {
 			MinSilenceDuration: 0.5,
 			AutoSave:           true,
 			AutoDetect:         true,
+		},
+		Calendar: CalendarConfig{
+			Enabled:                 false,
+			MatchStartWindowMinutes: 15,
+			MatchEndWindowBound:     false,
+			MatchScoreThreshold:     40,
+			CacheTTLSeconds:         300,
+			Jev: JevConfig{
+				Enabled:                  false,
+				TopicWeight:              40,
+				TranscriptContextSeconds: 120,
+			},
 		},
 	}
 }
@@ -183,6 +226,13 @@ func Load(path string) (*Config, error) {
 
 	if err := expandConfig(cfg); err != nil {
 		return nil, fmt.Errorf("expanding config: %w", err)
+	}
+
+	// ICS auto-enable: when calendar is on but the providers list is empty
+	// and the user has configured at least one ICS URL, treat it as
+	// ["ical"]. Saves the user from filling in a second knob.
+	if cfg.Calendar.Enabled && len(cfg.Calendar.Providers) == 0 && len(cfg.Calendar.ICal) > 0 {
+		cfg.Calendar.Providers = []string{"ical"}
 	}
 
 	return cfg, nil
