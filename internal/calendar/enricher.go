@@ -109,9 +109,17 @@ func (e *DefaultEnricher) Enrich(ctx context.Context, in calendar.MatchInput) (*
 // applyJev asks the adjudicator about every candidate that could plausibly
 // become the winner. Errors are logged and the candidate keeps its
 // heuristic-only score.
+//
+// When two or more candidates each receive a confident "yes" (typical for
+// back-to-back meetings that overlap in the calendar), a second Jev call
+// tie-breaks between them so we only credit the one the user actually
+// attended.
 func (e *DefaultEnricher) applyJev(ctx context.Context, transcript string, scored []scoredEvent) {
+	// Track which scored entries earned a "yes" boost, so a tie-break can
+	// choose among them (or reject them all).
+	var yesIdx []int
 	for i := range scored {
-		bonus, err := e.jev.Score(ctx, transcript, scored[i].event)
+		bonus, choice, err := e.jev.Score(ctx, transcript, scored[i].event)
 		if err != nil {
 			log.Printf("calendar: jev adjudication failed for %q: %v", scored[i].event.Title, err)
 			continue
@@ -119,6 +127,60 @@ func (e *DefaultEnricher) applyJev(ctx context.Context, transcript string, score
 		scored[i].total += bonus
 		if scored[i].total > 100 {
 			scored[i].total = 100
+		}
+		if choice == choiceYes {
+			yesIdx = append(yesIdx, i)
+		}
+	}
+	if len(yesIdx) < 2 {
+		return
+	}
+	e.tieBreakYesWinners(ctx, transcript, scored, yesIdx)
+}
+
+// tieBreakYesWinners asks Jev, in a single call, which of the yes-boosted
+// candidates the transcript is actually about. Losers have their yes-boost
+// cleared so pickBest picks the true winner. If Jev says "none", ALL
+// yes-boosts are cleared and the matcher falls back to heuristic-only
+// scoring (typically leaving no candidate above threshold, i.e. no match).
+func (e *DefaultEnricher) tieBreakYesWinners(ctx context.Context, transcript string, scored []scoredEvent, yesIdx []int) {
+	events := make([]calendar.Event, len(yesIdx))
+	for i, idx := range yesIdx {
+		events[i] = scored[idx].event
+	}
+	outcome, err := e.jev.TieBreak(ctx, transcript, events)
+	if err != nil {
+		log.Printf("calendar: jev tie-break failed: %v", err)
+		return
+	}
+	switch outcome {
+	case TieBreakUndecided:
+		// Below margin — leave every yes-boost in place; heuristic tie-break
+		// (shortest event) decides.
+		return
+	case TieBreakNone:
+		// Jev is confident none of them matches — drop every yes-boost.
+		for _, idx := range yesIdx {
+			scored[idx].total -= e.jev.weight
+			if scored[idx].total < 0 {
+				scored[idx].total = 0
+			}
+		}
+		return
+	default:
+		if outcome < 0 || outcome >= len(yesIdx) {
+			return
+		}
+		// Clear the yes-boost from every yes-winner EXCEPT the picked one.
+		keep := yesIdx[outcome]
+		for _, idx := range yesIdx {
+			if idx == keep {
+				continue
+			}
+			scored[idx].total -= e.jev.weight
+			if scored[idx].total < 0 {
+				scored[idx].total = 0
+			}
 		}
 	}
 }

@@ -82,16 +82,18 @@ func newJevAdjudicator(asker jev.Asker, cfg config.JevConfig) *JevAdjudicator {
 	}
 }
 
-// Score returns the points contribution for candidate given transcript.
-// Returns (0, err) on any failure — non-fatal to the caller.
+// Score returns the points contribution and Jev's choice for candidate.
+// Non-fatal on any failure — caller should treat errors as "no signal".
 //
 // Contribution:
-//   - "yes" with margin  →  weight
-//   - "ambiguous" with margin → weight/2
-//   - "no", below margin, or on error → 0
-func (j *JevAdjudicator) Score(ctx context.Context, transcript string, candidate calendar.Event) (int, error) {
+//   - "yes" with margin      →  (weight, "yes", nil)
+//   - "ambiguous" with margin → (weight/2, "ambiguous", nil)
+//   - "no" with margin        → (0, "no", nil)
+//   - below margin            → (0, "", nil)
+//   - error                   → (0, "", err)
+func (j *JevAdjudicator) Score(ctx context.Context, transcript string, candidate calendar.Event) (int, string, error) {
 	if j == nil || j.asker == nil {
-		return 0, nil
+		return 0, "", nil
 	}
 	trimmed := trimTranscript(transcript, j.ctxSecs)
 
@@ -115,11 +117,11 @@ func (j *JevAdjudicator) Score(ctx context.Context, transcript string, candidate
 	}
 	resp, err := j.asker.Ask(ctx, state, questions)
 	if err != nil {
-		return 0, err
+		return 0, "", err
 	}
 	ranked, err := resp.Answers.Ranked("match")
 	if err != nil || len(ranked) == 0 {
-		return 0, err
+		return 0, "", err
 	}
 	top := ranked[0]
 	margin := top.Probability
@@ -127,16 +129,121 @@ func (j *JevAdjudicator) Score(ctx context.Context, transcript string, candidate
 		margin -= ranked[1].Probability
 	}
 	if margin < j.minMargin {
-		return 0, nil
+		return 0, "", nil
 	}
 	switch top.Option {
 	case choiceYes:
-		return j.weight, nil
+		return j.weight, choiceYes, nil
 	case choiceAmbiguous:
-		return j.weight / 2, nil
+		return j.weight / 2, choiceAmbiguous, nil
+	case choiceNo:
+		return 0, choiceNo, nil
 	default:
-		return 0, nil
+		return 0, "", nil
 	}
+}
+
+// TieBreak outcomes for the enricher.
+const (
+	// TieBreakUndecided means Jev's answer was below the confidence
+	// margin. The caller should leave the heuristic result alone.
+	TieBreakUndecided = -1
+	// TieBreakNone means Jev confidently picked "none of the above". The
+	// caller should suppress every candidate's yes-boost — the transcript
+	// does not match any of them.
+	TieBreakNone = -2
+)
+
+// tieBreakOptionCap bounds how many candidates one TieBreak call presents
+// to Jev at once. Jev's Choice primitive tops out at ~10 options; +1 for
+// "none" leaves room for 9 candidates. In practice the caller only reaches
+// TieBreak with 2–3 concurrent meetings, so the cap is a safety belt.
+const tieBreakOptionCap = 8
+
+// TieBreak picks which of several candidates the transcript actually
+// corresponds to when the per-candidate Score returned "yes" for more than
+// one. Returns:
+//   - i in [0, len(candidates)) — that candidate wins.
+//   - TieBreakNone              — Jev confidently says none of them match.
+//   - TieBreakUndecided         — margin insufficient; caller decides.
+//   - (?, err)                  — API failure; caller decides.
+//
+// candidates order matches the returned index. Extra candidates beyond
+// tieBreakOptionCap are dropped from the ask.
+func (j *JevAdjudicator) TieBreak(ctx context.Context, transcript string, candidates []calendar.Event) (int, error) {
+	if j == nil || j.asker == nil || len(candidates) < 2 {
+		return TieBreakUndecided, nil
+	}
+	presented := candidates
+	if len(presented) > tieBreakOptionCap {
+		presented = presented[:tieBreakOptionCap]
+	}
+
+	options := make(map[string]string, len(presented)+1)
+	summaries := make(map[string]string, len(presented))
+	for i, ev := range presented {
+		key := fmt.Sprintf("event_%d", i)
+		options[key] = tieBreakOptionLabel(ev)
+		summaries[key] = ev.Title
+	}
+	options[choiceNone] = "None of the listed events matches this transcript."
+
+	trimmed := trimTranscript(transcript, j.ctxSecs)
+	state := map[string]any{
+		"transcript": trimmed,
+		"candidates": summaries,
+	}
+	questions := jev.Questions{
+		"which": jev.Choice(
+			"Multiple scheduled events overlap this transcript. Which one is the "+
+				"transcript actually about? Pick 'none' if you cannot tell which meeting was attended.",
+			options,
+		),
+	}
+	resp, err := j.asker.Ask(ctx, state, questions)
+	if err != nil {
+		return TieBreakUndecided, err
+	}
+	ranked, err := resp.Answers.Ranked("which")
+	if err != nil || len(ranked) == 0 {
+		return TieBreakUndecided, err
+	}
+	top := ranked[0]
+	margin := top.Probability
+	if len(ranked) > 1 {
+		margin -= ranked[1].Probability
+	}
+	if margin < j.minMargin {
+		return TieBreakUndecided, nil
+	}
+	if top.Option == choiceNone {
+		return TieBreakNone, nil
+	}
+	// Parse event_N.
+	var idx int
+	if _, err := fmt.Sscanf(top.Option, "event_%d", &idx); err != nil {
+		return TieBreakUndecided, nil
+	}
+	if idx < 0 || idx >= len(presented) {
+		return TieBreakUndecided, nil
+	}
+	return idx, nil
+}
+
+// choiceNone is the sentinel for "no candidate matches", added to every
+// tie-break question so Jev can honestly decline to pick.
+const choiceNone = "none"
+
+// tieBreakOptionLabel renders a compact one-line description of a candidate
+// for Jev's Choice options.
+func tieBreakOptionLabel(ev calendar.Event) string {
+	if ev.Title == "" {
+		return "Untitled event"
+	}
+	if !ev.StartTime.IsZero() {
+		return fmt.Sprintf("%s (starts %s)", ev.Title, ev.StartTime.Format("15:04 MST"))
+	}
+	return ev.Title
 }
 
 // trimTranscript returns the first ctxSecs seconds' worth of transcript,
