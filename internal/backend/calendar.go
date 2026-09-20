@@ -46,7 +46,19 @@ func buildCalendarEnricher(cfg config.CalendarConfig) (calendar.Enricher, error)
 		return nil, errors.New("no calendar providers configured (populate [[calendar.ical]])")
 	}
 
-	return icalendar.NewDefaultEnricher(cfg, providers)
+	enricher, err := icalendar.NewDefaultEnricher(cfg, providers)
+	if err != nil {
+		return nil, err
+	}
+	if cfg.Jev.Enabled {
+		adj, err := icalendar.NewJevAdjudicator(cfg.Jev)
+		if err != nil {
+			fmt.Printf("Warning: jev adjudication disabled: %v\n", err)
+		} else if adj != nil {
+			enricher.SetJevAdjudicator(adj)
+		}
+	}
+	return enricher, nil
 }
 
 // sessionWithCalendar embeds a session and adds the ephemeral calendar_event
@@ -108,6 +120,7 @@ func (a *App) runCalendarEnrichment(sess *session.Session, windowTitle string) {
 		Platform:    sess.Platform,
 		MeetingURL:  url,
 		WindowTitle: windowTitle,
+		Transcript:  flattenTranscript(sess),
 	}
 	if ev, err := a.calendar.Enrich(a.ctx, in); err != nil {
 		fmt.Printf("Warning: calendar enrichment failed for %s: %v\n", sess.ID, err)
@@ -117,4 +130,25 @@ func (a *App) runCalendarEnrichment(sess *session.Session, windowTitle string) {
 	if err := a.calendarStore.Save(cached); err != nil {
 		fmt.Printf("Warning: calendar cache save failed for %s: %v\n", sess.ID, err)
 	}
+}
+
+// flattenTranscript renders a session's segments as a single plain-text
+// string, in order, for adjudicators that decide on topic content.
+// Speakers are prefixed so an LLM sees the turn boundaries.
+func flattenTranscript(sess *session.Session) string {
+	if sess == nil || len(sess.Segments) == 0 {
+		return ""
+	}
+	var buf []byte
+	for i, seg := range sess.Segments {
+		if i > 0 {
+			buf = append(buf, '\n')
+		}
+		if seg.Speaker != "" {
+			buf = append(buf, seg.Speaker...)
+			buf = append(buf, ':', ' ')
+		}
+		buf = append(buf, seg.Text...)
+	}
+	return string(buf)
 }

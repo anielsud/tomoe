@@ -43,4 +43,9 @@ type MatchInput struct {
 	Platform    string // "Teams", "Meet", "Zoom", "Webex", "Slack", or ""
 	MeetingURL  string // extracted from the window title when available; may be ""
 	WindowTitle string // raw, when captured; may be ""
+	// Transcript is the session's flattened text, useful for enrichers that
+	// disambiguate via topic content (e.g. an LLM adjudicator). Populated
+	// by Tomoe from the session's segments in order; the enricher decides
+	// how much to consume. Empty when the transcript is not yet available.
+	Transcript string
 }
