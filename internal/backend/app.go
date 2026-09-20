@@ -39,11 +39,15 @@ type App struct {
 	detector    *meeting.Detector
 
 	// Calendar enrichment. calendar is the pluggable Enricher — nil disables
-	// enrichment entirely. calendarStore is the ephemeral per-session cache
-	// under $XDG_STATE_HOME/tomoe/calendar. Both are populated in Startup
-	// unless an external embedder called SetCalendar first.
-	calendar      calendar.Enricher
-	calendarStore *icalendar.Store
+	// enrichment entirely. calendarResolver is an optional post-match hook
+	// that can enrich the participant list on a matched event (e.g. overlay
+	// canonical identity from a directory); nil means "keep whatever the
+	// enricher produced". calendarStore is the ephemeral per-session cache
+	// under $XDG_STATE_HOME/tomoe/calendar. All are populated in Startup
+	// unless an external embedder called SetCalendar / SetCalendarParticipantResolver first.
+	calendar         calendar.Enricher
+	calendarResolver calendar.ParticipantResolver
+	calendarStore    *icalendar.Store
 
 	mu                 sync.Mutex
 	recording          bool // meeting recording in progress
@@ -100,6 +104,19 @@ func (a *App) SetCalendar(e calendar.Enricher) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.calendar = e
+}
+
+// SetCalendarParticipantResolver installs an optional post-match hook that
+// enriches the participant list on a matched event before it is cached and
+// surfaced to the frontend. See calendar.ParticipantResolver for the
+// contract.
+//
+// The resolver runs regardless of which Enricher produced the match; it is
+// composable with SetCalendar. Passing nil removes the hook.
+func (a *App) SetCalendarParticipantResolver(r calendar.ParticipantResolver) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.calendarResolver = r
 }
 
 // Startup is called by Wails when the application starts.

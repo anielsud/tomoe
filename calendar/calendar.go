@@ -29,6 +29,27 @@ type Enricher interface {
 	Enrich(ctx context.Context, in MatchInput) (*Event, error)
 }
 
+// ParticipantResolver is an optional post-match hook that can enrich, replace,
+// or normalize the participant list on an Event before it is cached and
+// surfaced to the frontend. It is called by the backend after the Enricher
+// returns a non-nil match, orthogonally to how the match was made.
+//
+// Typical use cases: overlay canonical identity (photo, employee id,
+// preferred name) from an internal directory; deduplicate an ICS
+// ATTENDEE list against an HR system; hide external attendees from the
+// UI; join with a CRM contact record.
+//
+// The resolver mutates ev in place — usually by reassigning ev.Participants
+// and/or ev.Organizer. It runs on the same serial saveWorker goroutine as
+// the enricher, so implementations do not need to be reentrant, but they
+// must be safe to call concurrently across independent App instances.
+//
+// Errors are logged by the caller and treated as no-op: the event keeps
+// whatever the Enricher produced. A resolver never blocks session save.
+type ParticipantResolver interface {
+	ResolveParticipants(ctx context.Context, ev *Event) error
+}
+
 // MatchInput is the stable set of facts about a just-recorded session that
 // Tomoe hands to the Enricher. Fields may be zero-valued (empty string, zero
 // time) when Tomoe could not determine them for a particular session; the

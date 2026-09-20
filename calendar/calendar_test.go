@@ -16,6 +16,53 @@ func TestEnricherIsSatisfiable(t *testing.T) {
 	var _ calendar.Enricher = (*staticEnricher)(nil)
 }
 
+// TestParticipantResolverIsSatisfiable — same compile-time proof for the
+// optional post-match participant enrichment hook.
+func TestParticipantResolverIsSatisfiable(t *testing.T) {
+	var _ calendar.ParticipantResolver = (*upperCaseResolver)(nil)
+}
+
+// upperCaseResolver is a trivial resolver used to exercise the interface
+// shape. Real resolvers would look up canonical identity in a directory.
+type upperCaseResolver struct{}
+
+func (upperCaseResolver) ResolveParticipants(_ context.Context, ev *calendar.Event) error {
+	if ev == nil {
+		return nil
+	}
+	for i := range ev.Participants {
+		if ev.Participants[i].Name != "" {
+			ev.Participants[i].Name = "* " + ev.Participants[i].Name
+		}
+	}
+	if ev.Organizer != nil && ev.Organizer.Name != "" {
+		ev.Organizer.Name = "* " + ev.Organizer.Name
+	}
+	return nil
+}
+
+// TestResolverMutatesInPlace covers the contract that a resolver operates
+// on the passed *Event and its mutations are visible to the caller.
+func TestResolverMutatesInPlace(t *testing.T) {
+	ev := &calendar.Event{
+		Title:     "T",
+		Organizer: &calendar.Participant{Name: "Aniel"},
+		Participants: []calendar.Participant{
+			{Name: "Aniel"},
+			{Name: "Imran"},
+		},
+	}
+	if err := (upperCaseResolver{}).ResolveParticipants(context.Background(), ev); err != nil {
+		t.Fatal(err)
+	}
+	if ev.Organizer.Name != "* Aniel" {
+		t.Errorf("Organizer.Name = %q, want %q", ev.Organizer.Name, "* Aniel")
+	}
+	if ev.Participants[1].Name != "* Imran" {
+		t.Errorf("Participants[1].Name = %q, want %q", ev.Participants[1].Name, "* Imran")
+	}
+}
+
 // TestMatchInputZeroValueIsSafe covers the contract that an Enricher may
 // receive a zero-valued MatchInput and must not panic. Downstream code
 // checks for empty fields; nothing here should preclude that.

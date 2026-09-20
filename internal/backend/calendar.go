@@ -125,6 +125,13 @@ func (a *App) runCalendarEnrichment(sess *session.Session, windowTitle string) {
 	if ev, err := a.calendar.Enrich(a.ctx, in); err != nil {
 		fmt.Printf("Warning: calendar enrichment failed for %s: %v\n", sess.ID, err)
 	} else if ev != nil {
+		// Optional post-match participant enrichment. Errors are logged
+		// and swallowed — the event keeps whatever the enricher produced.
+		if a.calendarResolver != nil {
+			if rerr := a.calendarResolver.ResolveParticipants(a.ctx, ev); rerr != nil {
+				fmt.Printf("Warning: participant resolver failed for %s: %v\n", sess.ID, rerr)
+			}
+		}
 		cached.CalendarEvent = ev
 	}
 	if err := a.calendarStore.Save(cached); err != nil {

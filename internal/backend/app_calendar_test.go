@@ -184,3 +184,135 @@ func TestSetCalendarSwaps(t *testing.T) {
 
 // Compile-time assertion: mockEnricher satisfies the public interface.
 var _ calendar.Enricher = (*mockEnricher)(nil)
+
+// -------------------------------------------------------------------------
+// ParticipantResolver integration
+// -------------------------------------------------------------------------
+
+// mockResolver records the events it sees and optionally rewrites their
+// participants. Errors cause the backend to log-and-continue.
+type mockResolver struct {
+	got   []*calendar.Event
+	err   error
+	rename map[string]string // name → replacement name
+}
+
+func (m *mockResolver) ResolveParticipants(_ context.Context, ev *calendar.Event) error {
+	m.got = append(m.got, ev)
+	if m.err != nil {
+		return m.err
+	}
+	if m.rename != nil {
+		if ev.Organizer != nil {
+			if to, ok := m.rename[ev.Organizer.Name]; ok {
+				ev.Organizer.Name = to
+			}
+		}
+		for i := range ev.Participants {
+			if to, ok := m.rename[ev.Participants[i].Name]; ok {
+				ev.Participants[i].Name = to
+			}
+		}
+	}
+	return nil
+}
+
+func TestParticipantResolverRunsWhenEnricherMatches(t *testing.T) {
+	sess := &session.Session{
+		ID:        "sess-r1",
+		CreatedAt: time.Now(),
+		EndedAt:   time.Now(),
+	}
+	returned := &calendar.Event{
+		Title:     "T",
+		Organizer: &calendar.Participant{Name: "Aniel"},
+		Participants: []calendar.Participant{
+			{Name: "Aniel"},
+			{Name: "Imran"},
+		},
+	}
+	enricher := &mockEnricher{event: returned}
+	resolver := &mockResolver{rename: map[string]string{
+		"Aniel": "Aniel Sharma",
+		"Imran": "Imran Yousuf",
+	}}
+
+	a := newTestApp(t, enricher)
+	a.SetCalendarParticipantResolver(resolver)
+
+	a.runCalendarEnrichment(sess, "")
+
+	if len(resolver.got) != 1 || resolver.got[0].Title != "T" {
+		t.Fatalf("resolver should have seen exactly the matched event, got %+v", resolver.got)
+	}
+	cached, _ := a.calendarStore.Load("sess-r1")
+	if cached == nil || cached.CalendarEvent == nil {
+		t.Fatalf("no cached event")
+	}
+	if cached.CalendarEvent.Organizer.Name != "Aniel Sharma" {
+		t.Errorf("Organizer.Name = %q, want %q", cached.CalendarEvent.Organizer.Name, "Aniel Sharma")
+	}
+	if cached.CalendarEvent.Participants[1].Name != "Imran Yousuf" {
+		t.Errorf("Participants[1].Name = %q, want %q", cached.CalendarEvent.Participants[1].Name, "Imran Yousuf")
+	}
+}
+
+func TestParticipantResolverSkippedWhenNoMatch(t *testing.T) {
+	sess := &session.Session{ID: "sess-r2", CreatedAt: time.Now(), EndedAt: time.Now()}
+	enricher := &mockEnricher{event: nil} // no match
+	resolver := &mockResolver{}
+
+	a := newTestApp(t, enricher)
+	a.SetCalendarParticipantResolver(resolver)
+	a.runCalendarEnrichment(sess, "")
+
+	if len(resolver.got) != 0 {
+		t.Errorf("resolver should not run when enricher returns nil; got %d call(s)", len(resolver.got))
+	}
+	cached, _ := a.calendarStore.Load("sess-r2")
+	if cached == nil {
+		t.Fatal("expected cache entry recording the attempt")
+	}
+	if cached.CalendarEvent != nil {
+		t.Errorf("no CalendarEvent should be cached on miss; got %+v", cached.CalendarEvent)
+	}
+}
+
+func TestParticipantResolverErrorIsNonFatal(t *testing.T) {
+	sess := &session.Session{ID: "sess-r3", CreatedAt: time.Now(), EndedAt: time.Now()}
+	returned := &calendar.Event{Title: "T"}
+	enricher := &mockEnricher{event: returned}
+	resolver := &mockResolver{err: errors.New("directory down")}
+
+	a := newTestApp(t, enricher)
+	a.SetCalendarParticipantResolver(resolver)
+	a.runCalendarEnrichment(sess, "")
+
+	cached, err := a.calendarStore.Load("sess-r3")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cached == nil || cached.CalendarEvent == nil {
+		t.Fatalf("event should still be cached despite resolver error, got %+v", cached)
+	}
+	if cached.CalendarEvent.Title != "T" {
+		t.Errorf("event should be unchanged when resolver errors, got %+v", cached.CalendarEvent)
+	}
+}
+
+func TestSetCalendarParticipantResolverNil(t *testing.T) {
+	sess := &session.Session{ID: "sess-r4", CreatedAt: time.Now(), EndedAt: time.Now()}
+	returned := &calendar.Event{Title: "T"}
+
+	a := newTestApp(t, &mockEnricher{event: returned})
+	// no resolver installed — event passes through untouched
+	a.runCalendarEnrichment(sess, "")
+
+	cached, _ := a.calendarStore.Load("sess-r4")
+	if cached == nil || cached.CalendarEvent == nil || cached.CalendarEvent.Title != "T" {
+		t.Errorf("event should pass through without a resolver, got %+v", cached)
+	}
+}
+
+// Compile-time assertion.
+var _ calendar.ParticipantResolver = (*mockResolver)(nil)
