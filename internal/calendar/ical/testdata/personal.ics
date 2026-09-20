@@ -1,0 +1,32 @@
+BEGIN:VCALENDAR
+VERSION:2.0
+PRODID:-//Test//EN
+BEGIN:VEVENT
+UID:evt-1@example.com
+DTSTART:20260920T100000Z
+DTEND:20260920T103000Z
+SUMMARY:Q3 review with Aniel
+DESCRIPTION:Meet: https://meet.google.com/abc-defg-hij
+LOCATION:https://meet.google.com/abc-defg-hij
+ORGANIZER;CN=Aniel Sharma:mailto:aniel@example.com
+ATTENDEE;CN=Aniel Sharma;PARTSTAT=ACCEPTED;ROLE=CHAIR:mailto:aniel@example.com
+ATTENDEE;CN=Imran Yousuf;PARTSTAT=ACCEPTED:mailto:imran@sosuke.ai
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-2@example.com
+DTSTART:20260920T140000Z
+DTEND:20260920T150000Z
+SUMMARY:Design review
+LOCATION:https://us02web.zoom.us/j/9876543210
+ORGANIZER;CN=Priya Menon:mailto:priya@example.com
+ATTENDEE;CN=Priya Menon;PARTSTAT=ACCEPTED;ROLE=CHAIR:mailto:priya@example.com
+ATTENDEE;CN=Imran Yousuf;PARTSTAT=TENTATIVE:mailto:imran@sosuke.ai
+ATTENDEE;CN=Aniel Sharma;PARTSTAT=DECLINED:mailto:aniel@example.com
+END:VEVENT
+BEGIN:VEVENT
+UID:evt-3@example.com
+DTSTART:20260921T100000Z
+DTEND:20260921T110000Z
+SUMMARY:Focus block
+END:VEVENT
+END:VCALENDAR

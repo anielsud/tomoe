@@ -15,6 +15,7 @@ require (
 )
 
 require (
+	github.com/arran4/golang-ical v0.3.6 // indirect
 	github.com/bep/debounce v1.2.1 // indirect
 	github.com/go-ole/go-ole v1.3.0 // indirect
 	github.com/godbus/dbus/v5 v5.1.0 // indirect
