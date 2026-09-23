@@ -105,166 +105,174 @@ func (d *Daemon) Run(ctx context.Context) error {
 			defaultLang = d.cfg.Multilingual.DefaultLang
 		}
 	}
-	d.tray = startDaemonTray(languages, defaultLang)
-	defer d.tray.Close()
+	// runWithTray owns the system tray for the process lifetime. On Linux
+	// this just starts systray in a goroutine and calls body immediately
+	// (unchanged from before); on darwin, Cocoa requires systray's native
+	// loop to run on the actual OS main thread, so runWithTray calls
+	// systray.Run itself (blocking) and runs body in a goroutine from
+	// inside onReady instead. See run_linux.go / run_darwin.go.
+	return runWithTray(languages, defaultLang, func(tray *daemonTray) error {
+		d.tray = tray
+		defer d.tray.Close()
 
-	// Register dictation hotkey
-	if err := d.svc.Hotkey.Register(); err != nil {
-		return fmt.Errorf("registering dictation hotkey: %w", err)
-	}
-
-	// Register meeting hotkey (optional)
-	var meetingCh <-chan struct{}
-	if d.meetingHotkey != nil {
-		if err := d.meetingHotkey.Register(); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: could not register meeting hotkey: %v\n", err)
-		} else {
-			meetingCh = d.meetingHotkey.Keydown()
+		// Register dictation hotkey
+		if err := d.svc.Hotkey.Register(); err != nil {
+			return fmt.Errorf("registering dictation hotkey: %w", err)
 		}
-	}
 
-	// Start meeting auto-detector (optional)
-	var detectCh <-chan meeting.MeetingEvent
-	if d.detector != nil {
-		if err := d.detector.Start(ctx); err != nil {
-			fmt.Fprintf(os.Stderr, "Warning: meeting auto-detect unavailable: %v\n", err)
-		} else {
-			detectCh = d.detector.Events()
-			defer d.detector.Stop()
-		}
-	}
-
-	// Signal handling
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
-	defer signal.Stop(sigCh)
-
-	bindings := d.cfg.Hotkey.Binding + " for dictation"
-	if meetingCh != nil {
-		meetingBinding := d.cfg.Hotkey.MeetingBinding
-		if meetingBinding == "" {
-			meetingBinding = "Super+Shift+X"
-		}
-		bindings += ", " + meetingBinding + " for meeting"
-	}
-	_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Ready — %s", bindings))
-	fmt.Printf("Tomoe daemon started. Hotkeys: %s\n", bindings)
-
-	// State
-	var dictState *streamingDictation
-	var meetState *meetingState
-
-	// Auto-stop channel — signalled by streaming dictation on silence timeout
-	autoStopCh := make(chan struct{}, 1)
-
-	// toggleDictation handles start/stop dictation from any trigger (hotkey or tray).
-	toggleDictation := func(lang string) {
-		if meetState != nil {
-			return // ignore dictation while meeting active
-		}
-		if dictState == nil {
-			ds, err := d.startStreamingDictation(ctx, autoStopCh, lang)
-			if err != nil {
-				_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Dictation failed: %v", err))
-				fmt.Printf("Error starting dictation: %v\n", err)
-				return
+		// Register meeting hotkey (optional)
+		var meetingCh <-chan struct{}
+		if d.meetingHotkey != nil {
+			if err := d.meetingHotkey.Register(); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: could not register meeting hotkey: %v\n", err)
+			} else {
+				meetingCh = d.meetingHotkey.Keydown()
 			}
-			dictState = ds
-			d.tray.SetDictating()
-			_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Dictating (%s)...", lang))
-			fmt.Printf("Streaming dictation started (%s)...\n", lang)
-		} else {
-			d.stopDictation(dictState)
-			dictState = nil
 		}
-	}
 
-	// toggleMeeting handles start/stop meeting from any trigger (hotkey or tray).
-	toggleMeeting := func(lang string) {
-		if dictState != nil {
-			return // ignore meeting while dictating
-		}
-		if meetState == nil {
-			ms, err := d.startMeetingWithPlatform(ctx, "", lang)
-			if err != nil {
-				_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Meeting start failed: %v", err))
-				fmt.Printf("Error starting meeting: %v\n", err)
-				return
+		// Start meeting auto-detector (optional)
+		var detectCh <-chan meeting.MeetingEvent
+		if d.detector != nil {
+			if err := d.detector.Start(ctx); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: meeting auto-detect unavailable: %v\n", err)
+			} else {
+				detectCh = d.detector.Events()
+				defer d.detector.Stop()
 			}
-			meetState = ms
-			d.tray.SetMeetingRecording()
-			_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Meeting recording started (%s)", lang))
-			fmt.Printf("Meeting recording started (%s)...\n", lang)
-		} else {
-			d.stopMeeting(meetState)
-			meetState = nil
 		}
-	}
 
-	for {
-		select {
-		case <-ctx.Done():
-			fmt.Println("Shutting down...")
-			d.cleanupAll(dictState, meetState)
-			return nil
+		// Signal handling
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+		defer signal.Stop(sigCh)
 
-		case sig := <-sigCh:
-			fmt.Printf("Received %s, shutting down...\n", sig)
-			d.cleanupAll(dictState, meetState)
-			return nil
+		bindings := d.cfg.Hotkey.Binding + " for dictation"
+		if meetingCh != nil {
+			meetingBinding := d.cfg.Hotkey.MeetingBinding
+			if meetingBinding == "" {
+				meetingBinding = "Super+Shift+X"
+			}
+			bindings += ", " + meetingBinding + " for meeting"
+		}
+		_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Ready — %s", bindings))
+		fmt.Printf("Tomoe daemon started. Hotkeys: %s\n", bindings)
 
-		case <-d.tray.quitCh:
-			fmt.Println("Quit from tray, shutting down...")
-			d.cleanupAll(dictState, meetState)
-			return nil
+		// State
+		var dictState *streamingDictation
+		var meetState *meetingState
 
-		case <-d.svc.Hotkey.Keydown():
-			toggleDictation(defaultLang)
+		// Auto-stop channel — signalled by streaming dictation on silence timeout
+		autoStopCh := make(chan struct{}, 1)
 
-		case lang := <-d.tray.dictationCh:
-			toggleDictation(lang)
-
-		case <-autoStopCh:
-			if dictState != nil {
-				timeout := d.silenceTimeout()
-				fmt.Printf("Auto-stopping dictation after %.0fs of silence\n", timeout.Seconds())
-				_ = d.svc.Notifier.Send("Tomoe", "Dictation auto-stopped (silence)")
+		// toggleDictation handles start/stop dictation from any trigger (hotkey or tray).
+		toggleDictation := func(lang string) {
+			if meetState != nil {
+				return // ignore dictation while meeting active
+			}
+			if dictState == nil {
+				ds, err := d.startStreamingDictation(ctx, autoStopCh, lang)
+				if err != nil {
+					_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Dictation failed: %v", err))
+					fmt.Printf("Error starting dictation: %v\n", err)
+					return
+				}
+				dictState = ds
+				d.tray.SetDictating()
+				_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Dictating (%s)...", lang))
+				fmt.Printf("Streaming dictation started (%s)...\n", lang)
+			} else {
 				d.stopDictation(dictState)
 				dictState = nil
 			}
+		}
 
-		case <-meetingCh:
-			toggleMeeting(defaultLang)
-
-		case lang := <-d.tray.meetingCh:
-			toggleMeeting(lang)
-
-		case evt := <-detectCh:
-			switch evt.Type {
-			case meeting.MeetingStarted:
-				if dictState != nil || meetState != nil {
-					break // ignore if already recording
-				}
-				platform := string(evt.Platform)
-				ms, err := d.startMeetingWithPlatform(ctx, platform, defaultLang)
+		// toggleMeeting handles start/stop meeting from any trigger (hotkey or tray).
+		toggleMeeting := func(lang string) {
+			if dictState != nil {
+				return // ignore meeting while dictating
+			}
+			if meetState == nil {
+				ms, err := d.startMeetingWithPlatform(ctx, "", lang)
 				if err != nil {
-					_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Auto-detect meeting start failed: %v", err))
-					fmt.Printf("Error auto-starting meeting: %v\n", err)
-					break
+					_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Meeting start failed: %v", err))
+					fmt.Printf("Error starting meeting: %v\n", err)
+					return
 				}
 				meetState = ms
 				d.tray.SetMeetingRecording()
-				msg := fmt.Sprintf("%s meeting detected — recording started", platform)
-				_ = d.svc.Notifier.Send("Tomoe", msg)
-				fmt.Println(msg)
-			case meeting.MeetingStopped:
-				if meetState != nil {
-					d.stopMeeting(meetState)
-					meetState = nil
+				_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Meeting recording started (%s)", lang))
+				fmt.Printf("Meeting recording started (%s)...\n", lang)
+			} else {
+				d.stopMeeting(meetState)
+				meetState = nil
+			}
+		}
+
+		for {
+			select {
+			case <-ctx.Done():
+				fmt.Println("Shutting down...")
+				d.cleanupAll(dictState, meetState)
+				return nil
+
+			case sig := <-sigCh:
+				fmt.Printf("Received %s, shutting down...\n", sig)
+				d.cleanupAll(dictState, meetState)
+				return nil
+
+			case <-d.tray.quitCh:
+				fmt.Println("Quit from tray, shutting down...")
+				d.cleanupAll(dictState, meetState)
+				return nil
+
+			case <-d.svc.Hotkey.Keydown():
+				toggleDictation(defaultLang)
+
+			case lang := <-d.tray.dictationCh:
+				toggleDictation(lang)
+
+			case <-autoStopCh:
+				if dictState != nil {
+					timeout := d.silenceTimeout()
+					fmt.Printf("Auto-stopping dictation after %.0fs of silence\n", timeout.Seconds())
+					_ = d.svc.Notifier.Send("Tomoe", "Dictation auto-stopped (silence)")
+					d.stopDictation(dictState)
+					dictState = nil
+				}
+
+			case <-meetingCh:
+				toggleMeeting(defaultLang)
+
+			case lang := <-d.tray.meetingCh:
+				toggleMeeting(lang)
+
+			case evt := <-detectCh:
+				switch evt.Type {
+				case meeting.MeetingStarted:
+					if dictState != nil || meetState != nil {
+						break // ignore if already recording
+					}
+					platform := string(evt.Platform)
+					ms, err := d.startMeetingWithPlatform(ctx, platform, defaultLang)
+					if err != nil {
+						_ = d.svc.Notifier.Send("Tomoe", fmt.Sprintf("Auto-detect meeting start failed: %v", err))
+						fmt.Printf("Error auto-starting meeting: %v\n", err)
+						break
+					}
+					meetState = ms
+					d.tray.SetMeetingRecording()
+					msg := fmt.Sprintf("%s meeting detected — recording started", platform)
+					_ = d.svc.Notifier.Send("Tomoe", msg)
+					fmt.Println(msg)
+				case meeting.MeetingStopped:
+					if meetState != nil {
+						d.stopMeeting(meetState)
+						meetState = nil
+					}
 				}
 			}
 		}
-	}
+	})
 }
 
 func (d *Daemon) cleanupAll(dict *streamingDictation, meet *meetingState) {

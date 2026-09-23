@@ -11,17 +11,27 @@ LINT_VERSION := v2.11.3
 SHERPA_VER   := v1.12.28
 TOMOE_LIB    := $(HOME)/.local/share/tomoe/lib
 
-# Auto-detect webkit2gtk for GUI build
+UNAME := $(shell uname)
+
+# Auto-detect webkit2gtk for GUI build (Linux only — macOS uses WKWebView
+# natively via Wails, no webkit2gtk-equivalent package to detect).
 HAS_WEBKIT := $(shell pkg-config --exists webkit2gtk-4.1 2>/dev/null && echo yes || echo no)
 
 ## Development setup ──────────────────────────────────────────────────
 
-dev-deps: ## Install Ubuntu system packages needed for development
+dev-deps: ## Install system packages needed for development (Ubuntu or macOS)
+ifeq ($(UNAME),Darwin)
+	@echo "macOS: hotkey (Carbon), clipboard/notify (osascript), and audio"
+	@echo "(malgo/CoreAudio) all use frameworks already in Xcode's SDK --"
+	@echo "no Homebrew packages needed for the CLI. Only Node is required:"
+	@command -v node >/dev/null 2>&1 || brew install node
+else
 	sudo apt install -y build-essential pkg-config \
 	  libx11-dev libxtst-dev libxkbcommon-dev \
 	  libasound-dev portaudio19-dev libportaudio2 libpulse-dev pulseaudio-utils \
 	  xclip xdotool wl-clipboard wtype libnotify-bin ffmpeg \
 	  libwebkit2gtk-4.1-dev libappindicator3-dev libgtk-3-dev
+endif
 	@echo "Installing Node.js dependencies for frontend..."
 	cd frontend && npm install
 
@@ -68,9 +78,16 @@ test-coverage: ## Run tests with coverage report
 
 ## Build ──────────────────────────────────────────────────────────────
 
-build: ## Build CLI binary (and GUI if webkit2gtk available)
+build: ## Build CLI binary (and GUI if webkit2gtk available, or always on macOS)
 	CGO_ENABLED=1 go build $(GOFLAGS) $(LDFLAGS) -o $(BINARY) ./cmd/tomoe
-ifeq ($(HAS_WEBKIT),yes)
+ifeq ($(UNAME),Darwin)
+	@echo "macOS: building frontend + GUI (WKWebView via Wails, no webkit2gtk needed)..."
+	cd frontend && npm install --silent && npm run build
+	mkdir -p cmd/tomoe-gui/frontend
+	rm -rf cmd/tomoe-gui/frontend/dist
+	cp -r frontend/dist cmd/tomoe-gui/frontend/dist
+	CGO_ENABLED=1 CGO_LDFLAGS="-framework UniformTypeIdentifiers" go build $(GOFLAGS) $(LDFLAGS) -tags production -o $(GUI_BINARY) ./cmd/tomoe-gui
+else ifeq ($(HAS_WEBKIT),yes)
 	@echo "webkit2gtk-4.1 detected, building frontend + GUI..."
 	cd frontend && npm install --silent && npm run build
 	mkdir -p cmd/tomoe-gui/frontend
@@ -81,11 +98,15 @@ else
 	@echo "webkit2gtk-4.1 not found, skipping GUI build."
 endif
 
-build-gui: build-frontend ## Build GUI binary only (requires webkit2gtk-4.1)
+build-gui: build-frontend ## Build GUI binary only (webkit2gtk-4.1 on Linux, WKWebView on macOS)
 	mkdir -p cmd/tomoe-gui/frontend
 	rm -rf cmd/tomoe-gui/frontend/dist
 	cp -r frontend/dist cmd/tomoe-gui/frontend/dist
+ifeq ($(UNAME),Darwin)
+	CGO_ENABLED=1 CGO_LDFLAGS="-framework UniformTypeIdentifiers" go build $(GOFLAGS) $(LDFLAGS) -tags production -o $(GUI_BINARY) ./cmd/tomoe-gui
+else
 	CGO_ENABLED=1 go build $(GOFLAGS) $(LDFLAGS) -tags production,webkit2_41 -o $(GUI_BINARY) ./cmd/tomoe-gui
+endif
 
 build-frontend: ## Build React frontend
 	cd frontend && npm install && npm run build

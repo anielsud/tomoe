@@ -157,6 +157,8 @@ func (a *App) Startup(ctx context.Context) {
 
 // Shutdown is called by Wails when the application is closing.
 func (a *App) Shutdown(ctx context.Context) {
+	StopTray()
+
 	// Snapshot mutable fields under lock before acting on them.
 	a.mu.Lock()
 	recording := a.recording

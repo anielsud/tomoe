@@ -22,46 +22,58 @@ type daemonTray struct {
 	mStopMeeting   *systray.MenuItem // flat stop item (nil in single-lang mode)
 }
 
-// startDaemonTray starts the system tray in a goroutine.
-// languages is the list of available language codes (e.g. ["en", "bn"]).
-// defaultLang is the fallback language code.
-func startDaemonTray(languages []string, defaultLang string) *daemonTray {
-	t := &daemonTray{
+// newDaemonTray allocates a daemonTray's channels without touching
+// systray itself. Callers drive the actual systray.Run(...) call — see
+// startDaemonTray (Linux/other) and runWithTray in run_linux.go /
+// run_darwin.go, which differ in *where* that call needs to happen.
+func newDaemonTray() *daemonTray {
+	return &daemonTray{
 		quitCh:      make(chan struct{}, 1),
 		dictationCh: make(chan string, 1),
 		meetingCh:   make(chan string, 1),
 	}
+}
+
+// startDaemonTray starts the system tray in a goroutine.
+// languages is the list of available language codes (e.g. ["en", "bn"]).
+// defaultLang is the fallback language code.
+func startDaemonTray(languages []string, defaultLang string) *daemonTray {
+	t := newDaemonTray()
 	go func() {
 		defer func() {
 			if r := recover(); r != nil {
 				fmt.Fprintf(os.Stderr, "Warning: system tray unavailable: %v\n", r)
 			}
 		}()
-		systray.Run(func() {
-			systray.SetTitle("Tomoe")
-			systray.SetTooltip("Tomoe — Ready")
-			systray.SetIcon(daemonTrayIcon)
-
-			if len(languages) > 1 {
-				t.initMultilingual(languages)
-			} else {
-				t.initSingleLang(defaultLang)
-			}
-
-			systray.AddSeparator()
-			mQuit := systray.AddMenuItem("Quit", "Stop Tomoe daemon")
-			t.ready.Store(true)
-
-			go func() {
-				<-mQuit.ClickedCh
-				select {
-				case t.quitCh <- struct{}{}:
-				default:
-				}
-			}()
-		}, func() {})
+		systray.Run(func() { t.onReady(languages, defaultLang) }, func() {})
 	}()
 	return t
+}
+
+// onReady builds the tray's menu. Must run on whatever goroutine/thread
+// systray.Run's onReady callback actually invokes it from.
+func (t *daemonTray) onReady(languages []string, defaultLang string) {
+	systray.SetTitle("Tomoe")
+	systray.SetTooltip("Tomoe — Ready")
+	systray.SetIcon(daemonTrayIcon)
+
+	if len(languages) > 1 {
+		t.initMultilingual(languages)
+	} else {
+		t.initSingleLang(defaultLang)
+	}
+
+	systray.AddSeparator()
+	mQuit := systray.AddMenuItem("Quit", "Stop Tomoe daemon")
+	t.ready.Store(true)
+
+	go func() {
+		<-mQuit.ClickedCh
+		select {
+		case t.quitCh <- struct{}{}:
+		default:
+		}
+	}()
 }
 
 // initSingleLang creates simple dictation/meeting items for a single language.

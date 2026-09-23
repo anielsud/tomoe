@@ -1,8 +1,13 @@
 # macOS Support (in progress)
 
-Status: two of the platform-specific packages macOS needs are built and
-individually validated against a live Teams call. `cmd/tomoe` itself does
-not build on macOS yet — see [Status](#status) for exactly what's missing.
+Status: **both `cmd/tomoe` (CLI dictation) and `cmd/tomoe-gui` build,
+run, and have been verified end-to-end on real macOS hardware** —
+global hotkey (Carbon) → mic capture → Parakeet TDT transcription →
+clipboard/auto-type all work in both, and the GUI's window and tray
+icon now coexist without crashing. Meeting-mode's macOS-specific pieces
+(teamsvideo OCR, guestaudio wiring, real meeting detection,
+speaker-cluster labeling) are still not integrated — see
+[Status](#status) for exactly what's left.
 
 This isn't a straight port of the Linux path. Linux's speaker labeling
 (`internal/speaker`) works from audio alone: cluster the monitor-source
@@ -119,21 +124,105 @@ runs. Worth monitoring, not yet root-caused.
 
 ## Status
 
-Builds cleanly and runs standalone (`go build ./internal/teamsvideo
-./internal/guestaudio`, plus their `cmd/video-signal-test` /
-`cmd/guest-audio-test` diagnostics). **Not yet integrated** with anything
-else — `cmd/tomoe` still doesn't build on macOS, because:
+### Phase 1 — CLI dictation (`tomoe`): done
 
-- `internal/hotkey`, `internal/clipboard`, `internal/notify` have no
-  `_darwin.go` implementation.
-- `internal/audio`'s **microphone** path (not the PulseAudio monitor-source
-  path) is already portable `malgo` code with no Linux-specific calls in
-  it — likely close to free once someone wires it up, but not done.
-- Meeting-start detection has no macOS implementation at all yet (no
-  equivalent to the PulseAudio dual-stream signal).
-- The cluster-labeling step described above (the actual point of this
-  work) hasn't been written.
-- No macOS leg in CI (`.github/workflows/ci.yml` is `ubuntu-24.04`-only).
+`cmd/tomoe` builds and runs on macOS. What it took, package by package:
+
+- `internal/hotkey/hotkey_darwin.go` — global hotkey via Carbon's
+  `RegisterEventHotKey`/`InstallEventHandler` (no Accessibility
+  permission needed for this part, unlike auto-type below). "Super" in
+  config bindings maps to ⌘ so existing binding strings like
+  `"Super+Shift+S"` work unchanged on both platforms.
+- `internal/clipboard/clipboard_darwin.go`, `internal/notify/notify_darwin.go`
+  — `osascript` (`keystroke` / `display notification`), the macOS
+  equivalents of `xdotool type` / `notify-send`. `TypeText` needs
+  Accessibility permission granted to the process; `Send` doesn't.
+- `internal/audio`, `internal/sigfix`, and the tray-manager files in
+  `internal/backend`/`internal/daemon` turned out to already be fully
+  portable — they were `_linux.go`-suffixed but contained no actual
+  Linux-specific code, so the fix was just dropping the suffix (see
+  `capture_malgo.go`, `fix.go`, `tray.go`).
+- `internal/meeting` gained a `detect_darwin.go` stub: automatic meeting
+  detection has no macOS implementation yet (no equivalent of
+  PulseAudio's dual-stream signal — that's still phase 2), so
+  `pulseInit()` always returns an error there. Every call site already
+  treats a failed `Detector.Start()` as "feature disabled, continue," so
+  this is silent and safe, not a crash.
+- **The one real bug this surfaced:** `fyne.io/systray`'s darwin backend
+  must run its native loop on the actual OS main thread (a hard Cocoa/
+  AppKit requirement) — calling `systray.Run` from a goroutine, as the
+  daemon originally did unconditionally, crashes with a low-level AppKit
+  assertion failure the first time the tray tries to draw. Fixed via
+  `internal/daemon/run_linux.go` / `run_darwin.go`: on darwin,
+  `daemon.Run()`'s entire body (hotkey registration, the event select
+  loop, etc.) now runs inside `systray.Run`'s `onReady` callback instead
+  of the other way around; Linux's behavior (tray in a goroutine,
+  `Run()`'s body proceeds immediately) is unchanged.
+- Verified live on real hardware: `osascript`-simulated ⌘⇧S actually
+  triggers the registered Carbon hot key, starts mic capture, transcribes
+  real speech via Parakeet TDT, and a second press stops it cleanly;
+  SIGTERM shuts the daemon down cleanly too.
+- `.github/workflows/ci.yml` gained a `macos-14` job building/testing
+  `cmd/tomoe`'s surface (see that job's comment for why its `go vet` is
+  scoped rather than `./...` — it excludes the still-unintegrated
+  `internal/teamsvideo`, which has a pre-existing `go vet` advisory
+  unrelated to this phase).
+
+**`cmd/tomoe-gui` on macOS — also fixed.** Two separate problems, both
+resolved:
+
+1. **Linker gap:** newer Xcode SDKs need `-framework
+   UniformTypeIdentifiers` for Wails' own darwin frontend package to
+   link (otherwise `Undefined symbols ... _OBJC_CLASS_$_UTType`).
+   `make build`/`make build-gui` now pass this via `CGO_LDFLAGS` on
+   darwin (see the `UNAME` branch in the Makefile).
+2. **Window + tray coexistence:** Wails' own window already owns the
+   real Cocoa main thread and calls `[NSApp run]` itself, so systray
+   can't claim it the way `run_darwin.go` claims it for the CLI daemon
+   (which has no competing window). Fixed using
+   `fyne.io/systray`'s `RunWithExternalLoop` (built for exactly this —
+   an app that already owns the native run loop): its
+   `registerSystray` C implementation checks an internal-loop flag and,
+   in external-loop mode, never calls `[NSApp run]` and never replaces
+   `NSApplication`'s delegate, so it can't clobber Wails' own delegate.
+   The `start`/`end` functions it hands back still do direct AppKit
+   calls (building/tearing down the `NSStatusItem`) and so still need
+   the real main thread — dispatched there via `dispatch_async` to
+   GCD's main queue (`internal/backend/dispatch_darwin.go`), which
+   works regardless of which goroutine calls it and regardless of
+   whether Wails' `[NSApp run]` has started pumping yet. Ordinary menu
+   interaction (`onReady`, item clicks) needed no such treatment —
+   systray's ObjC side already dispatches those via
+   `performSelectorOnMainThread` internally, which is how the original
+   `Run()`-based CLI path got away without this problem too.
+   See `internal/backend/tray_start_darwin.go`.
+
+Verified live: window and tray status item both present simultaneously
+(confirmed via System Events, not just "process didn't crash"), the
+global hotkey starts/stops real dictation through the GUI exactly like
+the CLI, and shutdown (`SIGTERM` → `App.Shutdown` → `StopTray`) is
+clean. One AppleScript-level nit found and *not* chased: the tray's
+dropdown menu isn't introspectable via System Events (`exists menu 1 of
+menu bar item ...` returns false even after a successful click) —
+looks like a pre-existing quirk of how `fyne.io/systray` presents its
+macOS menu (likely a manual popover rather than assigning
+`NSStatusItem.menu` directly), unrelated to the `RunWithExternalLoop`
+change; the menu itself works fine when actually clicked by a human.
+
+### Phase 2 — meeting mode: not started
+
+- `internal/teamsvideo` — window discovery and frame capture work and
+  are validated live; ring detection and Vision.framework OCR (the
+  name-label read) are not yet ported. Has a pre-existing `go vet`
+  advisory (`possible misuse of unsafe.Pointer` in `window_darwin.go`)
+  left as-is rather than patched blind — worth a proper look when this
+  package is next touched.
+- `internal/guestaudio` — works standalone, not wired into
+  `internal/live`'s pipeline.
+- Real meeting-start detection (the macOS equivalent of PulseAudio's
+  dual-stream signal) — no design yet.
+- The cluster-labeling step (video hint → speaker cluster ID) — not
+  written.
 
 ## Background
 

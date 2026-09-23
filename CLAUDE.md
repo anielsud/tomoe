@@ -176,7 +176,7 @@ tomoe config              # Print current config
 ## Coding Conventions
 
 - Use `internal/` for all non-main packages — nothing is exported outside the module
-- Platform-specific code uses `_linux.go`/`_darwin.go` filename-suffix build constraints (applies to `.go`, `.c`, and `.m` files alike — no explicit `//go:build` comment needed, though the macOS packages add one anyway for clarity). `go build ./...` is not safe to run unscoped on a single platform — it hard-fails the moment it reaches a same-OS-only package (e.g. `internal/sigfix` on macOS). Build/test specific package paths instead, same as the Makefile already does for `./cmd/tomoe`.
+- Platform-specific code uses `_linux.go`/`_darwin.go` filename-suffix build constraints (applies to `.go`, `.c`, and `.m` files alike — no explicit `//go:build` comment needed, though the macOS packages add one anyway for clarity). `go build ./...` is not safe to run unscoped on a single platform — it hard-fails the moment it reaches a same-OS-only package (e.g. `cmd/hotkey-test`, an X11-only diagnostic CLI, on macOS). Build/test specific package paths instead, same as the Makefile already does for `./cmd/tomoe`.
 - Audio format: 16kHz mono PCM float32 (Parakeet TDT native input)
 - Config format: TOML via `pelletier/go-toml`
 - GUI build requires `-tags production,webkit2_41`

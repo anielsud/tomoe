@@ -18,21 +18,11 @@ type trayManager struct {
 	mQuit          *systray.MenuItem
 }
 
-// StartTray initializes and runs the system tray.
-// Must be called from the main goroutine on some platforms.
-func StartTray(app *App) {
-	systray.Run(func() {
-		onTrayReady(app)
-	}, func() {
-		// Cleanup on exit
-	})
-}
-
-// StartTrayAsync starts the system tray in a goroutine.
-func StartTrayAsync(app *App) {
-	go StartTray(app)
-}
-
+// StartTrayAsync starts the system tray. See tray_start_linux.go /
+// tray_start_darwin.go — the two platforms need genuinely different
+// wiring, not just a different backend, because darwin's Wails window
+// already owns the real Cocoa main thread/run loop (see
+// tray_start_darwin.go's doc comment for the full explanation).
 func onTrayReady(app *App) {
 	systray.SetTitle("Tomoe")
 	systray.SetTooltip("Tomoe — Ready")
