@@ -20,6 +20,7 @@ function App() {
   const [monitors, setMonitors] = useState<DeviceInfo[]>([]);
   const [languages, setLanguages] = useState<string[]>(['en']);
   const [selectedLang, setSelectedLang] = useState('en');
+  const [systemAudioMode, setSystemAudioMode] = useState<'manual' | 'auto'>('manual');
   const [exportSessionId, setExportSessionId] = useState<string | null>(null);
   const { segments, clear: clearTranscript } = useTranscript();
   const { isRecording, startTime, reset: resetSession } = useSession();
@@ -56,6 +57,12 @@ function App() {
         if (mons && mons.length > 0 && !monitorDevice) {
           const def = mons.find((m: DeviceInfo) => m.IsDefault);
           setMonitorDevice(def ? def.Name : mons[0].Name);
+        }
+        try {
+          const mode = await window.go.backend.App.SystemAudioMode();
+          if (mode === 'auto' || mode === 'manual') setSystemAudioMode(mode);
+        } catch {
+          // Method may not exist in older builds — default to 'manual'
         }
       }
     } catch (e) {
@@ -124,6 +131,7 @@ function App() {
           onMicChange={setMicDevice}
           onMonitorChange={setMonitorDevice}
           disabled={isRecording}
+          systemAudioMode={systemAudioMode}
         />
         {languages.length > 1 && (
           <select

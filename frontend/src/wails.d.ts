@@ -13,6 +13,7 @@ interface Window {
       App: {
         ListAudioDevices(): Promise<any[]>;
         ListMonitorSources(): Promise<any[]>;
+        SystemAudioMode(): Promise<string>;
         StartSession(mic: string, monitor: string, lang: string, platform: string): Promise<void>;
         GetAvailableLanguages(): Promise<string[]>;
         GetDefaultLanguage(): Promise<string>;
