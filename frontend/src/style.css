@@ -83,6 +83,18 @@ body {
   color: var(--text);
 }
 
+.toolbar .system-audio-auto {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  cursor: help;
+}
+
 .toolbar .spacer {
   flex: 1;
 }

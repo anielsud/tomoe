@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 
@@ -224,6 +225,21 @@ func (a *App) ListAudioDevices() ([]audio.DeviceInfo, error) {
 func (a *App) ListMonitorSources() ([]audio.DeviceInfo, error) {
 	a.fixSignals()
 	return audio.ListMonitorSources()
+}
+
+// SystemAudioMode reports how meeting mode's second audio source is
+// selected, so the frontend can render an honest label instead of
+// always showing a Linux-shaped device picker: "manual" (Linux — pick
+// a PulseAudio monitor source from ListMonitorSources, which is always
+// empty on macOS since no such concept exists there) or "auto" (macOS —
+// StartSession's monitorDevice argument is ignored; internal/meetingaudio
+// always tries to auto-detect the active meeting window instead, no
+// selection needed or possible).
+func (a *App) SystemAudioMode() string {
+	if runtime.GOOS == "darwin" {
+		return "auto"
+	}
+	return "manual"
 }
 
 // StartSession begins a new live transcription session.
