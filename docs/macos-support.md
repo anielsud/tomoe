@@ -1,13 +1,16 @@
 # macOS Support (in progress)
 
-Status: **both `cmd/tomoe` (CLI dictation) and `cmd/tomoe-gui` build,
-run, and have been verified end-to-end on real macOS hardware** —
-global hotkey (Carbon) → mic capture → Parakeet TDT transcription →
-clipboard/auto-type all work in both, and the GUI's window and tray
-icon now coexist without crashing. Meeting-mode's macOS-specific pieces
-(teamsvideo OCR, guestaudio wiring, real meeting detection,
-speaker-cluster labeling) are still not integrated — see
-[Status](#status) for exactly what's left.
+Status: **`cmd/tomoe` (CLI dictation), `cmd/tomoe-gui`, and meeting
+mode's dual-source audio capture all build, run, and have been verified
+end-to-end on real macOS hardware.** Global hotkey (Carbon) → mic
+capture → Parakeet TDT transcription → clipboard/auto-type all work;
+the GUI's window and tray icon coexist without crashing; meeting mode
+captures both the mic and the active Teams window's guest audio via
+ScreenCaptureKit, same shape as Linux's mic+PulseAudio-monitor capture.
+Speaker-cluster labeling stays "Person N" on both platforms — the
+video-hint naming, real meeting detection, and everything past raw
+audio capture is still not built. See [Status](#status) for exactly
+what's left, and what it'll take.
 
 This isn't a straight port of the Linux path. Linux's speaker labeling
 (`internal/speaker`) works from audio alone: cluster the monitor-source
@@ -116,11 +119,46 @@ fluent-sounding transcription that's semantically nonsense, not a crash,
 which makes it easy to miss. Handled correctly in `callback_darwin.go`
 from the start.
 
-**Known reliability gap:** one segfault was observed on a cold first run,
-before any of the tap's own checkpoints had printed — looked like a
-one-time initialization race (possibly the process's first-ever
-window-server/XPC handshake). Not reproduced across several subsequent
-runs. Worth monitoring, not yet root-caused.
+**Two real bugs found and fixed integrating this into meeting mode**
+(see Phase 2 below for the integration itself) — both root-caused via
+`lldb` giving a real symbolicated backtrace, after Go's own crash
+printer (which only shows Go-visible frames) pointed at the right cgo
+call but not the actual fault:
+
+1. **`dispatch_once` self-deadlock.** `guestaudio_ensure_app_context()`
+   originally always hopped `[NSApplication sharedApplication]` over to
+   the main queue via `dispatch_sync`, on the theory that callers might
+   not already be on the main thread (true for `cmd/tomoe`'s daemon,
+   which calls in from a goroutine spawned off systray's `onReady` — see
+   `internal/daemon/run_darwin.go`). But `cmd/guest-audio-test`'s
+   `main()` runs directly on the real main thread, and `dispatch_sync`
+   to the queue you're already on is a same-thread deadlock —
+   `libdispatch` detects this and deliberately traps rather than
+   hanging (`lldb`'s backtrace: `guestaudio_start_tap` →
+   `dispatch_once_callout` → `dispatch_sync_f_slow` →
+   `DISPATCH_WAIT_FOR_QUEUE`). Fixed by checking `[NSThread
+   isMainThread]` first and only hopping when actually needed.
+2. **A real window-server/XPC handshake race.** `[NSApplication
+   sharedApplication]` kicks off this process's first window-server
+   connection but doesn't block until it's ready. The very next thing
+   `guestaudio_start_tap` does (an `SCShareableContent` lookup) crashed
+   with `SIGSEGV` at full speed, every time — but *never* crashed
+   running under `lldb`, which only ever adds latency. That's the
+   signature of losing a race against an async handshake, not a memory
+   bug, and it's exactly the "one-time initialization race" this
+   section used to describe as "not yet root-caused." Apple exposes no
+   synchronous "wait until ready" hook for it, so the fix is a one-time,
+   150ms settle delay after first establishing app context (paid once
+   per process, on the first tap start only).
+
+Both were invisible without a real native debugger: Go's crash printer
+correctly pointed at `guestaudio_start_tap` both times, but the *why*
+(a libdispatch deadlock detector; a race that only a debugger's slowdown
+happened to avoid) only showed up in `lldb`'s fully symbolicated
+backtrace. Re-validated clean (401 callbacks / 384,960 samples / 8.0s at
+48kHz, matching the original standalone validation) across multiple
+consecutive runs at full speed, no debugger, real Screen Recording
+permission grant (not partial/inherited).
 
 ## Status
 
@@ -209,20 +247,109 @@ macOS menu (likely a manual popover rather than assigning
 `NSStatusItem.menu` directly), unrelated to the `RunWithExternalLoop`
 change; the menu itself works fine when actually clicked by a human.
 
-### Phase 2 — meeting mode: not started
+### Phase 2 — meeting mode
 
-- `internal/teamsvideo` — window discovery and frame capture work and
-  are validated live; ring detection and Vision.framework OCR (the
-  name-label read) are not yet ported. Has a pre-existing `go vet`
-  advisory (`possible misuse of unsafe.Pointer` in `window_darwin.go`)
-  left as-is rather than patched blind — worth a proper look when this
-  package is next touched.
-- `internal/guestaudio` — works standalone, not wired into
-  `internal/live`'s pipeline.
-- Real meeting-start detection (the macOS equivalent of PulseAudio's
-  dual-stream signal) — no design yet.
-- The cluster-labeling step (video hint → speaker cluster ID) — not
-  written.
+**Dual-source audio capture: done.** New `internal/meetingaudio`
+package (`NewMonitorSource(deviceHint string) (*audio.StreamCapturer,
+error)`) is meeting mode's single, OS-agnostic second-audio-source
+entry point, called from both `internal/daemon` and `internal/backend`
+where they used to build the monitor capturer inline:
+
+- Linux (`meetingaudio_linux.go`): today's existing PulseAudio-monitor
+  logic, moved here verbatim — zero behavior change, a real
+  construction error still stays fatal.
+- macOS (`meetingaudio_darwin.go`): ignores `deviceHint` (no
+  PulseAudio-shaped device concept exists) and always calls
+  `teamsvideo.FindMeetingWindow()`, capturing that window's audio via a
+  new `internal/guestaudio.WindowCapturer` — a thin adapter giving
+  `Tap`'s push-based callback the same `Start`/`Stop`/`Samples`/
+  `Reset`/`Close` shape `internal/audio.Capturer` expects (structural
+  typing, no import needed), resampling ScreenCaptureKit's 48kHz down
+  to `audio.CaptureSampleRate` (new exported constant; new
+  `audio.Resample` in `dsp.go`, linear interpolation) since nothing
+  downstream resamples on its own. Unlike Linux, **no failure here is
+  ever fatal** — no window found, or the tap failing to start, both
+  fall back to mic-only with a printed notice, since finding an active
+  meeting window is inherently probabilistic and mic-only is still a
+  fully-working session.
+
+Verified live end-to-end against a real Teams window: hotkey → dual
+mic+guest-audio capture → real transcription → clean stop → saved
+session with `"sources": ["mic", "monitor"]`. See the guestaudio section
+above for the two real bugs this integration surfaced and fixed
+(`dispatch_once` self-deadlock; a window-server handshake race) — both
+was root-caused with `lldb`, not worked around.
+
+`internal/teamsvideo`'s pre-existing `go vet` advisory
+(`possible misuse of unsafe.Pointer` in `window_darwin.go`) is also now
+fixed — a small `cfarray_is_null` C helper does the `NULL` check instead
+of a Go-side `unsafe.Pointer` comparison. `go vet ./...` is fully clean
+on darwin now, no scoping needed.
+
+**Not yet built** — the actual point of the original architecture doc
+(video hint → speaker cluster labeling) and everything after it:
+
+1. **GUI live transcription for meeting mode on macOS.** The transcript
+   pane already exists and works for Linux meetings, driven by the same
+   `internal/live.Coordinator` meeting mode on macOS now also uses — so
+   this is a *verification* item, not new code: confirm the GUI's
+   existing transcript-streaming path (Wails events → React) behaves
+   the same way once a macOS session has two real audio sources feeding
+   it, not just mic.
+2. **Live clustering/diarization, tightened for two sources.**
+   `internal/speaker`'s embedding+clustering already runs live today
+   (per-segment, as audio arrives, on both platforms) — this isn't
+   building live clustering from scratch. The macOS-specific work is
+   making sure clustering behaves well when mic and guest audio are two
+   *separate* streams captured differently (a ScreenCaptureKit window
+   tap vs. a PulseAudio monitor source can have different noise floors,
+   gain staging, and dropout patterns), which could bias which
+   embeddings get clustered together in ways Linux's single
+   monitor-source input never has to handle.
+3. **Screen-based speaker-label hints via rules, with an escalation
+   path for unrecognized UIs.** Generalizes today's
+   Teams-window-shaped `internal/teamsvideo` heuristic (owner name +
+   title matching; ring-color/shape detection and Vision.framework OCR
+   for the name label are both still unbuilt) into a rule table keyed
+   by meeting app (Teams, Zoom, Meet, Webex, Slack — the same set
+   `internal/meeting/platform.go` already recognizes by window title on
+   the detection side) instead of one hardcoded Teams-only path. The
+   escalation path matters as much as the rules themselves: when a
+   window doesn't match any known app's rules, log it (app name,
+   window title shape) instead of guessing, and keep clustering-only
+   "Person N" labeling — exactly like a hint-less cluster already
+   falls back today. That log is how the rule table grows over time
+   without silently mislabeling someone in the meantime.
+4. **Persistent voiceprints.** A speaker cluster's embedding centroid
+   *is* a voiceprint (noted in this doc's original architecture
+   section) — this item is giving it a durable identity: once a video
+   hint resolves a cluster to a real name, store that centroid keyed by
+   name (not just for the current session), so a returning speaker
+   gets recognized from voice alone in a *future* meeting, without
+   needing a fresh video hint every time. Needs a storage location
+   (likely alongside `internal/config`'s data dir) and a
+   similarity-threshold policy for matching a new session's cluster
+   against stored voiceprints — reusing `speaker.DefaultThreshold`'s
+   general shape, but this is cross-session matching, not within-session
+   clustering, so it may warrant its own threshold.
+5. **Persistent face signatures.** The video-side counterpart to #4:
+   store a face embedding (or at minimum a representative thumbnail)
+   keyed by the same resolved name, from the same video-hint moment
+   that already reads a name label. This is what lets a familiar face
+   get identified even in the window before OCR reads *this* session's
+   name label — e.g. a participant whose tile briefly shows no label,
+   or joins with camera on but hasn't been named by Teams' UI yet.
+   Depends on #3 existing first (need a real face crop from the video
+   hint pipeline to embed).
+6. **Replay-based test harness.** The ability to feed a *recorded*
+   meeting (audio, and once #3-#5 exist, screen capture too) through
+   the whole pipeline offline — capture once against a real or staged
+   call, then replay it repeatedly against pipeline changes without
+   needing a live call every time. This is what makes #2-#5
+   regression-testable at all; right now the only way to validate any
+   of this is a live call, which is exactly why this session's guestaudio
+   bugs took real debugging effort to catch (see above) rather than
+   showing up in `go test`.
 
 ## Background
 

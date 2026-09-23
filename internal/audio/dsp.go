@@ -96,6 +96,42 @@ func NoiseGate(samples []float32, thresholdDB float32) []float32 {
 	return out
 }
 
+// Resample converts samples captured at srcRateHz to dstRateHz using
+// linear interpolation. Used by sources that don't natively capture at
+// CaptureSampleRate (e.g. guestaudio's ScreenCaptureKit tap, delivering
+// 48kHz) — every downstream consumer (VAD, Parakeet TDT) assumes its
+// input already matches CaptureSampleRate, since nothing else in this
+// pipeline resamples. Returns samples unchanged if the rates already
+// match or either rate is non-positive.
+func Resample(samples []float32, srcRateHz, dstRateHz int) []float32 {
+	if len(samples) == 0 || srcRateHz <= 0 || dstRateHz <= 0 || srcRateHz == dstRateHz {
+		return samples
+	}
+
+	ratio := float64(srcRateHz) / float64(dstRateHz)
+	outLen := int(float64(len(samples)) / ratio)
+	if outLen <= 0 {
+		return nil
+	}
+
+	out := make([]float32, outLen)
+	for i := 0; i < outLen; i++ {
+		srcPos := float64(i) * ratio
+		idx := int(srcPos)
+		if idx >= len(samples) {
+			idx = len(samples) - 1
+		}
+		frac := float32(srcPos - float64(idx))
+
+		if idx+1 < len(samples) {
+			out[i] = samples[idx] + (samples[idx+1]-samples[idx])*frac
+		} else {
+			out[i] = samples[idx]
+		}
+	}
+	return out
+}
+
 // ProcessPipeline applies all DSP steps in sequence:
 // DC offset removal → high-pass filter (80Hz) → normalize → noise gate.
 // Set gateDB to 0 to skip the noise gate step.

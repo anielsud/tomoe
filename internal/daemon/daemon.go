@@ -17,6 +17,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
 	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
+	"github.com/sosuke-ai/tomoe-pc/internal/meetingaudio"
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
 	"github.com/sosuke-ai/tomoe-pc/internal/platform"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
@@ -396,18 +397,16 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	}
 	cfg.MicCapturer = audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, 128)
 
-	// Set up monitor capturer (optional)
-	monitorDevice := d.cfg.Meeting.MonitorDevice
-	if monitorDevice == "" {
-		monitorDevice = audio.DefaultMonitorDevice()
+	// Set up monitor capturer (optional) — the second audio source
+	// (system/PulseAudio monitor on Linux, the meeting window's guest
+	// audio via ScreenCaptureKit on macOS). See internal/meetingaudio.
+	monCapturer, err := meetingaudio.NewMonitorSource(d.cfg.Meeting.MonitorDevice)
+	if err != nil {
+		cfg.MicCapturer.Close()
+		return nil, fmt.Errorf("creating monitor capturer: %w", err)
 	}
-	if monitorDevice != "" {
-		monCapturer, err := audio.NewCapturer(monitorDevice, audio.Monitor)
-		if err != nil {
-			cfg.MicCapturer.Close()
-			return nil, fmt.Errorf("creating monitor capturer: %w", err)
-		}
-		cfg.MonitorCapturer = audio.NewStreamCapturer(monCapturer, audio.DefaultWindowSize, 128)
+	if monCapturer != nil {
+		cfg.MonitorCapturer = monCapturer
 	}
 
 	// Reset speaker tracker
@@ -430,7 +429,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	// Create session
 	var sources []string
 	sources = append(sources, "mic")
-	if monitorDevice != "" {
+	if cfg.MonitorCapturer != nil {
 		sources = append(sources, "monitor")
 	}
 

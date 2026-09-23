@@ -57,6 +57,15 @@ static CFArrayRef list_windows(void) {
         kCGNullWindowID);
 }
 
+// cfarray_is_null does the NULL check in C rather than Go: cgo's
+// CFArrayRef doesn't support a direct `== nil` comparison on the Go
+// side (mismatched types), and converting through unsafe.Pointer just
+// to compare against nil is exactly the pattern `go vet`'s unsafeptr
+// check flags as a possible misuse. This sidesteps both.
+static int cfarray_is_null(CFArrayRef arr) {
+    return arr == NULL;
+}
+
 static CFIndex window_count(CFArrayRef windows) {
     return CFArrayGetCount(windows);
 }
@@ -100,7 +109,7 @@ type WindowID uint32
 // (menu-bar-ish artifacts).
 func FindMeetingWindow() (WindowID, error) {
 	windows := C.list_windows()
-	if unsafe.Pointer(windows) == nil {
+	if C.cfarray_is_null(windows) != 0 {
 		return 0, fmt.Errorf("teamsvideo: CGWindowListCopyWindowInfo returned nil")
 	}
 	defer C.release_windows(windows)

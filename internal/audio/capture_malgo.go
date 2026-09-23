@@ -9,8 +9,6 @@ import (
 	"github.com/gen2brain/malgo"
 )
 
-const captureSampleRate = 16000
-
 // malgoCapturer implements Capturer using miniaudio via malgo.
 type malgoCapturer struct {
 	ctx    *malgo.AllocatedContext
@@ -69,7 +67,7 @@ func newCapturer(device string, deviceType DeviceType) (Capturer, error) {
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = 1
-	deviceConfig.SampleRate = captureSampleRate
+	deviceConfig.SampleRate = CaptureSampleRate
 	deviceConfig.Alsa.NoMMap = 1 // PipeWire compatibility
 
 	// Use specific device if not "default" or empty

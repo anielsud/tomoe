@@ -47,16 +47,6 @@ jobs:
         run: make build
 
   build-and-test-macos:
-    # CLI dictation (cmd/tomoe) — the macOS surface this covers today.
-    # internal/teamsvideo (and its two importers, cmd/video-signal-test
-    # and cmd/guest-audio-test) are excluded from `go vet` here: they're
-    # darwin-only files that simply don't exist in the Linux job's
-    # `go vet ./...` walk, but on macOS they do, and teamsvideo has a
-    # pre-existing `go vet` advisory unrelated to this job (see
-    # docs/macos-support.md Status). Scoping to what this job actually
-    # covers matches this repo's own convention of not running
-    # build/vet unscoped across platforms (see CLAUDE.md Coding
-    # Conventions).
     runs-on: macos-14
     steps:
       - name: Checkout
@@ -73,7 +63,7 @@ jobs:
           node-version: "18"
 
       - name: Vet
-        run: go vet $(go list ./... | grep -v -e /internal/teamsvideo -e /cmd/video-signal-test -e /cmd/guest-audio-test)
+        run: go vet ./...
 
       - name: Test
         run: make test

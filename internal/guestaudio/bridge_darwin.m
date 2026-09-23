@@ -21,15 +21,28 @@
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "bridge.h"
 #include "_cgo_export.h"
 
-@interface GuestAudioOutput : NSObject <SCStreamOutput>
+@interface GuestAudioOutput : NSObject <SCStreamOutput, SCStreamDelegate>
 @property(nonatomic, assign) uintptr_t goHandle;
 @end
 
 @implementation GuestAudioOutput
+// SCStreamDelegate: passing delegate:nil to -initWithFilter:configuration:
+// delegate: is suspected of being the actual crash cause (SCStream's
+// implementation is partly Swift under the hood, and Swift-bridged
+// protocol properties can force-unwrap internally) -- this class now
+// conforms to SCStreamDelegate too, and is passed as both output and
+// delegate in guestaudio_start_tap below, instead of nil.
+- (void)stream:(SCStream *)stream didStopWithError:(NSError *)error {
+  // No-op: the process exits with Go still owning the Tap's lifecycle;
+  // there's nothing to clean up here that guestaudio_stop_tap doesn't
+  // already handle. Only existing so delegate is never nil.
+}
+
 - (void)stream:(SCStream *)stream
     didOutputSampleBuffer:(CMSampleBufferRef)sampleBuffer
                     ofType:(SCStreamOutputType)type {
@@ -71,10 +84,41 @@
 }
 @end
 
+// [NSApplication sharedApplication] must run on the real main thread --
+// AppKit's documented requirement. Some callers (cmd/tomoe's daemon,
+// which calls guestaudio_start_tap from a goroutine spawned off
+// systray's onReady -- see internal/daemon/run_darwin.go) are on a
+// background thread and need to hop to main via dispatch_sync; others
+// (e.g. a plain main()-thread caller, like cmd/guest-audio-test) are
+// *already* the main thread, and dispatch_sync-ing to the queue you're
+// already running on is a same-thread self-deadlock -- libdispatch
+// detects exactly this and deliberately traps (confirmed via lldb: the
+// crash chasing this down turned out to be `guestaudio_start_tap` ->
+// dispatch_once_callout -> dispatch_sync_f_slow ->
+// DISPATCH_WAIT_FOR_QUEUE`, not a memory bug). So: check first, and
+// only hop when we're not already there.
 static void guestaudio_ensure_app_context(void) {
   static dispatch_once_t once;
   dispatch_once(&once, ^{
-    [NSApplication sharedApplication];
+    if ([NSThread isMainThread]) {
+      [NSApplication sharedApplication];
+    } else {
+      dispatch_sync(dispatch_get_main_queue(), ^{
+        [NSApplication sharedApplication];
+      });
+    }
+    // [NSApplication sharedApplication] kicks off this process's first
+    // window-server/XPC connection but doesn't block until it's ready --
+    // confirmed via lldb: the very next thing this function's caller
+    // does (SCShareableContent lookup) crashes at full speed but
+    // succeeds every time under a debugger, which only ever slows
+    // execution down. That's the signature of losing a race against an
+    // async handshake, not a memory bug. Apple exposes no synchronous
+    // "wait until ready" hook for this, so a short one-time settle
+    // delay -- paid only once per process, on the very first tap start
+    // -- is the pragmatic fix. Matches the "known reliability gap"
+    // already noted in docs/macos-support.md, root-caused here.
+    usleep(150000); // 150ms
   });
 }
 
@@ -107,10 +151,10 @@ void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_er
   config.capturesAudio = YES;
   config.excludesCurrentProcessAudio = YES;
 
-  SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:nil];
-
   GuestAudioOutput *output = [[GuestAudioOutput alloc] init];
   output.goHandle = go_handle;
+
+  SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:output];
 
   NSError *addErr = nil;
   BOOL ok = [stream addStreamOutput:output

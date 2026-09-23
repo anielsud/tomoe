@@ -291,3 +291,60 @@ func TestProcessPipeline(t *testing.T) {
 		_ = hasNonZeroSmall
 	})
 }
+
+func TestResample(t *testing.T) {
+	t.Run("same rate returns input unchanged", func(t *testing.T) {
+		samples := []float32{1, 2, 3, 4}
+		result := Resample(samples, 16000, 16000)
+		if len(result) != len(samples) {
+			t.Fatalf("len = %d, want %d", len(result), len(samples))
+		}
+		for i := range samples {
+			if result[i] != samples[i] {
+				t.Errorf("result[%d] = %v, want %v", i, result[i], samples[i])
+			}
+		}
+	})
+
+	t.Run("48kHz to 16kHz downsamples to a third the length", func(t *testing.T) {
+		samples := make([]float32, 480)
+		for i := range samples {
+			samples[i] = float32(i)
+		}
+		result := Resample(samples, 48000, 16000)
+		wantLen := 160
+		if len(result) != wantLen {
+			t.Fatalf("len = %d, want %d", len(result), wantLen)
+		}
+		// Every 3rd input sample, roughly: result[1] should be near samples[3].
+		if math.Abs(float64(result[1])-3) > 0.01 {
+			t.Errorf("result[1] = %v, want ~3", result[1])
+		}
+	})
+
+	t.Run("upsampling increases length", func(t *testing.T) {
+		samples := []float32{0, 1, 2, 3}
+		result := Resample(samples, 16000, 48000)
+		wantLen := 12
+		if len(result) != wantLen {
+			t.Fatalf("len = %d, want %d", len(result), wantLen)
+		}
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		result := Resample(nil, 48000, 16000)
+		if result != nil {
+			t.Errorf("result = %v, want nil", result)
+		}
+	})
+
+	t.Run("non-positive rates return input unchanged", func(t *testing.T) {
+		samples := []float32{1, 2, 3}
+		if got := Resample(samples, 0, 16000); len(got) != len(samples) {
+			t.Errorf("srcRateHz=0: len = %d, want %d", len(got), len(samples))
+		}
+		if got := Resample(samples, 48000, 0); len(got) != len(samples) {
+			t.Errorf("dstRateHz=0: len = %d, want %d", len(got), len(samples))
+		}
+	})
+}
