@@ -302,20 +302,32 @@ on darwin now, no scoping needed.
    "System Audio: Auto-detect" label on macOS instead of a picker with
    nothing to pick.
 
+**Live clustering, tightened for two sources: done** — though not for
+the reason this section originally guessed. `internal/live/pipeline.go`'s
+`assignSpeaker` turned out to route mic audio straight to `"You"`,
+bypassing `internal/speaker`'s embedder/tracker entirely — only the
+monitor/guest-audio source ever reaches clustering, on *both*
+platforms, so mic vs. guest audio being separately-captured streams was
+never actually a clustering risk to begin with. The real, concrete bug:
+`internal/guestaudio/capturer_darwin.go`'s ScreenCaptureKit→16kHz
+resample (added wiring up meeting-mode audio) used plain linear
+interpolation with **no anti-aliasing filter** — for an exact 3:1
+downsample, that folds frequency content above the new Nyquist limit
+back into the audible band as noise, degrading exactly the input
+`internal/speaker`'s embedding model relies on to tell voices apart.
+Linux's PulseAudio monitor never resamples at all, so this was a
+real, macOS-only quality gap. Fixed with a new `audio.LowPassFilter`
+(cascaded a few passes for a properly steep anti-aliasing cutoff, since
+one pole alone only rolls off -6dB/octave) applied in `Resample` before
+decimating. Verified: a unit test demonstrating a 20kHz tone (above
+16kHz's 8kHz Nyquist) comes through heavily attenuated rather than
+aliased-and-preserved, plus a live re-run of the dual-source meeting
+flow against a real Teams window confirming no regression.
+
 **Not yet built** — the actual point of the original architecture doc
 (video hint → speaker cluster labeling) and everything after it:
 
-1. **Live clustering/diarization, tightened for two sources.**
-   `internal/speaker`'s embedding+clustering already runs live today
-   (per-segment, as audio arrives, on both platforms) — this isn't
-   building live clustering from scratch. The macOS-specific work is
-   making sure clustering behaves well when mic and guest audio are two
-   *separate* streams captured differently (a ScreenCaptureKit window
-   tap vs. a PulseAudio monitor source can have different noise floors,
-   gain staging, and dropout patterns), which could bias which
-   embeddings get clustered together in ways Linux's single
-   monitor-source input never has to handle.
-2. **Screen-based speaker-label hints via rules, with an escalation
+1. **Screen-based speaker-label hints via rules, with an escalation
    path for unrecognized UIs.** Generalizes today's
    Teams-window-shaped `internal/teamsvideo` heuristic (owner name +
    title matching; ring-color/shape detection and Vision.framework OCR
@@ -329,7 +341,7 @@ on darwin now, no scoping needed.
    "Person N" labeling — exactly like a hint-less cluster already
    falls back today. That log is how the rule table grows over time
    without silently mislabeling someone in the meantime.
-3. **Persistent voiceprints.** A speaker cluster's embedding centroid
+2. **Persistent voiceprints.** A speaker cluster's embedding centroid
    *is* a voiceprint (noted in this doc's original architecture
    section) — this item is giving it a durable identity: once a video
    hint resolves a cluster to a real name, store that centroid keyed by
@@ -341,20 +353,20 @@ on darwin now, no scoping needed.
    against stored voiceprints — reusing `speaker.DefaultThreshold`'s
    general shape, but this is cross-session matching, not within-session
    clustering, so it may warrant its own threshold.
-4. **Persistent face signatures.** The video-side counterpart to #3:
+3. **Persistent face signatures.** The video-side counterpart to #2:
    store a face embedding (or at minimum a representative thumbnail)
    keyed by the same resolved name, from the same video-hint moment
    that already reads a name label. This is what lets a familiar face
    get identified even in the window before OCR reads *this* session's
    name label — e.g. a participant whose tile briefly shows no label,
    or joins with camera on but hasn't been named by Teams' UI yet.
-   Depends on #2 existing first (need a real face crop from the video
+   Depends on #1 existing first (need a real face crop from the video
    hint pipeline to embed).
-5. **Replay-based test harness.** The ability to feed a *recorded*
-   meeting (audio, and once #2-#4 exist, screen capture too) through
+4. **Replay-based test harness.** The ability to feed a *recorded*
+   meeting (audio, and once #1-#3 exist, screen capture too) through
    the whole pipeline offline — capture once against a real or staged
    call, then replay it repeatedly against pipeline changes without
-   needing a live call every time. This is what makes #1-#4
+   needing a live call every time. This is what makes #1-#3
    regression-testable at all; right now the only way to validate any
    of this is a live call, which is exactly why this session's guestaudio
    bugs took real debugging effort to catch (see above) rather than

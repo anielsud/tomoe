@@ -126,6 +126,75 @@ func TestHighPassFilter(t *testing.T) {
 	})
 }
 
+func TestLowPassFilter(t *testing.T) {
+	const sampleRate = 16000
+
+	t.Run("attenuates high frequency", func(t *testing.T) {
+		// Generate 4000Hz sine wave (well above 1000Hz cutoff)
+		n := sampleRate
+		samples := make([]float32, n)
+		for i := range samples {
+			samples[i] = float32(math.Sin(2 * math.Pi * 4000 * float64(i) / float64(sampleRate)))
+		}
+
+		result := LowPassFilter(samples, sampleRate, 1000)
+
+		var inputRMS, outputRMS float64
+		half := n / 2
+		for i := half; i < n; i++ {
+			inputRMS += float64(samples[i]) * float64(samples[i])
+			outputRMS += float64(result[i]) * float64(result[i])
+		}
+		inputRMS = math.Sqrt(inputRMS / float64(n-half))
+		outputRMS = math.Sqrt(outputRMS / float64(n-half))
+
+		ratio := outputRMS / inputRMS
+		if ratio > 0.5 {
+			t.Errorf("4000Hz attenuation ratio = %f, want < 0.5", ratio)
+		}
+	})
+
+	t.Run("passes low frequency", func(t *testing.T) {
+		// Generate 100Hz sine wave (well below 1000Hz cutoff)
+		n := sampleRate
+		samples := make([]float32, n)
+		for i := range samples {
+			samples[i] = float32(math.Sin(2 * math.Pi * 100 * float64(i) / float64(sampleRate)))
+		}
+
+		result := LowPassFilter(samples, sampleRate, 1000)
+
+		var inputRMS, outputRMS float64
+		half := n / 2
+		for i := half; i < n; i++ {
+			inputRMS += float64(samples[i]) * float64(samples[i])
+			outputRMS += float64(result[i]) * float64(result[i])
+		}
+		inputRMS = math.Sqrt(inputRMS / float64(n-half))
+		outputRMS = math.Sqrt(outputRMS / float64(n-half))
+
+		ratio := outputRMS / inputRMS
+		if ratio < 0.9 {
+			t.Errorf("100Hz pass-through ratio = %f, want > 0.9", ratio)
+		}
+	})
+
+	t.Run("empty input", func(t *testing.T) {
+		result := LowPassFilter(nil, sampleRate, 1000)
+		if result != nil {
+			t.Errorf("expected nil for nil input")
+		}
+	})
+
+	t.Run("invalid params", func(t *testing.T) {
+		samples := []float32{1, 2, 3}
+		result := LowPassFilter(samples, 0, 1000)
+		if len(result) != len(samples) {
+			t.Errorf("expected passthrough for invalid sampleRate")
+		}
+	})
+}
+
 func TestNormalize(t *testing.T) {
 	t.Run("scales to peak 1.0", func(t *testing.T) {
 		samples := []float32{0.2, -0.5, 0.3}
@@ -307,18 +376,86 @@ func TestResample(t *testing.T) {
 	})
 
 	t.Run("48kHz to 16kHz downsamples to a third the length", func(t *testing.T) {
-		samples := make([]float32, 480)
+		samples := make([]float32, 4800)
 		for i := range samples {
 			samples[i] = float32(i)
 		}
 		result := Resample(samples, 48000, 16000)
-		wantLen := 160
+		wantLen := 1600
 		if len(result) != wantLen {
 			t.Fatalf("len = %d, want %d", len(result), wantLen)
 		}
-		// Every 3rd input sample, roughly: result[1] should be near samples[3].
-		if math.Abs(float64(result[1])-3) > 0.01 {
-			t.Errorf("result[1] = %v, want ~3", result[1])
+		// A ramp is pure DC + low-frequency trend, which the anti-alias
+		// low-pass filter should pass through, not attenuate -- so once
+		// the filter's transient has settled (well past the start), the
+		// resampled slope should still track the expected ~3 units per
+		// output sample (3x decimation of a unit-slope ramp).
+		lo, hi := len(result)/2, len(result)-1
+		gotSlope := (result[hi] - result[lo]) / float32(hi-lo)
+		if math.Abs(float64(gotSlope)-3) > 0.05 {
+			t.Errorf("settled slope = %v, want ~3", gotSlope)
+		}
+	})
+
+	t.Run("anti-aliases content above the target Nyquist", func(t *testing.T) {
+		// A pure tone well above 16kHz's Nyquist (8kHz) should be
+		// suppressed by the anti-alias filter before decimation, not
+		// aliased down into the audible band at full strength -- this
+		// is the actual bug this filter fixes (see LowPassFilter and
+		// Resample's doc comments): ScreenCaptureKit's guest-audio tap
+		// delivers 48kHz, and without this, folded-back high-frequency
+		// energy would degrade internal/speaker's embedding quality.
+		const srcRate = 48000
+		const dstRate = 16000
+		const toneHz = 20000 // well above dstRate's 8kHz Nyquist
+		n := srcRate         // 1 second
+		samples := make([]float32, n)
+		for i := range samples {
+			samples[i] = float32(math.Sin(2 * math.Pi * toneHz * float64(i) / float64(srcRate)))
+		}
+
+		result := Resample(samples, srcRate, dstRate)
+
+		// Measure RMS of the second half (after the filter settles).
+		half := len(result) / 2
+		var outRMS float64
+		for i := half; i < len(result); i++ {
+			outRMS += float64(result[i]) * float64(result[i])
+		}
+		outRMS = math.Sqrt(outRMS / float64(len(result)-half))
+
+		// Input RMS for a unit-amplitude sine is ~0.707; a properly
+		// anti-aliased 20kHz tone should come through heavily
+		// attenuated, not preserved near full strength.
+		if outRMS > 0.2 {
+			t.Errorf("20kHz tone RMS after resample = %v, want < 0.2 (anti-aliased)", outRMS)
+		}
+	})
+
+	t.Run("passes low frequency content through resampling", func(t *testing.T) {
+		// Sanity check: the anti-alias filter shouldn't gut legitimate
+		// low-frequency audio content along with the high-frequency
+		// content it's meant to suppress.
+		const srcRate = 48000
+		const dstRate = 16000
+		const toneHz = 440 // well below dstRate's 8kHz Nyquist
+		n := srcRate
+		samples := make([]float32, n)
+		for i := range samples {
+			samples[i] = float32(math.Sin(2 * math.Pi * toneHz * float64(i) / float64(srcRate)))
+		}
+
+		result := Resample(samples, srcRate, dstRate)
+
+		half := len(result) / 2
+		var outRMS float64
+		for i := half; i < len(result); i++ {
+			outRMS += float64(result[i]) * float64(result[i])
+		}
+		outRMS = math.Sqrt(outRMS / float64(len(result)-half))
+
+		if outRMS < 0.5 {
+			t.Errorf("440Hz tone RMS after resample = %v, want > 0.5 (should pass through)", outRMS)
 		}
 	})
 

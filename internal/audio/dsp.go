@@ -72,6 +72,30 @@ func Normalize(samples []float32) []float32 {
 	return out
 }
 
+// LowPassFilter applies a single-pole IIR low-pass filter, complementing
+// HighPassFilter above. A single pass only rolls off gently
+// (-6dB/octave) — Resample below cascades several passes to get a
+// steeper effective cutoff, since it needs this as an anti-aliasing
+// filter before decimating, not just gentle tone shaping.
+func LowPassFilter(samples []float32, sampleRate int, cutoffHz float32) []float32 {
+	if len(samples) == 0 || sampleRate <= 0 || cutoffHz <= 0 {
+		return samples
+	}
+
+	// Single-pole IIR: y[n] = y[n-1] + alpha * (x[n] - y[n-1])
+	// alpha = dt / (RC + dt), where RC = 1/(2*pi*cutoff), dt = 1/sampleRate
+	rc := 1.0 / (2.0 * math.Pi * float64(cutoffHz))
+	dt := 1.0 / float64(sampleRate)
+	alpha := float32(dt / (rc + dt))
+
+	out := make([]float32, len(samples))
+	out[0] = samples[0]
+	for i := 1; i < len(samples); i++ {
+		out[i] = out[i-1] + alpha*(samples[i]-out[i-1])
+	}
+	return out
+}
+
 // NoiseGate zeroes out samples below the given threshold in decibels.
 // A typical value is -40 dB. Helps VAD accuracy in noisy environments.
 func NoiseGate(samples []float32, thresholdDB float32) []float32 {
@@ -96,16 +120,42 @@ func NoiseGate(samples []float32, thresholdDB float32) []float32 {
 	return out
 }
 
+// antiAliasPasses is how many cascaded LowPassFilter passes Resample
+// applies before decimating. One pole only rolls off -6dB/octave, too
+// gentle to be a real anti-aliasing filter on its own; cascading a few
+// gets a steeper effective cutoff without a more complex filter design.
+const antiAliasPasses = 4
+
 // Resample converts samples captured at srcRateHz to dstRateHz using
-// linear interpolation. Used by sources that don't natively capture at
+// linear interpolation, anti-aliased with LowPassFilter when
+// downsampling. Used by sources that don't natively capture at
 // CaptureSampleRate (e.g. guestaudio's ScreenCaptureKit tap, delivering
-// 48kHz) — every downstream consumer (VAD, Parakeet TDT) assumes its
-// input already matches CaptureSampleRate, since nothing else in this
-// pipeline resamples. Returns samples unchanged if the rates already
-// match or either rate is non-positive.
+// 48kHz) — every downstream consumer (VAD, Parakeet TDT, and critically
+// internal/speaker's embedding model) assumes its input already matches
+// CaptureSampleRate, since nothing else in this pipeline resamples.
+//
+// The anti-alias step matters beyond general audio quality: without it,
+// frequency content above the new Nyquist limit folds back into the
+// audible range as aliasing noise on decimation, which measurably hurts
+// speaker-embedding quality — the reason this exists at all is that
+// Linux's PulseAudio monitor path captures natively at 16kHz and never
+// resamples, so without this, only macOS's speaker clustering would be
+// working from degraded input.
+//
+// Returns samples unchanged if the rates already match or either rate
+// is non-positive.
 func Resample(samples []float32, srcRateHz, dstRateHz int) []float32 {
 	if len(samples) == 0 || srcRateHz <= 0 || dstRateHz <= 0 || srcRateHz == dstRateHz {
 		return samples
+	}
+
+	if srcRateHz > dstRateHz {
+		// Cutoff below the target Nyquist (dstRateHz/2), leaving margin
+		// since a single-pole filter's rolloff isn't a brick wall.
+		cutoff := float32(dstRateHz) * 0.45
+		for i := 0; i < antiAliasPasses; i++ {
+			samples = LowPassFilter(samples, srcRateHz, cutoff)
+		}
 	}
 
 	ratio := float64(srcRateHz) / float64(dstRateHz)
