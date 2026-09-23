@@ -256,7 +256,7 @@ make release          # Cross-compile release binaries (CI use)
 ## Future Roadmap (Post Phase 2)
 
 - **AssemblyAI API fallback:** Add AssemblyAI Universal-2 as a cloud transcription backend for users without a capable GPU. Configurable via `transcription_backend: local | assemblyai` in config. AssemblyAI offers ~6.68% WER with real-time streaming via WebSocket at ~300ms latency and $0.15/hour pricing. Requires API key in config.
-- **macOS support:** ONNX Runtime CoreML EP for Apple Silicon, CoreAudio capture, native key bindings
+- **macOS support (in progress):** see [`macos-support.md`](macos-support.md) — not a straight CoreAudio/CoreML port; adds a video-based active-speaker signal (Teams' on-screen speaking indicator) that labels `internal/speaker`'s existing audio clusters with real names, since Linux's PulseAudio-based meeting detection has no macOS equivalent to build the same clustering-only approach on
 - **Windows support:** DirectSound/WASAPI capture, Win32 hotkey API, ONNX Runtime CUDA/DirectML EP
 - **Multilingual support:** Swap to Parakeet TDT 0.6B v3 (25 European languages with auto language detection, same architecture, same sherpa-onnx integration)
 - **MCP server mode:** expose transcription as a tool via Model Context Protocol for integration with AI agents

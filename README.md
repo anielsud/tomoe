@@ -142,6 +142,7 @@ tomoe-pc/
 │   ├── config/             # TOML config
 │   ├── daemon/             # CLI daemon orchestration
 │   ├── gpu/                # GPU detection
+│   ├── guestaudio/         # [macOS, in progress] ScreenCaptureKit window-audio tap
 │   ├── hotkey/             # Global hotkey (X11 key grabs)
 │   ├── langid/             # Spoken language identification (Whisper tiny, optional)
 │   ├── live/               # Live transcription coordinator + per-source pipelines
@@ -152,6 +153,7 @@ tomoe-pc/
 │   ├── session/            # Session storage, export, audio recording
 │   ├── sigfix/             # ONNX Runtime signal handler fix
 │   ├── speaker/            # Speaker embedding + clustering
+│   ├── teamsvideo/         # [macOS, in progress] Teams window capture + active-speaker ring
 │   └── transcribe/         # sherpa-onnx / Parakeet TDT integration
 ├── frontend/               # React + TypeScript + Vite
 └── Makefile
@@ -203,7 +205,14 @@ Transcript `session.json` files are kept locally forever. See
 
 ## Roadmap
 
-- **Cross-platform support** — extend beyond Linux to Windows and macOS (audio capture, hotkeys, tray, and meeting detection abstractions)
+- **macOS support (in progress)** — not a straight port: adds a video-based
+  active-speaker signal (Teams' on-screen speaking indicator, OCR'd) that
+  Linux has no equivalent of, used to label `internal/speaker`'s existing
+  clusters with real names instead of "Person N". Window capture and a
+  ScreenCaptureKit audio tap are built and individually validated against a
+  live call; not yet integrated into `cmd/tomoe`. See
+  [`docs/macos-support.md`](docs/macos-support.md).
+- **Windows support** — not started.
 - **Post-meeting delivery hooks** — on meeting completion, push the transcript (and optionally the recording) to an external destination: pipe into a user-defined CLI command, POST to a configurable web endpoint, or both
 
 ## License
