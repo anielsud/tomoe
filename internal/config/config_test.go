@@ -239,6 +239,24 @@ func TestSessionDir(t *testing.T) {
 	}
 }
 
+func TestUnrecognizedUIPendingDir(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/custom/data")
+	got := UnrecognizedUIPendingDir()
+	want := "/custom/data/tomoe/unrecognized-uis-pending"
+	if got != want {
+		t.Errorf("UnrecognizedUIPendingDir() = %q, want %q", got, want)
+	}
+}
+
+func TestUnrecognizedUIApprovedDir(t *testing.T) {
+	t.Setenv("XDG_DATA_HOME", "/custom/data")
+	got := UnrecognizedUIApprovedDir()
+	want := "/custom/data/tomoe/unrecognized-uis-approved"
+	if got != want {
+		t.Errorf("UnrecognizedUIApprovedDir() = %q, want %q", got, want)
+	}
+}
+
 func TestSilenceTimeoutRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.toml")

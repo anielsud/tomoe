@@ -23,6 +23,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
 
 // Daemon orchestrates the hotkey → capture → transcribe → clipboard pipeline,
@@ -367,9 +368,10 @@ func (d *Daemon) stopDictation(ds *streamingDictation) {
 // --- Meeting Recording ---
 
 type meetingState struct {
-	coordinator *live.Coordinator
-	session     *session.Session
-	done        chan struct{}
+	coordinator     *live.Coordinator
+	session         *session.Session
+	done            chan struct{}
+	videoHintCancel context.CancelFunc
 }
 
 func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, lang string) (*meetingState, error) {
@@ -463,14 +465,24 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		}
 	}()
 
+	// Screen-based speaker-label hints (macOS only; no-op on Linux —
+	// see internal/videohint). Its own context, not the daemon-lifetime
+	// ctx passed in above, since it must stop when this meeting does,
+	// not when the daemon exits — same reasoning as streamingDictation's
+	// cancel field elsewhere in this file.
+	videoHintCtx, videoHintCancel := context.WithCancel(ctx)
+	go videohint.Poll(videoHintCtx, 10*time.Second)
+
 	return &meetingState{
-		coordinator: coordinator,
-		session:     sess,
-		done:        done,
+		coordinator:     coordinator,
+		session:         sess,
+		done:            done,
+		videoHintCancel: videoHintCancel,
 	}, nil
 }
 
 func (d *Daemon) stopMeeting(ms *meetingState) {
+	ms.videoHintCancel()
 	ms.coordinator.Stop()
 	<-ms.done
 
