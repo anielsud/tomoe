@@ -23,6 +23,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/sigfix"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
 
 // App is the Wails backend, bound to the frontend via bindings.
@@ -44,6 +45,7 @@ type App struct {
 	dictCoordinator *live.Coordinator
 	dictCancel      context.CancelFunc
 	currentSess     *session.Session
+	videoHintCancel context.CancelFunc
 
 	// trayDictCh is signalled by the tray "Start/Stop Dictation" menu item.
 	// Carries language code; "" = stop.
@@ -342,6 +344,14 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	a.coordinator = coordinator
 	a.recording = true
 
+	// Screen-based speaker-label hints (macOS only; no-op on Linux —
+	// see internal/videohint). Its own context, not the app-lifetime
+	// a.ctx, since it must stop when this session does — same
+	// reasoning as dictCancel above.
+	videoHintCtx, videoHintCancel := context.WithCancel(a.ctx)
+	a.videoHintCancel = videoHintCancel
+	go videohint.Poll(videoHintCtx, 10*time.Second)
+
 	// Start emitting segments to frontend
 	go a.emitSegments()
 
@@ -363,10 +373,16 @@ func (a *App) StopSession() (*session.Session, error) {
 
 	coordinator := a.coordinator
 	sess := a.currentSess
+	videoHintCancel := a.videoHintCancel
 	a.recording = false
 	a.currentSess = nil
 	a.coordinator = nil
+	a.videoHintCancel = nil
 	a.mu.Unlock()
+
+	if videoHintCancel != nil {
+		videoHintCancel()
+	}
 
 	// Stop coordinator (waits for pipeline flush — typically < 1s)
 	coordinator.Stop()

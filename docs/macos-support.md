@@ -328,19 +328,49 @@ flow against a real Teams window confirming no regression.
 (video hint → speaker cluster labeling) and everything after it:
 
 1. **Screen-based speaker-label hints via rules, with an escalation
-   path for unrecognized UIs.** Generalizes today's
-   Teams-window-shaped `internal/teamsvideo` heuristic (owner name +
-   title matching; ring-color/shape detection and Vision.framework OCR
-   for the name label are both still unbuilt) into a rule table keyed
-   by meeting app (Teams, Zoom, Meet, Webex, Slack — the same set
-   `internal/meeting/platform.go` already recognizes by window title on
-   the detection side) instead of one hardcoded Teams-only path. The
-   escalation path matters as much as the rules themselves: when a
-   window doesn't match any known app's rules, log it (app name,
-   window title shape) instead of guessing, and keep clustering-only
-   "Person N" labeling — exactly like a hint-less cluster already
-   falls back today. That log is how the rule table grows over time
-   without silently mislabeling someone in the meantime.
+   path for unrecognized UIs.** Split into three PRs; this is PR A of
+   three, **done**:
+   - New `internal/videohint` package: a `Rule`/`RingConfig` table
+     keyed by `meeting.Platform`, and a real, unit-tested
+     connected-components ring-detection algorithm
+     (`DetectRing` — color-threshold → flood-fill labeling → hollow
+     rectangular-border check → size-fraction filtering). The rule
+     table starts **intentionally empty** — verifying real ring
+     color/shape thresholds needs either live access to an active
+     multi-participant call in each app, or reviewed examples from the
+     escalation library below, neither of which existed going in. Every
+     platform, Teams included, escalates today rather than risk
+     confidently mislabeling a real meeting from an unverified rule.
+   - An escalation path wired into meeting mode's start/stop
+     (`internal/daemon`, `internal/backend` — a `videohint.Poll` goroutine
+     scoped to the session, cancelled on stop, no-op on Linux) that
+     captures a frame + metadata whenever it doesn't have a confident
+     hint to offer.
+   - **A real privacy bug found live while testing this, before it
+     shipped:** the escalation target was originally meant to be a
+     permanent library, but `internal/teamsvideo.FindMeetingWindow`'s
+     existing heuristic (owner name contains "teams" + a non-trivial,
+     non-"Chat |" title) matches more than actual call windows — it
+     matched a plain 1:1 chat tab during testing and captured a real
+     private conversation. Fixed by never treating a capture as safe:
+     escalation now lands in a **staging** area
+     (`config.UnrecognizedUIPendingDir`), and nothing reaches the
+     permanent library (`config.UnrecognizedUIApprovedDir`) without a
+     human explicitly approving it — new `tomoe videohint {list,approve,discard}`
+     CLI commands. This is the actual reason the rule table has to stay
+     manually curated rather than auto-populating from captures: the
+     matched window can be the wrong thing entirely.
+   - Verified live: a real Teams-window capture went through the full
+     staging → `videohint list` → `videohint discard` path with nothing
+     ever touching the permanent library; confirmed no regression in
+     the existing dual-source audio/transcription flow.
+   - **Not done yet (PR B, PR C):** Vision.framework OCR for the name
+     label itself (a ring alone has no name to attach), and wiring a
+     successful ring+OCR result into actually relabeling an
+     `internal/speaker.Tracker` cluster during a live session — plus
+     window-finding for Zoom/Meet/Webex/Slack, none of which
+     `internal/videohint` can capture anything for yet (Teams-only,
+     reusing `FindMeetingWindow` as-is).
 2. **Persistent voiceprints.** A speaker cluster's embedding centroid
    *is* a voiceprint (noted in this doc's original architecture
    section) — this item is giving it a durable identity: once a video

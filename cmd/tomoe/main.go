@@ -18,6 +18,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
 
 func main() {
@@ -48,6 +49,7 @@ func init() {
 	rootCmd.AddCommand(devicesCmd)
 	rootCmd.AddCommand(stopCmd)
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(videohintCmd)
 }
 
 // startCmd is an alias for the root command.
@@ -643,6 +645,69 @@ var configCmd = &cobra.Command{
 		}
 
 		fmt.Print(string(data))
+		return nil
+	},
+}
+
+var videohintCmd = &cobra.Command{
+	Use:   "videohint",
+	Short: "Review meeting-window screenshots escalated for manual labeling-rule review (macOS)",
+	Long: "During macOS meeting mode, internal/videohint captures a screenshot whenever it sees a\n" +
+		"window it doesn't have a labeling rule for yet, staging it for review rather than using\n" +
+		"it automatically -- the matched window can be the wrong thing entirely (e.g. a chat tab,\n" +
+		"not an actual call). Nothing here is treated as safe to keep or use for calibration until\n" +
+		"you explicitly approve it.",
+}
+
+func init() {
+	videohintCmd.AddCommand(videohintListCmd)
+	videohintCmd.AddCommand(videohintApproveCmd)
+	videohintCmd.AddCommand(videohintDiscardCmd)
+}
+
+var videohintListCmd = &cobra.Command{
+	Use:   "list",
+	Short: "List pending snapshots awaiting review",
+	RunE: func(cmd *cobra.Command, args []string) error {
+		pending, err := videohint.ListPendingUnrecognizedUIs()
+		if err != nil {
+			return err
+		}
+		if len(pending) == 0 {
+			fmt.Println("No pending snapshots.")
+			return nil
+		}
+		for _, p := range pending {
+			fmt.Printf("%s  %-8s %dx%d  %s  %s\n",
+				p.Meta.Timestamp.Format("2006-01-02 15:04:05"), p.Meta.Platform,
+				p.Meta.Width, p.Meta.Height, p.ID, p.Meta.Reason)
+		}
+		return nil
+	},
+}
+
+var videohintApproveCmd = &cobra.Command{
+	Use:   "approve <id>",
+	Short: "Move a pending snapshot into the permanent unrecognized-UI library for future rule-writing",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := videohint.ApproveUnrecognizedUI(args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Approved %s\n", args[0])
+		return nil
+	},
+}
+
+var videohintDiscardCmd = &cobra.Command{
+	Use:   "discard <id>",
+	Short: "Permanently delete a pending snapshot without approving it",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		if err := videohint.DiscardUnrecognizedUI(args[0]); err != nil {
+			return err
+		}
+		fmt.Printf("Discarded %s\n", args[0])
 		return nil
 	},
 }

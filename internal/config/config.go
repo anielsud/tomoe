@@ -136,6 +136,27 @@ func SessionDir() string {
 	return filepath.Join(DataDir(), "sessions")
 }
 
+// UnrecognizedUIPendingDir returns the staging directory
+// (~/.local/share/tomoe/unrecognized-uis-pending/) internal/videohint
+// writes escalation snapshots to — a captured frame + metadata per
+// meeting-app UI its rule table doesn't recognize yet. This is
+// deliberately NOT the permanent library: a captured window can be the
+// wrong thing entirely (e.g. a chat tab, not an actual call), so
+// nothing here is treated as safe to keep or use for calibration until
+// a human reviews and approves it — see UnrecognizedUIApprovedDir and
+// `tomoe videohint`.
+func UnrecognizedUIPendingDir() string {
+	return filepath.Join(DataDir(), "unrecognized-uis-pending")
+}
+
+// UnrecognizedUIApprovedDir returns the permanent escalation snapshot
+// library (~/.local/share/tomoe/unrecognized-uis-approved/) — where a
+// snapshot lands only once explicitly approved via `tomoe videohint
+// approve`, at which point it's fair game for writing a real rule from.
+func UnrecognizedUIApprovedDir() string {
+	return filepath.Join(DataDir(), "unrecognized-uis-approved")
+}
+
 // DataDir returns the base data directory (~/.local/share/tomoe/).
 func DataDir() string {
 	dir := os.Getenv("XDG_DATA_HOME")
