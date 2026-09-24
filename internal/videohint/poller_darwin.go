@@ -23,11 +23,13 @@ const (
 // matches as Teams (the only window-finder wired up so far —
 // Zoom/Meet/Webex/Slack each need their own before this can capture
 // anything for them; see docs/macos-support.md), captures a frame, and
-// either produces a naming hint or escalates it to the pending
+// either produces a naming hint (logged for now — actually relabeling
+// an internal/speaker.Tracker cluster from a hint is separate,
+// not-yet-built follow-on work) or escalates it to the pending
 // snapshot staging area (CaptureUnrecognizedUI /
-// config.UnrecognizedUIPendingDir). Every platform's rule table entry
-// is empty today (see rule.go), and there's no OCR until a later PR,
-// so this always escalates in practice right now — that's expected,
+// config.UnrecognizedUIPendingDir). Only PlatformTeams has a
+// calibrated rule today (see rule.go); every other platform's rule
+// table entry is still empty, so those always escalate — expected,
 // not a bug.
 //
 // Escalated snapshots are NOT the permanent library: FindMeetingWindow
@@ -47,6 +49,7 @@ func Poll(ctx context.Context, interval time.Duration) {
 	defer ticker.Stop()
 
 	var lastCapture time.Time
+	var lastHint string
 	captured := 0
 
 	for {
@@ -67,10 +70,20 @@ func Poll(ctx context.Context, interval time.Duration) {
 			platform := meeting.PlatformTeams // only window-finder wired up so far
 			reason := "no rule configured for this platform"
 			if rule, ok := ruleFor(platform); ok {
-				if _, found := DetectRing(frame.Pix, frame.Width, frame.Height, rule.Ring); found {
-					// A ring alone has no name to attach yet -- OCR is
-					// a later PR. Fall through to escalation for now.
-					reason = "ring found but no OCR yet"
+				if ring, found := DetectRing(frame.Pix, frame.Width, frame.Height, rule.Ring); found {
+					if rule.Label.configured() {
+						name, ocrErr := RecognizeLabel(frame.Pix, frame.Width, frame.Height, *ring, rule.Label)
+						if ocrErr == nil && name != "" {
+							if name != lastHint {
+								fmt.Printf("videohint: naming hint for %s: %q\n", platform, name)
+								lastHint = name
+							}
+							continue // got a usable hint -- nothing to escalate this tick
+						}
+						reason = "ring found but OCR produced no text"
+					} else {
+						reason = "ring found but no label region configured"
+					}
 				} else {
 					reason = "no ring match found"
 				}

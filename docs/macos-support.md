@@ -364,13 +364,53 @@ flow against a real Teams window confirming no regression.
      staging → `videohint list` → `videohint discard` path with nothing
      ever touching the permanent library; confirmed no regression in
      the existing dual-source audio/transcription flow.
-   - **Not done yet (PR B, PR C):** Vision.framework OCR for the name
-     label itself (a ring alone has no name to attach), and wiring a
-     successful ring+OCR result into actually relabeling an
-     `internal/speaker.Tracker` cluster during a live session — plus
+
+   PR B of three, **done**: calibrated Teams' rule table entry against
+   a real, live, multi-participant Teams call (explicit authorization
+   obtained first), plus a Vision.framework OCR shim for the name
+   label itself.
+   - Real measured values: the active-speaker ring is an
+     RGB(129,136,243) hollow rounded-square border (`ColorTolerance:
+     25`, generous on purpose to survive lighting/monitor variation);
+     the participant's name label overlays the **bottom ~27% of the
+     ring's own bounding box**, not a separate region below it — an
+     empirical finding from cropping real frames, not an assumption
+     (`internal/videohint/rule.go`'s `LabelRegion`,
+     `internal/videohint/label.go`'s `LabelRect`/`RecognizeLabel`).
+   - New Vision.framework OCR shim
+     (`internal/videohint/ocr_bridge.h`/`ocr_bridge_darwin.m`/
+     `ocr_darwin.go`, no-op `ocr_linux.go`), following the same
+     cgo/Objective-C bridge shape as `internal/guestaudio`. **A real
+     crash found live while wiring this up:** this file builds without
+     ARC (manual retain/release, matching the rest of this project's
+     ObjC bridges), and Vision hands the completion handler's block
+     autoreleased objects — assigning one straight into a `__block`
+     variable without retaining it let it get freed before the outer
+     function read it back, segfaulting on every call. Fixed by
+     explicitly retaining in the block and releasing before return.
+     Also switched frame handling from `CGDataProviderCreateWithData`
+     (wraps the caller's pointer directly) to a `CGDataProviderCreateWithCFData`
+     over an immediately-copied `NSData`, since holding a Go slice's
+     backing array by raw pointer across the cgo boundary isn't safe.
+   - `videohint.Poll` now actually attempts OCR when Teams' ring
+     matches, instead of always escalating: a recognized name is
+     logged as a naming hint (de-duplicated so it doesn't spam once
+     per poll tick); no ring match, no configured label region, or
+     empty OCR output all still fall through to the existing
+     escalation path unchanged.
+   - Verified against real cropped frames from the live call (deleted
+     after use, never committed): OCR correctly read a real
+     participant's name back from both a tight label-only crop and a
+     wider ring+label crop.
+   - **Not done yet (PR C):** wiring a successful ring+OCR result into
+     actually relabeling an `internal/speaker.Tracker` cluster during a
+     live session — this PR only logs the hint. Also still open:
      window-finding for Zoom/Meet/Webex/Slack, none of which
      `internal/videohint` can capture anything for yet (Teams-only,
-     reusing `FindMeetingWindow` as-is).
+     reusing `FindMeetingWindow` as-is); `DetectRing` returns only its
+     single best-scoring match, so a frame with two simultaneous rings
+     (observed live — Teams can highlight more than one recent
+     speaker at once) currently only produces a hint for one of them.
 2. **Persistent voiceprints.** A speaker cluster's embedding centroid
    *is* a voiceprint (noted in this doc's original architecture
    section) — this item is giving it a durable identity: once a video
