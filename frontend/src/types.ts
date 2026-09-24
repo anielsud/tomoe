@@ -6,6 +6,10 @@ export interface Segment {
   end_time: number;
   source: string;
   language?: string;
+  // "pending": a fast realtime pass, still being refined by a slower,
+  // higher-fidelity re-decode -- absent/"" means final. See
+  // internal/live's two-pass pipeline.
+  status?: 'pending' | '';
 }
 
 export interface VideoHintActivityEntry {

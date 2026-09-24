@@ -40,6 +40,10 @@ type Daemon struct {
 	store         *session.Store
 	modelStatus   *models.Status
 	detector      *meeting.Detector
+	// streamingEngine powers live transcription's realtime ("pass 1")
+	// pass; nil if the English streaming model isn't downloaded, in
+	// which case sessions fall back to today's single-pass behavior.
+	streamingEngine transcribe.StreamingEngine
 
 	// Background save pipeline. Each meeting stop enqueues; one worker
 	// drains the queue serially so concurrent diarization can't corrupt
@@ -54,12 +58,13 @@ const saveQueueDepth = 16
 
 // MeetingOpts holds optional dependencies for meeting recording mode.
 type MeetingOpts struct {
-	MeetingHotkey hotkey.Listener
-	Embedder      *speaker.Embedder
-	Tracker       *speaker.Tracker
-	Store         *session.Store
-	ModelStatus   *models.Status
-	Detector      *meeting.Detector
+	MeetingHotkey   hotkey.Listener
+	Embedder        *speaker.Embedder
+	Tracker         *speaker.Tracker
+	Store           *session.Store
+	ModelStatus     *models.Status
+	Detector        *meeting.Detector
+	StreamingEngine transcribe.StreamingEngine
 }
 
 // New creates a Daemon with the given dependencies.
@@ -76,6 +81,7 @@ func New(cfg *config.Config, engines *transcribe.EngineSet, svc *platform.Servic
 		d.store = opts.Store
 		d.modelStatus = opts.ModelStatus
 		d.detector = opts.Detector
+		d.streamingEngine = opts.StreamingEngine
 	}
 	return d
 }
@@ -387,6 +393,11 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		VADPath:           vadPath,
 		SegmentBufferSize: 64,
 	}
+	// Realtime pass is English-only (see internal/transcribe's
+	// StreamingEngine); other languages keep today's single-pass path.
+	if lang == "en" {
+		cfg.StreamingEngine = d.streamingEngine
+	}
 
 	// Set up mic capturer
 	micDevice := d.cfg.Audio.Device
@@ -448,11 +459,17 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		Sources:   sources,
 	}
 
-	// Drain segments in a goroutine
+	// Drain segments (and, for two-pass sessions, their refinements) in
+	// their own goroutines, closing done only once both have finished —
+	// same reasoning as internal/live's own closer goroutine: a
+	// refinement queued right at shutdown should still get applied
+	// before this daemon considers the meeting fully stopped.
 	done := make(chan struct{})
 	var mu sync.Mutex
+	var drainWG sync.WaitGroup
+	drainWG.Add(2)
 	go func() {
-		defer close(done)
+		defer drainWG.Done()
 		for seg := range coordinator.Segments() {
 			mu.Lock()
 			sess.Segments = append(sess.Segments, seg)
@@ -463,6 +480,24 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 				fmt.Printf("[%s] %s: %s\n", formatTimestamp(seg.StartTime), seg.Speaker, seg.Text)
 			}
 		}
+	}()
+	go func() {
+		defer drainWG.Done()
+		for seg := range coordinator.SegmentUpdates() {
+			mu.Lock()
+			for i := range sess.Segments {
+				if sess.Segments[i].ID == seg.ID {
+					sess.Segments[i] = seg
+					break
+				}
+			}
+			mu.Unlock()
+			fmt.Printf("[%s] %s: %s (refined)\n", formatTimestamp(seg.StartTime), seg.Speaker, seg.Text)
+		}
+	}()
+	go func() {
+		drainWG.Wait()
+		close(done)
 	}()
 
 	// Screen-based speaker-label hints (macOS only; no-op on Linux —

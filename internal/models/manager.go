@@ -40,6 +40,16 @@ type Status struct {
 	BengaliDecoderPath string
 	BengaliJoinerPath  string
 	BengaliTokensPath  string
+
+	// English streaming Zipformer transducer (realtime "pass 1" — see
+	// internal/live's two-pass pipeline). Not required for Ready(): its
+	// absence just means the live pipeline falls back to VAD+Parakeet
+	// only, same as before this existed.
+	EnglishStreamingReady       bool
+	EnglishStreamingEncoderPath string
+	EnglishStreamingDecoderPath string
+	EnglishStreamingJoinerPath  string
+	EnglishStreamingTokensPath  string
 }
 
 // Manager handles model download, extraction, and verification.
@@ -62,22 +72,27 @@ func (m *Manager) Check() *Status {
 	parakeetDir := filepath.Join(m.modelDir, ParakeetSubdir)
 	whisperDir := filepath.Join(m.modelDir, WhisperTinySubdir)
 	bengaliDir := filepath.Join(m.modelDir, BengaliSubdir)
+	englishStreamingDir := filepath.Join(m.modelDir, EnglishStreamingSubdir)
 
 	s := &Status{
-		ModelDir:                m.modelDir,
-		EncoderPath:             filepath.Join(parakeetDir, encoderFile),
-		DecoderPath:             filepath.Join(parakeetDir, decoderFile),
-		JoinerPath:              filepath.Join(parakeetDir, joinerFile),
-		TokensPath:              filepath.Join(parakeetDir, tokensFile),
-		VADPath:                 filepath.Join(m.modelDir, SileroVADFile),
-		SpeakerEmbeddingPath:    filepath.Join(m.modelDir, SpeakerEmbeddingFile),
-		SpeakerSegmentationPath: filepath.Join(m.modelDir, PyannoteSegmentationSubdir, PyannoteSegmentationFile),
-		LangIDEncoderPath:       filepath.Join(whisperDir, WhisperTinyEncoderFile),
-		LangIDDecoderPath:       filepath.Join(whisperDir, WhisperTinyDecoderFile),
-		BengaliEncoderPath:      filepath.Join(bengaliDir, bengaliEncoderFile),
-		BengaliDecoderPath:      filepath.Join(bengaliDir, bengaliDecoderFile),
-		BengaliJoinerPath:       filepath.Join(bengaliDir, bengaliJoinerFile),
-		BengaliTokensPath:       filepath.Join(bengaliDir, bengaliTokensFile),
+		ModelDir:                    m.modelDir,
+		EncoderPath:                 filepath.Join(parakeetDir, encoderFile),
+		DecoderPath:                 filepath.Join(parakeetDir, decoderFile),
+		JoinerPath:                  filepath.Join(parakeetDir, joinerFile),
+		TokensPath:                  filepath.Join(parakeetDir, tokensFile),
+		VADPath:                     filepath.Join(m.modelDir, SileroVADFile),
+		SpeakerEmbeddingPath:        filepath.Join(m.modelDir, SpeakerEmbeddingFile),
+		SpeakerSegmentationPath:     filepath.Join(m.modelDir, PyannoteSegmentationSubdir, PyannoteSegmentationFile),
+		LangIDEncoderPath:           filepath.Join(whisperDir, WhisperTinyEncoderFile),
+		LangIDDecoderPath:           filepath.Join(whisperDir, WhisperTinyDecoderFile),
+		BengaliEncoderPath:          filepath.Join(bengaliDir, bengaliEncoderFile),
+		BengaliDecoderPath:          filepath.Join(bengaliDir, bengaliDecoderFile),
+		BengaliJoinerPath:           filepath.Join(bengaliDir, bengaliJoinerFile),
+		BengaliTokensPath:           filepath.Join(bengaliDir, bengaliTokensFile),
+		EnglishStreamingEncoderPath: filepath.Join(englishStreamingDir, englishStreamingEncoderFile),
+		EnglishStreamingDecoderPath: filepath.Join(englishStreamingDir, englishStreamingDecoderFile),
+		EnglishStreamingJoinerPath:  filepath.Join(englishStreamingDir, englishStreamingJoinerFile),
+		EnglishStreamingTokensPath:  filepath.Join(englishStreamingDir, englishStreamingTokensFile),
 	}
 
 	files := []string{s.EncoderPath, s.DecoderPath, s.JoinerPath, s.TokensPath}
@@ -87,6 +102,7 @@ func (m *Manager) Check() *Status {
 	s.SpeakerSegmentationReady = fileExists(s.SpeakerSegmentationPath)
 	s.LangIDReady = allFilesExist(s.LangIDEncoderPath, s.LangIDDecoderPath)
 	s.BengaliReady = allFilesExist(s.BengaliEncoderPath, s.BengaliDecoderPath, s.BengaliJoinerPath, s.BengaliTokensPath)
+	s.EnglishStreamingReady = allFilesExist(s.EnglishStreamingEncoderPath, s.EnglishStreamingDecoderPath, s.EnglishStreamingJoinerPath, s.EnglishStreamingTokensPath)
 
 	// Detect partial download (some files exist but not all)
 	if !s.ParakeetReady {
@@ -154,8 +170,12 @@ func (s *Status) String() string {
 	if s.MultilingualReady() {
 		multilingual = "ready"
 	}
-	return fmt.Sprintf("Model dir: %s\nParakeet TDT INT8: %s\nSilero VAD: %s\nSpeaker Embedding: %s\nSpeaker Segmentation: %s\nDiarization: %s\nLang-ID (Whisper tiny): %s\nBengali Zipformer: %s\nMultilingual: %s",
-		s.ModelDir, parakeet, vad, speaker, segmentation, diarization, langID, bengali, multilingual)
+	englishStreaming := "not downloaded"
+	if s.EnglishStreamingReady {
+		englishStreaming = "ready"
+	}
+	return fmt.Sprintf("Model dir: %s\nParakeet TDT INT8: %s\nSilero VAD: %s\nSpeaker Embedding: %s\nSpeaker Segmentation: %s\nDiarization: %s\nLang-ID (Whisper tiny): %s\nBengali Zipformer: %s\nMultilingual: %s\nEnglish Streaming Zipformer (realtime pass): %s",
+		s.ModelDir, parakeet, vad, speaker, segmentation, diarization, langID, bengali, multilingual, englishStreaming)
 }
 
 // Download downloads and extracts all required models.
@@ -217,6 +237,20 @@ func (m *Manager) Download(force bool) error {
 		fmt.Println("Pyannote segmentation model downloaded.")
 	} else {
 		fmt.Println("Pyannote segmentation model already present, skipping.")
+	}
+
+	// Download English streaming Zipformer (realtime pass). Not required
+	// for Ready() below — a failure here is logged but non-fatal, since
+	// the live pipeline already falls back gracefully without it.
+	if force || !status.EnglishStreamingReady {
+		fmt.Println("Downloading English streaming Zipformer model (realtime transcription pass)...")
+		if err := m.downloadAndExtractArchive(EnglishStreamingArchiveURL); err != nil {
+			fmt.Printf("Warning: failed to download English streaming model: %v (live transcription will fall back to non-realtime mode)\n", err)
+		} else {
+			fmt.Println("English streaming Zipformer model downloaded and extracted.")
+		}
+	} else {
+		fmt.Println("English streaming Zipformer model already present, skipping.")
 	}
 
 	// Verify

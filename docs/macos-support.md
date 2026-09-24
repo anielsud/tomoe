@@ -554,19 +554,87 @@ flow against a real Teams window confirming no regression.
    of this is a live call, which is exactly why this session's guestaudio
    bugs took real debugging effort to catch (see above) rather than
    showing up in `go test`.
-5. **Two-pass transcription: realtime + a higher-fidelity re-pass.**
-   Today's transcript is single-pass — whatever Parakeet TDT streams
-   live during the meeting is the final text, forever. The ask is a
-   second pass, closer to Whisper's non-streaming/chunked style, that
-   revisits completed audio afterward with a larger context window
-   and/or a heavier model, upgrading the low-latency live line to a
-   more accurate final one without blocking the live view. Not built:
-   `internal/session` already stores each session's raw audio (M4A)
-   specifically so a later re-transcription is possible in principle
-   (`tomoe transcribe`/`RetranscribeSession` even exist as a *manual*,
-   whole-file batch path today), but there's no automatic background
-   second pass that revisits a session's segments as it goes, and no
-   UI distinction between "live, may still be refined" and "final."
+5. **Two-pass transcription: realtime + a higher-fidelity re-pass —
+   done.** The original single-pass design's actual problem, found
+   live: Parakeet TDT is an *offline* recognizer (`sherpa.OfflineRecognizer`
+   — even "live" transcription just runs a full non-streaming decode
+   once a VAD segment completes), so nothing appeared on screen until a
+   pause — for one speaker's long, pause-light run, that meant several
+   sentences' worth of text landing all at once, well after they'd
+   actually said it.
+   - **Pass 1 (realtime):** a new `internal/transcribe.StreamingEngine`
+     wraps sherpa-onnx's *online* Zipformer transducer API
+     (`OnlineRecognizer`/`OnlineStream` — `AcceptWaveform` +
+     `IsReady`/`Decode` + `GetResult` for a continuously-updating
+     partial hypothesis, `Reset` between utterances). Model: English
+     streaming Zipformer, int8
+     (`sherpa-onnx-streaming-zipformer-en-2023-06-26`, ~70MB) — a real,
+     verified GitHub release asset, not guessed. `internal/live`'s
+     per-source pipeline feeds it the same VAD windows as before, polls
+     for partial text on every window, and — this is the actual fix —
+     the moment a VAD segment completes, emits it *immediately* using
+     whatever partial text pass 1 has already built up, tagged
+     `Status: "pending"`, instead of waiting on any decode at all.
+   - **Pass 2 (higher fidelity):** the completed segment's audio is
+     also queued to a background `refineWorker`, which re-decodes it
+     through the existing Parakeet engine (full, non-streaming context
+     — inherently more accurate than a streaming decode) and emits a
+     `SegmentUpdates()` revision with the same ID, `Status: ""`,
+     superseding pass 1's text. A refinement failure/empty result
+     falls back to keeping pass 1's text as final rather than leaving
+     the segment stuck "pending" forever.
+   - Two deliberately separate models, not one model with different
+     settings: they have genuinely different jobs (online vs. offline
+     decoding), and Parakeet's own instance/settings stay untouched for
+     dictation and file transcription, so this doesn't slow either of
+     those down. Runs on macOS and Linux alike (`internal/transcribe`
+     has no OS-specific code) — this item was macOS-motivated but isn't
+     macOS-specific.
+   - Graceful, total fallback: absent the new model
+     (`EnglishStreamingReady` false in `models.Status`) or for any
+     non-English session (the streaming model is English-only),
+     `StreamingEngine` is left nil and the pipeline behaves exactly as
+     before this existed — one synchronous decode per segment, no
+     "pending" state, verified via the pre-existing test suite passing
+     unchanged.
+   - Frontend: `Segment.status` (`"pending"` | `""`), a new
+     `transcript:segment:update` Wails event, and `TranscriptPane`
+     dims pending text with a "refining…" label until the update
+     arrives.
+   - Verified: real audio through the streaming engine (a LibriSpeech
+     test clip, word-by-word partial output matching the known
+     transcript exactly) confirms pass 1 genuinely streams; the
+     two-pass orchestration logic (`refineWorker`) is unit-tested
+     (success, engine-error fallback, blank-result fallback) without
+     needing a live call; and a full end-to-end run of the real
+     `live.Coordinator` (real VAD, real streaming engine, real Parakeet,
+     a WAV file standing in for the mic) confirmed the whole chain:
+     `pending` text lands the instant the segment completes, a
+     properly-punctuated `final` update follows shortly after.
+   - **Known gap, not this PR:** pass 1's text still only becomes
+     *visible* once a VAD segment completes (fast now, and no longer
+     blocked behind pass 2's decode — the actual fix for text arriving
+     in a delayed burst) — not word-by-word *while the person is still
+     talking*. `processPipeline` already has everything a true
+     mid-utterance live line would need (`streamSess.Feed` is already
+     called continuously and already has the growing partial text
+     sitting in a local variable); it just isn't published anywhere
+     until completion. The reason it's not done here: showing a live
+     line needs a speaker label attached to it too, and the honest
+     one requires enough accumulated audio for a stable embedding —
+     doing this without flicker (the label changing once real
+     audio is available) needs a bit more design than fit in this pass.
+   - **Known limitation, not fixed:** `Coordinator.Stop()` returns as
+     soon as its pipelines finish, not after refinement fully drains —
+     matching the existing "StopSession returns immediately, save runs
+     async" design elsewhere in this codebase. If a save happens to run
+     before the last segment or two finish refining, the persisted
+     session keeps their pass-1 (still-usable, just less-refined) text
+     rather than blocking to guarantee the final pass. This is a
+     pre-existing class of race in how sessions get saved (the segment
+     channel is buffered, so even single-pass segments already weren't
+     strictly guaranteed to be appended before a save could start) —
+     not introduced by this change, and not chased further here.
 6. **Full participant names, not just what's visible in a partial UI
    label.** Teams' active-speaker tile often truncates the name (e.g.
    "Nazanin Rame…", cut off by the tile's width) — a fine naming hint,

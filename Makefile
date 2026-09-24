@@ -216,7 +216,7 @@ clean: ## Remove build artifacts
 
 ## Model ──────────────────────────────────────────────────────────────
 
-download-model: build ## Download Parakeet TDT INT8 model + Silero VAD + Speaker Embedding
+download-model: build ## Download Parakeet TDT INT8 + English streaming Zipformer INT8 + Silero VAD + Speaker Embedding
 	./$(BINARY) model download
 
 ## Help ───────────────────────────────────────────────────────────────

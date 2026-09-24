@@ -23,6 +23,7 @@ Two modes of operation:
 ```
 Go binary → cgo → sherpa-onnx C API → ONNX Runtime (CUDA EP / CPU EP)
   → Parakeet TDT 0.6B v3 INT8 (encoder + decoder + joiner, 25 languages)
+  → English streaming Zipformer INT8 (~70MB, live pass-1 via OnlineRecognizer)
   → Bengali Zipformer transducer (~87MB, streaming via OnlineRecognizer)
   → Silero VAD (~2MB)
   → 3D-Speaker embedding model (~25MB)
@@ -65,6 +66,7 @@ Mic Capturer → StreamCapturer → VAD → Transcribe(lang) → Segment
 - **Manual language selection via EngineSet**: `EngineSet` holds a `map[string]Engine` (e.g., "en"→Parakeet, "bn"→Bengali Zipformer). Does NOT implement `Engine` — callers explicitly pick a language via `Get(lang)`. Tray sub-menus provide per-language start items; hotkey press uses the default language. Sessions store language code for re-transcription with a different engine.
 - **Hotword boosting**: sherpa-onnx supports `modified_beam_search` with `HotwordsFile` for Parakeet TDT. Works independently of multilingual. Configurable via `[transcription]` section in config.toml.
 - **macOS speaker naming (in progress)**: not a port of the Linux audio-only clustering approach — macOS has a second, independent naming signal Linux doesn't (Teams' visual active-speaker ring + name label, read via `internal/teamsvideo`). Plan is to keep `internal/speaker`'s embedding+clustering unchanged and *label* a cluster ID with a real name whenever a fresh video hint lands, carrying that label forward for the cluster's later turns — a cluster that never gets a hint still falls back to "Person N" exactly like Linux does today. See `docs/macos-support.md`.
+- **Two-pass transcription**: Parakeet TDT is an *offline* recognizer even in "live" mode — a full non-streaming decode per completed VAD segment — so nothing appeared until a pause. `internal/transcribe.StreamingEngine` (English streaming Zipformer INT8, `sherpa.OnlineRecognizer`) is pass 1: fed the same VAD windows, polled continuously for a growing partial hypothesis, so text appears as it's spoken. On segment completion, that partial text is emitted immediately (`session.Segment.Status: "pending"`); the segment's audio is also queued to `live.Coordinator`'s `refineWorker`, which re-decodes it through Parakeet (pass 2, full-context, higher fidelity) and supersedes it via `SegmentUpdates()` (`Status: ""`). English-only and optional — nil `StreamingEngine` (model not downloaded, or a non-English session) falls back to the original single-pass behavior exactly.
 
 ## Project Structure
 
@@ -115,7 +117,7 @@ make test             # Run unit tests (stages frontend first)
 make vet              # Run go vet (stages frontend first)
 make lint             # Run golangci-lint (stages frontend first)
 make dev-gui          # Wails dev mode with hot-reload
-make download-model   # Download models (~375MB total)
+make download-model   # Download models (~685MB total — includes the English streaming Zipformer archive, which bundles unused fp32 weights alongside the int8 ones actually used)
 make install          # Install to $GOPATH/bin
 make dev-cert-mac     # One-time: create a stable local code-signing identity (macOS only)
 make install-gui-mac  # Rebuild GUI, (re)install /Applications/Tomoe.app + Dock icon (macOS only)

@@ -467,3 +467,88 @@ func TestStopIdempotent(t *testing.T) {
 	c.Stop()
 	c.Stop()
 }
+
+// --- Two-pass refinement (pass 2) tests ---
+//
+// refineWorker is pure Go coordination logic (no cgo/ONNX dependency),
+// so it's tested directly here rather than through a full Start()/Stop()
+// cycle, which would need a real VAD model to construct a pipeline at
+// all (see processPipeline's `if vad == nil { return }` guard) — same
+// reason the rest of this file's Start()-based tests never exercise
+// real transcription.
+
+func TestRefineWorker_EmitsUpdateOnSuccess(t *testing.T) {
+	eng := &mockEngine{result: &transcribe.Result{Text: "refined text", Language: "en"}}
+	c := New(Config{Engine: eng})
+
+	c.refineWG.Add(1)
+	go c.refineWorker()
+
+	c.refineCh <- refinementJob{
+		id: "seg-1", samples: []float32{0.1, 0.2}, speaker: "Person 1",
+		startTime: 1.0, endTime: 2.0, source: SourceMonitor, pass1Text: "rough text",
+	}
+	close(c.refineCh)
+
+	update := <-c.segmentUpdateCh
+	if update.ID != "seg-1" {
+		t.Errorf("ID = %q, want %q", update.ID, "seg-1")
+	}
+	if update.Text != "refined text" {
+		t.Errorf("Text = %q, want %q (pass-2 result)", update.Text, "refined text")
+	}
+	if update.Status != "" {
+		t.Errorf("Status = %q, want %q (final)", update.Status, "")
+	}
+	if update.Speaker != "Person 1" || update.Source != string(SourceMonitor) {
+		t.Errorf("Speaker/Source = %q/%q, want %q/%q", update.Speaker, update.Source, "Person 1", SourceMonitor)
+	}
+}
+
+func TestRefineWorker_FallsBackToPass1TextOnEngineError(t *testing.T) {
+	eng := &mockEngine{err: fmt.Errorf("decode failed")}
+	c := New(Config{Engine: eng})
+
+	c.refineWG.Add(1)
+	go c.refineWorker()
+
+	c.refineCh <- refinementJob{
+		id: "seg-2", samples: []float32{0.1}, speaker: "You",
+		startTime: 0, endTime: 1, source: SourceMic, pass1Text: "rough text",
+	}
+	close(c.refineCh)
+
+	update := <-c.segmentUpdateCh
+	if update.Text != "rough text" {
+		t.Errorf("Text = %q, want %q (pass-1 fallback)", update.Text, "rough text")
+	}
+	if update.Status != "" {
+		t.Errorf("Status = %q, want %q (finalized even on refinement failure)", update.Status, "")
+	}
+}
+
+func TestRefineWorker_FallsBackToPass1TextOnEmptyResult(t *testing.T) {
+	eng := &mockEngine{result: &transcribe.Result{Text: "   "}}
+	c := New(Config{Engine: eng})
+
+	c.refineWG.Add(1)
+	go c.refineWorker()
+
+	c.refineCh <- refinementJob{
+		id: "seg-3", samples: []float32{0.1}, speaker: "You",
+		pass1Text: "rough text",
+	}
+	close(c.refineCh)
+
+	update := <-c.segmentUpdateCh
+	if update.Text != "rough text" {
+		t.Errorf("Text = %q, want %q (pass-1 fallback on blank pass-2 result)", update.Text, "rough text")
+	}
+}
+
+func TestSegmentUpdatesChannelAccessor(t *testing.T) {
+	c := New(Config{})
+	if c.SegmentUpdates() == nil {
+		t.Error("SegmentUpdates() = nil, want a channel")
+	}
+}

@@ -6,12 +6,19 @@ export function useTranscript() {
   const [segments, setSegments] = useState<Segment[]>([]);
 
   useEffect(() => {
-    const cancel = EventsOn('transcript:segment', (seg: Segment) => {
+    const cancelNew = EventsOn('transcript:segment', (seg: Segment) => {
       setSegments(prev => [...prev, seg]);
+    });
+    // Two-pass transcription: a later, higher-fidelity re-decode of a
+    // segment already shown (same id) supersedes it in place, rather
+    // than appending a duplicate line — see internal/live's Status field.
+    const cancelUpdate = EventsOn('transcript:segment:update', (seg: Segment) => {
+      setSegments(prev => prev.map(s => (s.id === seg.id ? seg : s)));
     });
 
     return () => {
-      cancel();
+      cancelNew();
+      cancelUpdate();
     };
   }, []);
 
