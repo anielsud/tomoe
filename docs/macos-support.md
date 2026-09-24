@@ -161,8 +161,8 @@ consecutive runs at full speed, no debugger, real Screen Recording
 permission grant (not partial/inherited).
 
 **#2 recurred later, live, and 150ms turned out not to be enough.**
-Testing the "Everything" system-wide capture option (see the
-audio-source picker below) hit the *exact* same SIGSEGV signature on a
+Testing the "Everything" system-wide capture option (see "System audio
+source picker" below) hit the *exact* same SIGSEGV signature on a
 fresh process's very first tap start — this time
 `guestaudio_start_system_tap`, added well after the above was believed
 fixed — and an immediate retry in a new process succeeded, the same
@@ -174,6 +174,69 @@ handshake actually takes on this hardware/load. Bumped to 500ms — still
 a one-time, barely-perceptible cost, but with real margin this time
 rather than a value that had only been "validated clean" by not
 happening to hit the unlucky timing in that testing session.
+
+## System audio source picker
+
+Replaced the old, non-functional "System Audio: Auto-detect" label with
+a real dropdown: `internal/audiosources` (`ListActive() ([]Source,
+error)`) polls `kAudioHardwarePropertyProcessObjectList` +
+`kAudioProcessPropertyIsRunningOutput` to enumerate apps currently
+producing audio output, exposed to the frontend as `App.ListAudioSources()`
+(always includes a synthetic `"everything"` entry first). Picking
+`"Everything"` captures the whole display via
+`guestaudio.NewSystemCapturer()` (`SCContentFilter
+initWithDisplay:excludingWindows:@[]]`) and skips speaker diarization
+(`live.Config.SkipMonitorDiarization` — everything is labeled `"System
+Audio"` rather than clustered, since it's not one app's isolated
+stream); picking a specific app resolves its PID to an on-screen window
+via `teamsvideo.FindWindowForPID` and taps just that window
+(`guestaudio.NewWindowCapturer`), with diarization still enabled.
+
+**Two real bugs found integrating the per-app path, both via direct
+Go-level test programs against a real, live Teams call (not
+screenshots) rather than guessing:**
+
+1. **The audio-active PID is often a helper process with no window of
+   its own.** CoreAudio reported Teams' actual audio-producing PID as
+   "Microsoft Teams WebView" (`com.microsoft.teams2.helper`) — a
+   Chromium-style renderer subprocess, not the main Teams process that
+   owns the visible meeting window. `FindWindowForPID` originally
+   failed outright for this PID ("no on-screen window found"). Fixed by
+   walking up the parent-process chain (`ps -o ppid=`, up to 5 levels)
+   until an ancestor that actually owns a window is found — CoreAudio's
+   per-process audio tracking and `CGWindowList`'s window ownership
+   don't necessarily agree on which process "is" the app for
+   multi-process apps built this way.
+2. **The resolved PID can own several windows, and "largest" picks the
+   wrong one.** Once the ancestor walk found Teams' main process, that
+   process owned multiple on-screen windows simultaneously (a Calendar
+   tab, a chat panel, the actual call) — "biggest window wins" isn't a
+   reliable signal for which one is the real meeting (the Calendar
+   tab's window was larger than the meeting window in one real test,
+   returning `"Calendar | Microsoft Teams"` instead of the call).
+   `FindMeetingWindow` already has the right heuristic for this exact
+   problem (Teams-specific title matching, excluding chat/empty
+   windows) — rather than duplicating it, `FindWindowForPID` now
+   checks whether the resolved owner's name contains "teams" and, if
+   so, delegates to `FindMeetingWindow` first, only falling back to the
+   generic largest-window heuristic if that doesn't find anything.
+
+After both fixes, `FindWindowForPID` resolves the live call's audio-PID
+to the same window ID `FindMeetingWindow` finds independently. Verified
+the underlying window-scoped tap itself is sound with a controlled,
+non-live test: `QuickTime Player` playing a `say`-generated speech
+clip, captured via the exact same `FindWindowForPID` +
+`guestaudio.NewWindowCapturer` path production code uses — non-zero
+peak amplitude (~0.6-0.7) throughout, once playback was made to
+deterministically start (via `osascript`) *after* capture began.
+
+An earlier attempt at this same controlled test appeared silent for a
+full 7 seconds — a false alarm caused by the test's own timing (`open
+-a` re-invoked on an already-open document doesn't restart playback,
+so the clip had already finished before sampling started), not a
+capture bug — worth noting since it's exactly the kind of result that
+looks like "the tap doesn't work" without a controlled A/B to rule out
+"nothing was actually playing yet."
 
 ## Status
 
@@ -344,9 +407,10 @@ on darwin now, no scoping needed.
    audio was actively capturing, because it was built entirely around
    Linux's PulseAudio-monitor-device-list concept, which is always
    empty on macOS. New `App.SystemAudioMode()` (`"auto"` on darwin,
-   `"manual"` on Linux) lets `SourceSelector.tsx` render an honest
-   "System Audio: Auto-detect" label on macOS instead of a picker with
-   nothing to pick.
+   `"manual"` on Linux) lets `SourceSelector.tsx` render a macOS-specific
+   picker instead. That picker was itself later replaced with a real,
+   working dropdown of active audio sources — see "System audio source
+   picker" above.
 
 **Live clustering, tightened for two sources: done** — though not for
 the reason this section originally guessed. `internal/live/pipeline.go`'s

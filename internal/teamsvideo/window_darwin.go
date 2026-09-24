@@ -132,6 +132,8 @@ import "C"
 
 import (
 	"fmt"
+	"os/exec"
+	"strconv"
 	"strings"
 	"unsafe"
 )
@@ -193,6 +195,16 @@ func FindMeetingWindow() (WindowID, error) {
 // tapping a specific app's audio when the user picks it from
 // internal/audiosources.ListActive rather than relying on
 // FindMeetingWindow's Teams-specific title heuristic.
+//
+// Also tries pid's parent, grandparent, etc. (up to 5 levels) if pid
+// itself owns no window: found live that the PID CoreAudio reports as
+// "producing audio" for a multi-process app is often a helper/renderer
+// subprocess (e.g. Microsoft Teams' actual audio-active PID was
+// "Microsoft Teams WebView", a child of the main Teams process that
+// owns the real window) -- CoreAudio's per-process audio tracking and
+// CGWindowList's window ownership don't necessarily agree on which
+// process "is" the app for apps built this way (Electron/Chromium-style
+// multi-process architectures, which Teams is).
 func FindWindowForPID(pid int32) (WindowID, error) {
 	windows := C.list_windows()
 	if C.cfarray_is_null(windows) != 0 {
@@ -200,6 +212,58 @@ func FindWindowForPID(pid int32) (WindowID, error) {
 	}
 	defer C.release_windows(windows)
 
+	current := pid
+	for depth := 0; depth < 5; depth++ {
+		// Found live: Teams commonly has several simultaneous windows
+		// for the same resolved PID (Calendar, Chat, an actual call) --
+		// "the largest one" isn't a reliable signal for which is the
+		// real call (in one real test, the Calendar tab's window was
+		// larger than the meeting window). FindMeetingWindow's own
+		// title heuristic already exists to solve exactly this, so
+		// defer to it here rather than duplicating that logic; fall
+		// through to the generic largest-window heuristic below only
+		// if it doesn't find anything.
+		if owner := ownerNameForPID(windows, current); strings.Contains(strings.ToLower(owner), "teams") {
+			if wid, err := FindMeetingWindow(); err == nil {
+				return wid, nil
+			}
+		}
+
+		if wid, ok := bestWindowForPID(windows, current); ok {
+			return wid, nil
+		}
+		parent, err := parentPID(current)
+		if err != nil || parent <= 1 || parent == current {
+			break
+		}
+		current = parent
+	}
+	return 0, fmt.Errorf("teamsvideo: no on-screen window found for PID %d or its parent processes", pid)
+}
+
+// ownerNameForPID returns the owner name of any window belonging to
+// pid in an already-fetched window list, or "" if pid owns none.
+func ownerNameForPID(windows C.CFArrayRef, pid int32) string {
+	n := int(C.window_count(windows))
+	for i := 0; i < n; i++ {
+		idx := C.CFIndex(i)
+		if int32(C.window_owner_pid(windows, idx)) != pid {
+			continue
+		}
+		ownerPtr := C.window_owner_name(windows, idx)
+		if ownerPtr == nil {
+			continue
+		}
+		owner := C.GoString(ownerPtr)
+		C.free(unsafe.Pointer(ownerPtr))
+		return owner
+	}
+	return ""
+}
+
+// bestWindowForPID scans an already-fetched window list for the
+// largest on-screen, normal-layer window owned by pid.
+func bestWindowForPID(windows C.CFArrayRef, pid int32) (WindowID, bool) {
 	n := int(C.window_count(windows))
 	var best WindowID
 	var bestArea int64 = -1
@@ -229,7 +293,23 @@ func FindWindowForPID(pid int32) (WindowID, error) {
 	}
 
 	if bestArea < 0 {
-		return 0, fmt.Errorf("teamsvideo: no on-screen window found for PID %d", pid)
+		return 0, false
 	}
-	return best, nil
+	return best, true
+}
+
+// parentPID returns pid's parent process ID. Shells out to `ps` rather
+// than adding a native sysctl/proc_pidinfo cgo binding for this one,
+// rarely-called (once per session start, a handful of times at most
+// per FindWindowForPID call) lookup.
+func parentPID(pid int32) (int32, error) {
+	out, err := exec.Command("ps", "-o", "ppid=", "-p", strconv.Itoa(int(pid))).Output()
+	if err != nil {
+		return 0, fmt.Errorf("ps: %w", err)
+	}
+	ppid, err := strconv.Atoi(strings.TrimSpace(string(out)))
+	if err != nil {
+		return 0, fmt.Errorf("parsing ppid: %w", err)
+	}
+	return int32(ppid), nil
 }
