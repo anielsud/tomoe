@@ -27,6 +27,7 @@ interface Window {
         GetConfig(): Promise<any>;
         GetGPUInfo(): Promise<any>;
         GetModelStatus(): Promise<any>;
+        GetVideoHintActivity(): Promise<any[]>;
       };
     };
   };

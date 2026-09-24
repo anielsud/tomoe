@@ -23,14 +23,25 @@ const (
 // matches as Teams (the only window-finder wired up so far —
 // Zoom/Meet/Webex/Slack each need their own before this can capture
 // anything for them; see docs/macos-support.md), captures a frame, and
-// either produces a naming hint (logged for now — actually relabeling
-// an internal/speaker.Tracker cluster from a hint is separate,
-// not-yet-built follow-on work) or escalates it to the pending
-// snapshot staging area (CaptureUnrecognizedUI /
-// config.UnrecognizedUIPendingDir). Only PlatformTeams has a
-// calibrated rule today (see rule.go); every other platform's rule
-// table entry is still empty, so those always escalate — expected,
-// not a bug.
+// either produces a naming hint or escalates it to the pending snapshot
+// staging area (CaptureUnrecognizedUI / config.UnrecognizedUIPendingDir).
+// Only PlatformTeams has a calibrated rule today (see rule.go); every
+// other platform's rule table entry is still empty, so those always
+// escalate — expected, not a bug.
+//
+// Every step is reported on events (one Event per stage reached this
+// tick, in order — see EventStage) so a caller can show not just
+// videohint's end result but how and when it got there: whether a
+// window was found this tick, what size frame it captured, whether the
+// ring matched and where, whether OCR read anything. Sends are
+// non-blocking (see sendEvent) — a slow or absent consumer never stalls
+// polling. events may be nil if the caller doesn't want the trace.
+//
+// A StageOCRHit Event's Name field is the only part of this a caller
+// needs to act on (e.g. via speaker.Tracker.SetHintForRecent) — this
+// package deliberately has no internal/speaker dependency itself; that
+// wiring is the caller's job (internal/daemon, internal/backend), since
+// only they hold both the Tracker and this goroutine's lifecycle.
 //
 // Escalated snapshots are NOT the permanent library: FindMeetingWindow
 // matches any non-trivial-titled Microsoft-Teams-owned window, which
@@ -44,12 +55,11 @@ const (
 // Blocks until ctx is cancelled; meant to be run in its own goroutine,
 // one per live meeting session, cancelled when that session stops
 // (see internal/daemon and internal/backend's meeting start/stop).
-func Poll(ctx context.Context, interval time.Duration) {
+func Poll(ctx context.Context, interval time.Duration, events chan<- Event) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	var lastCapture time.Time
-	var lastHint string
 	captured := 0
 
 	for {
@@ -57,36 +67,47 @@ func Poll(ctx context.Context, interval time.Duration) {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
+			platform := meeting.PlatformTeams // only window-finder wired up so far
+
 			windowID, err := teamsvideo.FindMeetingWindow()
 			if err != nil {
+				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageWindowNotFound, Detail: "no meeting window found on screen"})
 				continue // no meeting window on screen right now -- normal, not an error
 			}
 
 			frame, err := teamsvideo.CaptureWindowRGB(windowID)
 			if err != nil {
+				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageCaptureFailed, Detail: err.Error()})
 				continue
 			}
+			sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageFrameCaptured, Detail: fmt.Sprintf("captured %dx%d frame", frame.Width, frame.Height)})
 
-			platform := meeting.PlatformTeams // only window-finder wired up so far
 			reason := "no rule configured for this platform"
-			if rule, ok := ruleFor(platform); ok {
-				if ring, found := DetectRing(frame.Pix, frame.Width, frame.Height, rule.Ring); found {
-					if rule.Label.configured() {
-						name, ocrErr := RecognizeLabel(frame.Pix, frame.Width, frame.Height, *ring, rule.Label)
-						if ocrErr == nil && name != "" {
-							if name != lastHint {
-								fmt.Printf("videohint: naming hint for %s: %q\n", platform, name)
-								lastHint = name
-							}
-							continue // got a usable hint -- nothing to escalate this tick
-						}
-						reason = "ring found but OCR produced no text"
-					} else {
-						reason = "ring found but no label region configured"
-					}
+			rule, ok := ruleFor(platform)
+			if !ok {
+				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoRule, Detail: reason})
+			} else if ring, found := DetectRing(frame.Pix, frame.Width, frame.Height, rule.Ring); found {
+				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageRingMatched, Detail: fmt.Sprintf("ring at (%d,%d) %dx%d, confidence %.2f", ring.X, ring.Y, ring.Width, ring.Height, ring.Confidence)})
+
+				if !rule.Label.configured() {
+					reason = "ring found but no label region configured"
+					sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoLabelRegion, Detail: reason})
 				} else {
-					reason = "no ring match found"
+					name, ocrErr := RecognizeLabel(frame.Pix, frame.Width, frame.Height, *ring, rule.Label)
+					if ocrErr == nil && name != "" {
+						sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageOCRHit, Detail: fmt.Sprintf("OCR read %q from the label region", name), Name: name})
+						continue // got a usable hint -- nothing to escalate this tick
+					}
+					reason = "ring found but OCR produced no text"
+					detail := reason
+					if ocrErr != nil {
+						detail = fmt.Sprintf("%s: %v", reason, ocrErr)
+					}
+					sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageOCRMiss, Detail: detail})
 				}
+			} else {
+				reason = "no ring match found"
+				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoRingMatch, Detail: reason})
 			}
 
 			if captured >= maxSnapshotsPerPoll {
@@ -111,6 +132,7 @@ func Poll(ctx context.Context, interval time.Duration) {
 				fmt.Printf("videohint: failed to capture snapshot: %v\n", err)
 				continue
 			}
+			sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageEscalated, Detail: fmt.Sprintf("captured snapshot for review (%s)", reason)})
 			lastCapture = time.Now()
 			captured++
 		}

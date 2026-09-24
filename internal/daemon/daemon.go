@@ -471,7 +471,26 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	// not when the daemon exits — same reasoning as streamingDictation's
 	// cancel field elsewhere in this file.
 	videoHintCtx, videoHintCancel := context.WithCancel(ctx)
-	go videohint.Poll(videoHintCtx, 10*time.Second)
+	videoHintEvents := make(chan videohint.Event, 32)
+	go videohint.Poll(videoHintCtx, 10*time.Second, videoHintEvents)
+	go func() {
+		for {
+			select {
+			case <-videoHintCtx.Done():
+				return
+			case ev, ok := <-videoHintEvents:
+				if !ok {
+					return
+				}
+				fmt.Printf("[videohint] %s: %s\n", ev.Stage, ev.Detail)
+				if ev.Stage == videohint.StageOCRHit && ev.Name != "" && d.tracker != nil {
+					if !d.tracker.SetHintForRecent(ev.Name, videohint.HintAttachMaxAge) {
+						fmt.Printf("[videohint] hint %q had no recent enough speaker to attach to\n", ev.Name)
+					}
+				}
+			}
+		}
+	}()
 
 	return &meetingState{
 		coordinator:     coordinator,

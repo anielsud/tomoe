@@ -6,6 +6,7 @@ import SessionList from './components/SessionList'
 import SettingsPanel from './components/SettingsPanel'
 import StatusBar from './components/StatusBar'
 import ExportDialog from './components/ExportDialog'
+import VideoHintActivity from './components/VideoHintActivity'
 import { useTranscript } from './hooks/useTranscript'
 import { useSession } from './hooks/useSession'
 import { DeviceInfo, Session } from './types'
@@ -169,7 +170,10 @@ function App() {
       </div>
 
       {view === 'live' && (
-        <TranscriptPane segments={segments} isRecording={isRecording} />
+        <>
+          {systemAudioMode === 'auto' && <VideoHintActivity />}
+          <TranscriptPane segments={segments} isRecording={isRecording} />
+        </>
       )}
 
       {view === 'sessions' && (

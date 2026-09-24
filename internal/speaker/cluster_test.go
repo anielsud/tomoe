@@ -1,6 +1,9 @@
 package speaker
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestTrackerAssignSameSpeaker(t *testing.T) {
 	tracker := NewTracker(0.8)
@@ -132,5 +135,54 @@ func TestTrackerMultipleSpeakers(t *testing.T) {
 
 	if tracker.NumSpeakers() != 3 {
 		t.Errorf("NumSpeakers() = %d, want 3", tracker.NumSpeakers())
+	}
+}
+
+func TestTrackerSetHintForRecent(t *testing.T) {
+	tracker := NewTracker(0.8)
+
+	tracker.Assign([]float32{1, 0, 0}) // Person 1
+	tracker.Assign([]float32{0, 1, 0}) // Person 2, most recently assigned
+
+	if ok := tracker.SetHintForRecent("Nazanin", time.Minute); !ok {
+		t.Fatal("SetHintForRecent() = false, want true")
+	}
+
+	// The hint should attach to Person 2 (most recently assigned), not Person 1.
+	label1 := tracker.Assign([]float32{0.99, 0.01, 0})
+	if label1 != "Person 1" {
+		t.Errorf("Person 1 label = %q, want unchanged %q", label1, "Person 1")
+	}
+	label2 := tracker.Assign([]float32{0, 0.99, 0.01})
+	if label2 != "Person 2 (Nazanin)" {
+		t.Errorf("Person 2 label = %q, want %q", label2, "Person 2 (Nazanin)")
+	}
+}
+
+func TestTrackerSetHintForRecent_TooOld(t *testing.T) {
+	tracker := NewTracker(0.8)
+	tracker.Assign([]float32{1, 0, 0})
+
+	if ok := tracker.SetHintForRecent("Someone", -time.Second); ok {
+		t.Error("SetHintForRecent() with a negative maxAge = true, want false")
+	}
+}
+
+func TestTrackerSetHintForRecent_NoSpeakersYet(t *testing.T) {
+	tracker := NewTracker(0.8)
+	if ok := tracker.SetHintForRecent("Someone", time.Minute); ok {
+		t.Error("SetHintForRecent() before any Assign = true, want false")
+	}
+}
+
+func TestTrackerResetClearsHints(t *testing.T) {
+	tracker := NewTracker(0.8)
+	tracker.Assign([]float32{1, 0, 0})
+	tracker.SetHintForRecent("Nazanin", time.Minute)
+	tracker.Reset()
+
+	label := tracker.Assign([]float32{1, 0, 0})
+	if label != "Person 1" {
+		t.Errorf("after reset, label = %q, want plain %q (hint should be cleared)", label, "Person 1")
 	}
 }
