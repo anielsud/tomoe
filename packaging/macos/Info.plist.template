@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Tomoe</string>
+	<key>CFBundleDisplayName</key>
+	<string>Tomoe</string>
+	<key>CFBundleIdentifier</key>
+	<string>ai.sosuke.tomoe-gui</string>
+	<key>CFBundleExecutable</key>
+	<string>tomoe-gui</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleShortVersionString</key>
+	<string>__VERSION__</string>
+	<key>CFBundleVersion</key>
+	<string>__VERSION__</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSApplicationCategoryType</key>
+	<string>public.app-category.productivity</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Tomoe needs microphone access to transcribe your speech.</string>
+	<key>NSScreenCaptureUsageDescription</key>
+	<string>Tomoe reads on-screen active-speaker labels to attach real names to transcript speakers.</string>
+</dict>
+</plist>

@@ -11,6 +11,7 @@
 /tomoe-gui
 /hotkey-test
 /monitor-test
+/build/
 
 # Debug audio dumps
 *.pcm
