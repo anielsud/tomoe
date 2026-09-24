@@ -2,6 +2,7 @@ package speaker
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 )
@@ -154,8 +155,34 @@ func (t *Tracker) SetHintForRecent(name string, maxAge time.Duration) bool {
 	if len(t.centroids) == 0 || t.lastAssignedAt.IsZero() || t.nowFn().Sub(t.lastAssignedAt) > maxAge {
 		return false
 	}
+	if existing := t.hints[t.lastAssignedIdx]; existing != "" && isTruncationOf(name, existing) {
+		// A meeting app's active-speaker tile can truncate a long name
+		// (e.g. "Nazanin Rame…") on one read and show it in full on
+		// another. Without this check, whichever OCR read happens to
+		// land last wins unconditionally -- a later truncated read
+		// would silently clobber an already-attached, more complete
+		// name. Keep the better one; still report success since a
+		// recent-enough assignment to attach to was found either way.
+		return true
+	}
 	t.hints[t.lastAssignedIdx] = name
 	return true
+}
+
+// isTruncationOf reports whether short reads like a truncated prefix
+// of long: long, case-insensitively and after trimming a trailing
+// ellipsis/whitespace from either side, starts with short, and isn't
+// itself shorter than short. This only ever protects a more-or-
+// equally-complete existing hint from being overwritten by a shorter
+// one -- it never blocks a genuine correction to a longer/different
+// name (long being shorter than short already fails the check).
+func isTruncationOf(short, long string) bool {
+	short = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(short), "…"))
+	long = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(long), "…"))
+	if short == "" || long == "" || len(short) > len(long) {
+		return false
+	}
+	return strings.HasPrefix(strings.ToLower(long), strings.ToLower(short))
 }
 
 // Reset clears all speaker centroids and hints.
