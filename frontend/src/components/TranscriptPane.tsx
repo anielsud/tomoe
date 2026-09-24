@@ -46,7 +46,7 @@ export default function TranscriptPane({ segments, isRecording }: Props) {
   return (
     <div className="transcript-pane">
       {segments.map((seg) => (
-        <div key={seg.id} className={`segment ${seg.status === 'pending' ? 'segment-pending' : ''}`}>
+        <div key={seg.id} className={`segment ${seg.status ? 'segment-pending' : ''}`}>
           <span className="timestamp">[{formatTime(seg.start_time)}]</span>
           <span className={`speaker ${speakerClass(seg.speaker)}`}>
             {seg.speaker}:
@@ -55,6 +55,11 @@ export default function TranscriptPane({ segments, isRecording }: Props) {
             <span className="lang-badge">{seg.language.toUpperCase()}</span>
           )}
           <span className="text">{seg.text}</span>
+          {seg.status === 'live' && (
+            <span className="refining-indicator" title="Still speaking — this line will keep growing">
+              listening…
+            </span>
+          )}
           {seg.status === 'pending' && (
             <span className="refining-indicator" title="Still refining this line for accuracy">
               refining…

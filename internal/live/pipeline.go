@@ -16,6 +16,15 @@ import (
 const (
 	vadSampleRate = 16000
 	vadWindowSize = 512
+
+	// minLiveAudioSamples gates the first live-partial emission (see
+	// liveState/emitLivePartial): a speaker assignment needs enough
+	// accumulated speech for a stable embedding, so pass 1's partial
+	// text is buffered silently until this much speech has accumulated,
+	// then shown (and grows from there on every subsequent partial).
+	// Half a second is imperceptible as a delay but avoids computing a
+	// speaker off a handful of frames.
+	minLiveAudioSamples = vadSampleRate / 2
 )
 
 // refinementJob is one pass-2 request: re-decode a completed segment's
@@ -29,6 +38,23 @@ type refinementJob struct {
 	endTime   float64
 	source    SourceType
 	pass1Text string // fallback if refinement produces nothing usable
+}
+
+// liveState tracks pass 1's in-progress utterance for one pipeline: the
+// growing partial text, whether (and what) a live segment has already
+// been shown for it, and the audio accumulated so far for an early —
+// but, once decided, stable — speaker assignment. Zero value is "no
+// utterance in progress."
+type liveState struct {
+	partial   string
+	id        string
+	speaker   string
+	startTime float64
+	audio     []float32
+}
+
+func (ls *liveState) reset() {
+	*ls = liveState{}
 }
 
 // processPipeline runs a single source pipeline: reads windows → VAD → transcribe → emit segments.
@@ -73,7 +99,7 @@ func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCaptu
 			defer streamSess.Close()
 		}
 	}
-	var partial string
+	var live liveState
 
 	windows := sc.Windows()
 	for {
@@ -81,49 +107,108 @@ func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCaptu
 		case <-ctx.Done():
 			// Flush VAD and process remaining segments
 			vad.Flush()
-			c.drainVAD(vad, source, streamSess, &partial)
+			c.drainVAD(vad, source, streamSess, &live)
 			return
 
 		case window, ok := <-windows:
 			if !ok {
 				// Channel closed — capturer stopped
 				vad.Flush()
-				c.drainVAD(vad, source, streamSess, &partial)
+				c.drainVAD(vad, source, streamSess, &live)
 				return
 			}
 
 			// Feed window to VAD (must be exactly windowSize)
 			if len(window) == vadWindowSize {
 				vad.AcceptWaveform(window)
+				isSpeech := vad.IsSpeech()
 
 				if streamSess != nil {
+					if isSpeech {
+						// Only accumulate speech, not silence -- keeps
+						// the eventual speaker embedding clean.
+						live.audio = append(live.audio, window...)
+					}
 					text, err := streamSess.Feed(window)
-					if err == nil && text != partial {
-						partial = text
+					if err == nil && text != live.partial {
+						live.partial = text
+						if text != "" {
+							c.emitLivePartial(source, &live, text)
+						}
+					}
+				}
+
+				// Signal activity when VAD detects ongoing speech
+				if isSpeech {
+					select {
+					case c.activityCh <- struct{}{}:
+					default:
 					}
 				}
 			}
 
-			// Signal activity when VAD detects ongoing speech
-			if vad.IsSpeech() {
-				select {
-				case c.activityCh <- struct{}{}:
-				default:
-				}
-			}
-
 			// Process any completed speech segments
-			c.drainVAD(vad, source, streamSess, &partial)
+			c.drainVAD(vad, source, streamSess, &live)
 		}
 	}
 }
 
+// emitLivePartial publishes pass 1's growing text for the utterance in
+// progress: the first call (once enough audio has accumulated for a
+// speaker assignment — see minLiveAudioSamples) creates a new "live"
+// segment; every call after that updates the same segment ID in place.
+// "live" (not "pending") signals to consumers that this text may still
+// change because the person is still talking, not just because pass 2
+// hasn't run yet — see drainVAD, which is what actually transitions a
+// segment to "pending" once the utterance itself is done.
+func (c *Coordinator) emitLivePartial(source SourceType, live *liveState, text string) {
+	if live.id == "" {
+		if len(live.audio) < minLiveAudioSamples {
+			return
+		}
+		live.id = c.nextSegID()
+		live.speaker = c.assignSpeaker(source, live.audio)
+		live.startTime = c.elapsed()
+
+		seg := session.Segment{
+			ID:        live.id,
+			Speaker:   live.speaker,
+			Text:      text,
+			StartTime: live.startTime,
+			EndTime:   c.elapsed(),
+			Source:    string(source),
+			Language:  "en", // the streaming engine is English-only today
+			Status:    "live",
+		}
+		select {
+		case c.segmentCh <- seg:
+		default:
+		}
+		return
+	}
+
+	seg := session.Segment{
+		ID:        live.id,
+		Speaker:   live.speaker,
+		Text:      text,
+		StartTime: live.startTime,
+		EndTime:   c.elapsed(),
+		Source:    string(source),
+		Language:  "en",
+		Status:    "live",
+	}
+	select {
+	case c.segmentUpdateCh <- seg:
+	default:
+	}
+}
+
 // drainVAD transcribes all completed speech segments from the VAD.
-// streamSess/partial are pass 1's streaming state (see processPipeline)
+// streamSess/live are pass 1's streaming state (see processPipeline)
 // -- nil/unused when two-pass transcription isn't configured, in which
 // case this behaves exactly as before: one synchronous decode per
 // completed segment, emitted as final immediately.
-func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceType, streamSess transcribe.StreamingSession, partial *string) {
+func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceType, streamSess transcribe.StreamingSession, live *liveState) {
 	for !vad.IsEmpty() {
 		segment := vad.Front()
 		vad.Pop()
@@ -137,18 +222,33 @@ func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceT
 		duration := float64(len(samples)) / vadSampleRate
 		endTime := c.elapsed()
 		startTime := endTime - duration
-		spk := c.assignSpeaker(source, samples)
 
 		if streamSess != nil {
-			text := strings.TrimSpace(*partial)
+			text := strings.TrimSpace(live.partial)
 			streamSess.Reset()
-			*partial = ""
 
 			if text == "" {
+				live.reset()
 				continue
 			}
 
-			id := c.nextSegID()
+			// Reuse the speaker already assigned when the live partial
+			// first appeared, if there was one — recomputing from this
+			// segment's full audio would risk a different "Person N"
+			// for the very utterance that was already shown under the
+			// first one, and would double-count this utterance into
+			// the tracker's centroid. An utterance that finished before
+			// accumulating minLiveAudioSamples never got a live partial
+			// at all, so falls back to computing it fresh here, exactly
+			// as before live partials existed.
+			id := live.id
+			spk := live.speaker
+			wasLive := id != ""
+			if !wasLive {
+				id = c.nextSegID()
+				spk = c.assignSpeaker(source, samples)
+			}
+
 			seg := session.Segment{
 				ID:        id,
 				Speaker:   spk,
@@ -156,12 +256,19 @@ func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceT
 				StartTime: startTime,
 				EndTime:   endTime,
 				Source:    string(source),
-				Language:  "en", // the streaming engine is English-only today
+				Language:  "en",
 				Status:    "pending",
 			}
-			select {
-			case c.segmentCh <- seg:
-			default:
+			if wasLive {
+				select {
+				case c.segmentUpdateCh <- seg:
+				default:
+				}
+			} else {
+				select {
+				case c.segmentCh <- seg:
+				default:
+				}
 			}
 
 			select {
@@ -174,9 +281,13 @@ func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceT
 				// Refinement queue is backed up -- pass 1's text stands
 				// as final rather than blocking the live pipeline.
 			}
+
+			live.reset()
 		} else {
 			// Single-pass (no streaming engine configured): unchanged
 			// from before this feature existed.
+			spk := c.assignSpeaker(source, samples)
+
 			c.transcribeMu.Lock()
 			result, err := c.cfg.Engine.TranscribeDirect(samples)
 			c.transcribeMu.Unlock()

@@ -570,11 +570,27 @@ flow against a real Teams window confirming no regression.
      streaming Zipformer, int8
      (`sherpa-onnx-streaming-zipformer-en-2023-06-26`, ~70MB) — a real,
      verified GitHub release asset, not guessed. `internal/live`'s
-     per-source pipeline feeds it the same VAD windows as before, polls
-     for partial text on every window, and — this is the actual fix —
-     the moment a VAD segment completes, emits it *immediately* using
-     whatever partial text pass 1 has already built up, tagged
-     `Status: "pending"`, instead of waiting on any decode at all.
+     per-source pipeline feeds it the same VAD windows as before,
+     polling for partial text on every window — and, unlike the first
+     version of this feature, actually publishes that growing text
+     live, word-by-word, while the person is still talking
+     (`Segment.Status: "live"`), not just once the utterance ends.
+     Getting this part right needed a speaker label attached to it too
+     — see `liveState`/`emitLivePartial` in `pipeline.go`: the first
+     `minLiveAudioSamples` (0.5s) of speech is buffered silently so
+     there's enough audio for a real embedding, a speaker is assigned
+     *once* from that, and every subsequent partial reuses it under
+     the same segment ID rather than re-assigning (which risked
+     flicker, and double-counting the utterance into the speaker
+     tracker's centroid). An utterance that finishes before 0.5s
+     never gets a `"live"` line at all — it falls straight to the
+     `"pending"` step below, exactly like the very first version of
+     this feature did for everything.
+   - **Segment completion:** when the VAD segment actually ends, the
+     same ID (or a new one, for a short utterance with no `"live"`
+     phase) is updated to `Status: "pending"` with pass 1's finished
+     text — instead of waiting on any decode at all, since pass 1 has
+     already been building this text the whole time.
    - **Pass 2 (higher fidelity):** the completed segment's audio is
      also queued to a background `refineWorker`, which re-decodes it
      through the existing Parakeet engine (full, non-streaming context
@@ -583,6 +599,11 @@ flow against a real Teams window confirming no regression.
      superseding pass 1's text. A refinement failure/empty result
      falls back to keeping pass 1's text as final rather than leaving
      the segment stuck "pending" forever.
+   - So one utterance can go through up to three states under one
+     stable ID: `"live"` (growing, still being said) →
+     `"pending"` (said, unrefined) → `""` (final, refined) — each a
+     `SegmentUpdates()` revision of the last, except the very first
+     emission of the utterance, which is a new `Segments()` entry.
    - Two deliberately separate models, not one model with different
      settings: they have genuinely different jobs (online vs. offline
      decoding), and Parakeet's own instance/settings stay untouched for
@@ -595,35 +616,26 @@ flow against a real Teams window confirming no regression.
      non-English session (the streaming model is English-only),
      `StreamingEngine` is left nil and the pipeline behaves exactly as
      before this existed — one synchronous decode per segment, no
-     "pending" state, verified via the pre-existing test suite passing
-     unchanged.
-   - Frontend: `Segment.status` (`"pending"` | `""`), a new
+     `"live"`/`"pending"` states, verified via the pre-existing test
+     suite passing unchanged.
+   - Frontend: `Segment.status` (`"live"` | `"pending"` | `""`), a new
      `transcript:segment:update` Wails event, and `TranscriptPane`
-     dims pending text with a "refining…" label until the update
-     arrives.
-   - Verified: real audio through the streaming engine (a LibriSpeech
-     test clip, word-by-word partial output matching the known
-     transcript exactly) confirms pass 1 genuinely streams; the
-     two-pass orchestration logic (`refineWorker`) is unit-tested
-     (success, engine-error fallback, blank-result fallback) without
-     needing a live call; and a full end-to-end run of the real
-     `live.Coordinator` (real VAD, real streaming engine, real Parakeet,
-     a WAV file standing in for the mic) confirmed the whole chain:
-     `pending` text lands the instant the segment completes, a
-     properly-punctuated `final` update follows shortly after.
-   - **Known gap, not this PR:** pass 1's text still only becomes
-     *visible* once a VAD segment completes (fast now, and no longer
-     blocked behind pass 2's decode — the actual fix for text arriving
-     in a delayed burst) — not word-by-word *while the person is still
-     talking*. `processPipeline` already has everything a true
-     mid-utterance live line would need (`streamSess.Feed` is already
-     called continuously and already has the growing partial text
-     sitting in a local variable); it just isn't published anywhere
-     until completion. The reason it's not done here: showing a live
-     line needs a speaker label attached to it too, and the honest
-     one requires enough accumulated audio for a stable embedding —
-     doing this without flicker (the label changing once real
-     audio is available) needs a bit more design than fit in this pass.
+     dims non-final text with a "listening…" (`"live"`) or
+     "refining…" (`"pending"`) label until the next update arrives.
+   - Verified: real audio through the streaming engine alone (a
+     LibriSpeech test clip, word-by-word partial output matching the
+     known transcript exactly); the two-pass orchestration logic
+     (`refineWorker`) unit-tested (success, engine-error fallback,
+     blank-result fallback) and `emitLivePartial`/`liveState`
+     unit-tested (buffers below the audio threshold, first emission
+     creates the segment, later calls update it in place, `reset`
+     zeroes everything) — all without needing a live call; and a full
+     end-to-end run of the real `live.Coordinator` (real VAD, real
+     streaming engine, real Parakeet, a WAV file standing in for the
+     mic) confirmed the whole three-state chain for real: `"live"`
+     text genuinely grew word by word under one ID, `"pending"`
+     landed the instant the segment completed, and a
+     properly-punctuated `""` update followed shortly after.
    - **Known limitation, not fixed:** `Coordinator.Stop()` returns as
      soon as its pipelines finish, not after refinement fully drains —
      matching the existing "StopSession returns immediately, save runs

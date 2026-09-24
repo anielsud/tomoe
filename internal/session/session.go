@@ -26,9 +26,12 @@ type Segment struct {
 	Source    string  `json:"source"`             // "mic" or "monitor"
 	Language  string  `json:"language,omitempty"` // ISO 639-1 code: "en", "bn", etc.
 	// Status is "" (default, meaning final -- also what every segment
-	// from before this field existed implicitly means) or "pending":
-	// Text is a fast, lower-fidelity realtime pass and a higher-quality
-	// re-decode is still in flight. A later update carrying the same ID
-	// and Status "" supersedes it. See internal/live's two-pass pipeline.
+	// from before this field existed implicitly means), "live" (the
+	// person is still talking; Text is pass 1's partial hypothesis and
+	// will keep growing under the same ID), or "pending" (the utterance
+	// is done, Text is pass 1's finished-but-unrefined text, and a
+	// higher-quality re-decode is in flight). A later update carrying
+	// the same ID and Status "" supersedes either. See internal/live's
+	// two-pass pipeline.
 	Status string `json:"status,omitempty"`
 }
