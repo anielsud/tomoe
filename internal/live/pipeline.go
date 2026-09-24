@@ -366,6 +366,10 @@ func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) string
 		return "You"
 	}
 
+	if c.cfg.SkipMonitorDiarization {
+		return "System Audio"
+	}
+
 	// For monitor source, try speaker embedding + clustering
 	if c.cfg.Embedder != nil && c.cfg.Tracker != nil {
 		embedding, err := c.cfg.Embedder.Extract(samples)

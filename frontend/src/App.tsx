@@ -10,7 +10,7 @@ import VideoHintActivity from './components/VideoHintActivity'
 import VideoHintReview from './components/VideoHintReview'
 import { useTranscript } from './hooks/useTranscript'
 import { useSession } from './hooks/useSession'
-import { DeviceInfo, Session } from './types'
+import { DeviceInfo, Session, AudioSourceView } from './types'
 
 type View = 'live' | 'sessions' | 'settings' | 'videohints';
 
@@ -20,6 +20,7 @@ function App() {
   const [monitorDevice, setMonitorDevice] = useState('');
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
   const [monitors, setMonitors] = useState<DeviceInfo[]>([]);
+  const [audioSources, setAudioSources] = useState<AudioSourceView[]>([]);
   const [languages, setLanguages] = useState<string[]>(['en']);
   const [selectedLang, setSelectedLang] = useState('en');
   const [systemAudioMode, setSystemAudioMode] = useState<'manual' | 'auto'>('manual');
@@ -48,6 +49,16 @@ function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isRecording, micDevice, monitorDevice]);
 
+  // Keep the macOS audio-source picker current while it's actually
+  // being looked at: refreshing during an active recording would just
+  // change options out from under a disabled, already-committed
+  // picker for no benefit.
+  useEffect(() => {
+    if (systemAudioMode !== 'auto' || isRecording) return;
+    const interval = setInterval(loadAudioSources, 3000);
+    return () => clearInterval(interval);
+  }, [systemAudioMode, isRecording]);
+
   async function loadDevices() {
     try {
       if (window.go?.backend?.App) {
@@ -62,13 +73,34 @@ function App() {
         }
         try {
           const mode = await window.go.backend.App.SystemAudioMode();
-          if (mode === 'auto' || mode === 'manual') setSystemAudioMode(mode);
+          if (mode === 'auto' || mode === 'manual') {
+            setSystemAudioMode(mode);
+            if (mode === 'auto') await loadAudioSources();
+          }
         } catch {
           // Method may not exist in older builds — default to 'manual'
         }
       }
     } catch (e) {
       console.error('Failed to load devices:', e);
+    }
+  }
+
+  // macOS's audio-source list changes as apps start/stop playing audio
+  // (unlike Linux's fairly static PulseAudio device list), so this is
+  // called on load and polled periodically while it's actually visible
+  // and selectable — see the effect below.
+  async function loadAudioSources() {
+    try {
+      if (!window.go?.backend?.App?.ListAudioSources) return;
+      const sources = await window.go.backend.App.ListAudioSources();
+      setAudioSources(sources || []);
+      // Default to "Everything" (matches the old auto-detect's
+      // always-on-if-available behavior) rather than leaving the
+      // picker on "No System Audio" until the user notices it.
+      setMonitorDevice(prev => prev || 'everything');
+    } catch (e) {
+      console.error('Failed to load audio sources:', e);
     }
   }
 
@@ -134,6 +166,7 @@ function App() {
           onMonitorChange={setMonitorDevice}
           disabled={isRecording}
           systemAudioMode={systemAudioMode}
+          audioSources={audioSources}
         />
         {languages.length > 1 && (
           <select

@@ -410,9 +410,15 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	}
 	cfg.MicCapturer = audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, 128)
 
-	// Set up monitor capturer (optional) — the second audio source
-	// (system/PulseAudio monitor on Linux, the meeting window's guest
-	// audio via ScreenCaptureKit on macOS). See internal/meetingaudio.
+	// Set up monitor capturer (optional) — the second audio source: a
+	// PulseAudio monitor device on Linux (config.toml's monitor_device,
+	// falling back to the system default if empty), or on macOS a
+	// specific app's PID or "everything" (see internal/meetingaudio) --
+	// the CLI daemon has no interactive picker, so this is
+	// config.toml-driven; leaving monitor_device empty means "no
+	// monitor" on macOS specifically (a PID wouldn't survive an app
+	// restart anyway), unlike Linux's "use the default device" meaning
+	// for the same empty value.
 	monCapturer, err := meetingaudio.NewMonitorSource(d.cfg.Meeting.MonitorDevice)
 	if err != nil {
 		cfg.MicCapturer.Close()
@@ -420,6 +426,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	}
 	if monCapturer != nil {
 		cfg.MonitorCapturer = monCapturer
+		cfg.SkipMonitorDiarization = d.cfg.Meeting.MonitorDevice == "everything"
 	}
 
 	// Reset speaker tracker

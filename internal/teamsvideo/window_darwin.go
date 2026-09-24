@@ -85,6 +85,45 @@ static int32_t window_number(CFArrayRef windows, CFIndex i) {
     return dict_get_int(w, kCGWindowNumber);
 }
 
+static int32_t window_owner_pid(CFArrayRef windows, CFIndex i) {
+    CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
+    return dict_get_int(w, kCGWindowOwnerPID);
+}
+
+static int32_t window_layer(CFArrayRef windows, CFIndex i) {
+    CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
+    return dict_get_int(w, kCGWindowLayer);
+}
+
+// kCGWindowBounds is itself a nested dict (a CGRect's dictionary
+// representation), not a plain number -- these two need
+// CGRectMakeWithDictionaryRepresentation rather than dict_get_int.
+static double window_bounds_width(CFArrayRef windows, CFIndex i) {
+    CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
+    CFDictionaryRef bounds = (CFDictionaryRef)CFDictionaryGetValue(w, kCGWindowBounds);
+    if (bounds == NULL) {
+        return 0;
+    }
+    CGRect rect;
+    if (!CGRectMakeWithDictionaryRepresentation(bounds, &rect)) {
+        return 0;
+    }
+    return rect.size.width;
+}
+
+static double window_bounds_height(CFArrayRef windows, CFIndex i) {
+    CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
+    CFDictionaryRef bounds = (CFDictionaryRef)CFDictionaryGetValue(w, kCGWindowBounds);
+    if (bounds == NULL) {
+        return 0;
+    }
+    CGRect rect;
+    if (!CGRectMakeWithDictionaryRepresentation(bounds, &rect)) {
+        return 0;
+    }
+    return rect.size.height;
+}
+
 static void release_windows(CFArrayRef windows) {
     CFRelease(windows);
 }
@@ -146,4 +185,51 @@ func FindMeetingWindow() (WindowID, error) {
 		return WindowID(num), nil
 	}
 	return 0, fmt.Errorf("teamsvideo: no Microsoft Teams meeting window found")
+}
+
+// FindWindowForPID returns the CGWindowID of the largest on-screen,
+// normal-layer (kCGWindowLayer == 0 — excludes menu-bar items, the
+// Dock, and other non-content overlays) window owned by pid, for
+// tapping a specific app's audio when the user picks it from
+// internal/audiosources.ListActive rather than relying on
+// FindMeetingWindow's Teams-specific title heuristic.
+func FindWindowForPID(pid int32) (WindowID, error) {
+	windows := C.list_windows()
+	if C.cfarray_is_null(windows) != 0 {
+		return 0, fmt.Errorf("teamsvideo: CGWindowListCopyWindowInfo returned nil")
+	}
+	defer C.release_windows(windows)
+
+	n := int(C.window_count(windows))
+	var best WindowID
+	var bestArea int64 = -1
+
+	for i := 0; i < n; i++ {
+		idx := C.CFIndex(i)
+
+		if int32(C.window_owner_pid(windows, idx)) != pid {
+			continue
+		}
+		if int32(C.window_layer(windows, idx)) != 0 {
+			continue
+		}
+
+		num := int32(C.window_number(windows, idx))
+		if num < 0 {
+			continue
+		}
+
+		w := int64(C.window_bounds_width(windows, idx))
+		h := int64(C.window_bounds_height(windows, idx))
+		area := w * h
+		if area > bestArea {
+			bestArea = area
+			best = WindowID(num)
+		}
+	}
+
+	if bestArea < 0 {
+		return 0, fmt.Errorf("teamsvideo: no on-screen window found for PID %d", pid)
+	}
+	return best, nil
 }

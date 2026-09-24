@@ -15,6 +15,10 @@ import (
 // mic's malgo-based Capturer does. Also resamples from ScreenCaptureKit's
 // 48kHz down to audio.CaptureSampleRate, since nothing downstream (VAD,
 // Parakeet TDT) resamples on its own.
+//
+// Despite the name, also backs the system-wide ("Everything") capture
+// path (see NewSystemCapturer) — the wrapping logic here is identical
+// either way; only which Tap it wraps differs.
 type WindowCapturer struct {
 	tap *Tap
 
@@ -24,10 +28,19 @@ type WindowCapturer struct {
 }
 
 // NewWindowCapturer creates a Capturer-shaped wrapper around a Tap for
-// windowID (e.g. from teamsvideo.FindMeetingWindow).
+// windowID (e.g. from teamsvideo.FindMeetingWindow or
+// teamsvideo.FindWindowForPID).
 func NewWindowCapturer(windowID uint32) *WindowCapturer {
 	wc := &WindowCapturer{}
 	wc.tap = NewTap(windowID, wc.onSamples)
+	return wc
+}
+
+// NewSystemCapturer creates a Capturer-shaped wrapper around a
+// system-wide Tap (the source picker's "Everything" option).
+func NewSystemCapturer() *WindowCapturer {
+	wc := &WindowCapturer{}
+	wc.tap = NewSystemTap(wc.onSamples)
 	return wc
 }
 

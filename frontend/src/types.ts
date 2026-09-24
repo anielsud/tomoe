@@ -43,6 +43,13 @@ export interface DeviceInfo {
   DeviceType: number; // 0=Input, 1=Monitor
 }
 
+// macOS's second-audio-source picker option (see ListAudioSources).
+// "everything" is always present; every other id is a decimal PID.
+export interface AudioSourceView {
+  id: string;
+  name: string;
+}
+
 // Wails serializes Go structs as JSON using Go field names (PascalCase)
 // since Config uses `toml` tags, not `json` tags.
 export interface Config {

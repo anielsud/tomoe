@@ -25,8 +25,13 @@
 // the caller must free.
 void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_error);
 
+// Same as guestaudio_start_tap, but captures the whole system's audio
+// output (the first display SCShareableContent reports) instead of one
+// window's -- for the source picker's "Everything" option.
+void *guestaudio_start_system_tap(uintptr_t go_handle, char **out_error);
+
 // Stops capture and releases the tap. Safe to call exactly once per
-// successful guestaudio_start_tap call.
+// successful guestaudio_start_tap/guestaudio_start_system_tap call.
 void guestaudio_stop_tap(void *tap);
 
 #endif

@@ -118,35 +118,26 @@ static void guestaudio_ensure_app_context(void) {
     // delay -- paid only once per process, on the very first tap start
     // -- is the pragmatic fix. Matches the "known reliability gap"
     // already noted in docs/macos-support.md, root-caused here.
-    usleep(150000); // 150ms
+    //
+    // 150ms was found live to still be flaky -- a fresh process's very
+    // first tap start (this time guestaudio_start_system_tap, added for
+    // the "Everything" source-picker option) crashed on the first
+    // attempt and succeeded on an immediate retry, the exact signature
+    // above. Bumped to 500ms: still a one-time, barely-perceptible cost
+    // (paid once per process, and only during the same beat as the
+    // first Start click's other session-startup work anyway), for a
+    // real reliability improvement over a value already proven
+    // insufficient in practice.
+    usleep(500000); // 500ms
   });
 }
 
-void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_error) {
-  guestaudio_ensure_app_context();
-
-  __block SCWindow *targetWindow = nil;
-  dispatch_semaphore_t findSem = dispatch_semaphore_create(0);
-  [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
-                                                                  NSError *error) {
-    if (content != nil) {
-      for (SCWindow *w in content.windows) {
-        if (w.windowID == (CGWindowID)window_id) {
-          targetWindow = w;
-          break;
-        }
-      }
-    }
-    dispatch_semaphore_signal(findSem);
-  }];
-  dispatch_semaphore_wait(findSem, DISPATCH_TIME_FOREVER);
-
-  if (targetWindow == nil) {
-    *out_error = strdup("window not found in SCShareableContent");
-    return NULL;
-  }
-
-  SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:targetWindow];
+// guestaudio_start_stream is the shared tail of guestaudio_start_tap and
+// guestaudio_start_system_tap: given a filter (window- or
+// display-scoped), build the config/output/stream, start capture, and
+// hand a retained reference back to Go. Only the filter-building step
+// differs between "tap one app's window" and "tap everything."
+static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handle, char **out_error) {
   SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
   config.capturesAudio = YES;
   config.excludesCurrentProcessAudio = YES;
@@ -184,6 +175,65 @@ void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_er
   // hands the *stream* reference to Go/C as a manually-managed pointer;
   // Go must call guestaudio_stop_tap exactly once to balance it.
   return (void *)CFBridgingRetain(stream);
+}
+
+void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_error) {
+  guestaudio_ensure_app_context();
+
+  __block SCWindow *targetWindow = nil;
+  dispatch_semaphore_t findSem = dispatch_semaphore_create(0);
+  [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
+                                                                  NSError *error) {
+    if (content != nil) {
+      for (SCWindow *w in content.windows) {
+        if (w.windowID == (CGWindowID)window_id) {
+          targetWindow = w;
+          break;
+        }
+      }
+    }
+    dispatch_semaphore_signal(findSem);
+  }];
+  dispatch_semaphore_wait(findSem, DISPATCH_TIME_FOREVER);
+
+  if (targetWindow == nil) {
+    *out_error = strdup("window not found in SCShareableContent");
+    return NULL;
+  }
+
+  SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:targetWindow];
+  return guestaudio_start_stream(filter, go_handle, out_error);
+}
+
+// guestaudio_start_system_tap captures the whole system's audio output
+// ("Everything" in the source picker), not tied to any one app --
+// same proven SCShareableContent/SCStream machinery as
+// guestaudio_start_tap, just a display-scoped filter (all on-screen
+// content, nothing excluded) instead of a single-window one. Picks the
+// first display SCShareableContent reports; on a multi-display setup,
+// audio from an app whose window is on a different display may not be
+// captured -- not something this has been tested against.
+void *guestaudio_start_system_tap(uintptr_t go_handle, char **out_error) {
+  guestaudio_ensure_app_context();
+
+  __block SCDisplay *targetDisplay = nil;
+  dispatch_semaphore_t findSem = dispatch_semaphore_create(0);
+  [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
+                                                                  NSError *error) {
+    if (content != nil && content.displays.count > 0) {
+      targetDisplay = content.displays.firstObject;
+    }
+    dispatch_semaphore_signal(findSem);
+  }];
+  dispatch_semaphore_wait(findSem, DISPATCH_TIME_FOREVER);
+
+  if (targetDisplay == nil) {
+    *out_error = strdup("no display found in SCShareableContent");
+    return NULL;
+  }
+
+  SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:targetDisplay excludingWindows:@[]];
+  return guestaudio_start_stream(filter, go_handle, out_error);
 }
 
 void guestaudio_stop_tap(void *tap) {

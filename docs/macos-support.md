@@ -160,6 +160,21 @@ backtrace. Re-validated clean (401 callbacks / 384,960 samples / 8.0s at
 consecutive runs at full speed, no debugger, real Screen Recording
 permission grant (not partial/inherited).
 
+**#2 recurred later, live, and 150ms turned out not to be enough.**
+Testing the "Everything" system-wide capture option (see the
+audio-source picker below) hit the *exact* same SIGSEGV signature on a
+fresh process's very first tap start — this time
+`guestaudio_start_system_tap`, added well after the above was believed
+fixed — and an immediate retry in a new process succeeded, the same
+"crashes at full speed, fine under anything slower" fingerprint as
+before. Not a new bug in the new code path: both tap-starting
+functions share `guestaudio_ensure_app_context()`'s settle delay, and
+150ms was simply an under-sized guess for how long the window-server
+handshake actually takes on this hardware/load. Bumped to 500ms — still
+a one-time, barely-perceptible cost, but with real margin this time
+rather than a value that had only been "validated clean" by not
+happening to hit the unlucky timing in that testing session.
+
 ## Status
 
 ### Phase 1 — CLI dictation (`tomoe`): done
