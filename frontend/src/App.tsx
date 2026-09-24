@@ -6,11 +6,12 @@ import SessionList from './components/SessionList'
 import SettingsPanel from './components/SettingsPanel'
 import StatusBar from './components/StatusBar'
 import ExportDialog from './components/ExportDialog'
+import VideoHintReview from './components/VideoHintReview'
 import { useTranscript } from './hooks/useTranscript'
 import { useSession } from './hooks/useSession'
 import { DeviceInfo, Session } from './types'
 
-type View = 'live' | 'sessions' | 'settings';
+type View = 'live' | 'sessions' | 'settings' | 'videohints';
 
 function App() {
   const [view, setView] = useState<View>('live');
@@ -159,6 +160,15 @@ function App() {
         >
           &#x1F4CB;
         </button>
+        {systemAudioMode === 'auto' && (
+          <button
+            className="btn-icon"
+            title="Pending Screenshots (macOS meeting-label review)"
+            onClick={() => setView(view === 'videohints' ? 'live' : 'videohints')}
+          >
+            &#x1F4F7;
+          </button>
+        )}
         <button
           className="btn-icon"
           title="Settings"
@@ -178,6 +188,10 @@ function App() {
 
       {view === 'settings' && (
         <SettingsPanel />
+      )}
+
+      {view === 'videohints' && (
+        <VideoHintReview />
       )}
 
       <StatusBar
