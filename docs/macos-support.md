@@ -247,6 +247,37 @@ macOS menu (likely a manual popover rather than assigning
 `NSStatusItem.menu` directly), unrelated to the `RunWithExternalLoop`
 change; the menu itself works fine when actually clicked by a human.
 
+3. **`/Applications/Tomoe.app` losing TCC grants across rebuilds:**
+   `make install-gui-mac` (packages `build-gui`'s binary into a real
+   `.app` bundle and installs it, for a normal Dock/Launchpad launch —
+   see below) originally ad-hoc signed the bundle
+   (`codesign --sign -`). Ad-hoc signatures have no consistent identity
+   across builds, and macOS ties Screen Recording/Microphone/
+   Accessibility grants to the app's signing identity — found live,
+   mid-testing: System Settings kept showing "Tomoe" as
+   enabled for Screen Recording, yet a freshly rebuilt, freshly
+   reinstalled copy still couldn't see meeting windows or their titles,
+   because the identity backing that grant no longer matched the
+   current binary. (A separate red herring surfaced during the same
+   session: running the binary directly from a terminal, rather than
+   via Dock/Launchpad, "worked" — but only because the terminal's own
+   *already-granted* Screen Recording permission covers processes it
+   launches directly; that says nothing about whether the installed
+   `.app` itself has a working grant.) Fixed with a new
+   `make dev-cert-mac` target: creates a stable, self-signed local
+   code-signing identity ("Tomoe Dev Signing") once in the login
+   keychain (`openssl req -x509 ... -addext extendedKeyUsage=codeSigning`
+   + `security import`), and `install-gui-mac` now signs every build
+   with that same identity (`codesign --sign "Tomoe Dev Signing"`)
+   instead of ad-hoc. Verified: the new identity signs correctly and
+   the reinstalled bundle launches cleanly via a normal Dock launch.
+   **Not yet verified end-to-end:** whether TCC grants actually survive
+   a *second* rebuild now — switching to this identity is itself a
+   one-time identity change, so the very next grant (Screen Recording,
+   already re-requested once during this fix) is expected regardless;
+   the real test is whether a rebuild *after* that still works without
+   asking again.
+
 ### Phase 2 — meeting mode
 
 **Dual-source audio capture: done.** New `internal/meetingaudio`

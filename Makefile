@@ -1,4 +1,4 @@
-.PHONY: dev-deps dev-tools stage-frontend fmt lint vet test test-integration test-coverage build build-gui build-cuda package install install-gui-mac install-gpu clean download-model dev-gui
+.PHONY: dev-deps dev-tools stage-frontend fmt lint vet test test-integration test-coverage build build-gui build-cuda package install dev-cert-mac install-gui-mac install-gpu clean download-model dev-gui
 
 BINARY      := tomoe
 GUI_BINARY  := tomoe-gui
@@ -15,6 +15,14 @@ TOMOE_LIB    := $(HOME)/.local/share/tomoe/lib
 APP_NAME         := Tomoe
 APP_BUNDLE       := build/darwin/$(APP_NAME).app
 APPLICATIONS_DIR := /Applications
+# A stable local identity, not ad-hoc (`codesign --sign -`): ad-hoc
+# signatures have no consistent identity across rebuilds, and macOS
+# TCC (Screen Recording/Microphone/etc. grants) can silently stop
+# honoring a "Tomoe" entry the Settings UI still shows as enabled once
+# the signature backing it changes -- exactly the failure mode hit
+# testing this. Signing every build with the same self-signed identity
+# (see dev-cert-mac) keeps grants valid across rebuilds.
+CODESIGN_IDENTITY := Tomoe Dev Signing
 
 UNAME := $(shell uname)
 
@@ -136,7 +144,27 @@ ifeq ($(HAS_WEBKIT),yes)
 	install -m 755 $(GUI_BINARY) $(INSTALL_DIR)/$(GUI_BINARY)
 endif
 
-install-gui-mac: build-gui ## Rebuild the GUI and (re)install /Applications/Tomoe.app + Dock icon (macOS only)
+dev-cert-mac: ## One-time: create a stable local code-signing identity so Tomoe.app's TCC grants survive rebuilds (macOS only)
+ifneq ($(UNAME),Darwin)
+	$(error dev-cert-mac is macOS-only)
+endif
+	@if security find-certificate -c "$(CODESIGN_IDENTITY)" >/dev/null 2>&1; then \
+		echo "'$(CODESIGN_IDENTITY)' already exists in the login keychain, skipping."; \
+	else \
+		echo "Creating local code-signing identity '$(CODESIGN_IDENTITY)'..."; \
+		TMPD=$$(mktemp -d) && \
+		openssl req -x509 -newkey rsa:2048 -keyout $$TMPD/key.pem -out $$TMPD/cert.pem -days 3650 -nodes \
+		  -subj "/CN=$(CODESIGN_IDENTITY)" \
+		  -addext "basicConstraints=critical,CA:true" \
+		  -addext "keyUsage=critical,digitalSignature,keyCertSign" \
+		  -addext "extendedKeyUsage=critical,codeSigning" && \
+		security import $$TMPD/key.pem -k ~/Library/Keychains/login.keychain-db -A && \
+		security import $$TMPD/cert.pem -k ~/Library/Keychains/login.keychain-db -A && \
+		rm -rf $$TMPD; \
+		echo "Created '$(CODESIGN_IDENTITY)'. If macOS ever prompts for keychain access when codesign uses it, choose \"Always Allow\"."; \
+	fi
+
+install-gui-mac: build-gui dev-cert-mac ## Rebuild the GUI and (re)install /Applications/Tomoe.app + Dock icon (macOS only)
 ifneq ($(UNAME),Darwin)
 	$(error install-gui-mac is macOS-only)
 endif
@@ -145,11 +173,11 @@ endif
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
 	cp $(GUI_BINARY) $(APP_BUNDLE)/Contents/MacOS/$(GUI_BINARY)
 	sed 's/__VERSION__/$(VERSION)/g' packaging/macos/Info.plist.template > $(APP_BUNDLE)/Contents/Info.plist
-	codesign --sign - --force --deep $(APP_BUNDLE)
+	codesign --sign "$(CODESIGN_IDENTITY)" --force --deep $(APP_BUNDLE)
 	rm -rf "$(APPLICATIONS_DIR)/$(APP_NAME).app"
 	ditto $(APP_BUNDLE) "$(APPLICATIONS_DIR)/$(APP_NAME).app"
-	@echo "Installed $(APPLICATIONS_DIR)/$(APP_NAME).app (version $(VERSION))"
-	@echo "First launch after this will need to re-grant mic/screen-recording/accessibility permissions if the bundle's signature changed."
+	@echo "Installed $(APPLICATIONS_DIR)/$(APP_NAME).app (version $(VERSION)), signed with '$(CODESIGN_IDENTITY)'."
+	@echo "First install with this identity still needs Screen Recording/Microphone/Accessibility granted once in System Settings > Privacy & Security -- after that, rebuilds should keep working without re-granting."
 
 install-gpu: ## Install CUDA toolkit + sherpa-onnx GPU libraries for NVIDIA acceleration
 	@echo "=== Step 1: Installing CUDA 12 toolkit + cuDNN 9 ==="
