@@ -47,6 +47,12 @@ type Event struct {
 	// (to attach it via speaker.Tracker.SetHintForRecent) — everything
 	// else is purely informational.
 	Name string
+	// Thumbnail is set only for StageOCRHit: a PNG-encoded crop of the
+	// matched ring's own bounding box (the participant's video tile,
+	// not just their name label) — see RingThumbnailPNG. Lets a viewer
+	// sanity-check a recognized name against who was actually on
+	// screen, not just trust the OCR text alone.
+	Thumbnail []byte
 }
 
 // sendEvent delivers ev to events without blocking Poll's loop: if the

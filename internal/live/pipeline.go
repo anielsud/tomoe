@@ -142,7 +142,18 @@ func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) string
 	if c.cfg.Embedder != nil && c.cfg.Tracker != nil {
 		embedding, err := c.cfg.Embedder.Extract(samples)
 		if err == nil && len(embedding) > 0 {
-			return c.cfg.Tracker.Assign(embedding)
+			label, needsHint := c.cfg.Tracker.Assign(embedding)
+			if needsHint {
+				// Non-blocking: a video-hint check is worth doing right
+				// away rather than waiting for videohint.Poll's next
+				// scheduled tick, but this pipeline must never stall
+				// waiting for a slow/absent consumer.
+				select {
+				case c.hintNeededCh <- struct{}{}:
+				default:
+				}
+			}
+			return label
 		}
 	}
 

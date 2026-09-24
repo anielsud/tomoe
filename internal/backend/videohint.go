@@ -31,16 +31,25 @@ type VideoHintActivityEntry struct {
 	Stage    string `json:"stage"`
 	Detail   string `json:"detail"`
 	Name     string `json:"name,omitempty"`
+	// Thumbnail is a data URI, ready for <img src="...">, set only when
+	// the underlying videohint.Event carried one (StageOCRHit) — see
+	// RingThumbnailPNG's doc comment for why: showing who was actually
+	// on screen next to the recognized name, not just the text alone.
+	Thumbnail string `json:"thumbnail,omitempty"`
 }
 
 func toVideoHintActivityEntry(ev videohint.Event) VideoHintActivityEntry {
-	return VideoHintActivityEntry{
+	entry := VideoHintActivityEntry{
 		Time:     ev.Time.Format(time.RFC3339),
 		Platform: string(ev.Platform),
 		Stage:    string(ev.Stage),
 		Detail:   ev.Detail,
 		Name:     ev.Name,
 	}
+	if len(ev.Thumbnail) > 0 {
+		entry.Thumbnail = "data:image/png;base64," + base64.StdEncoding.EncodeToString(ev.Thumbnail)
+	}
+	return entry
 }
 
 // emitVideoHintEvents drains one meeting session's videohint.Poll

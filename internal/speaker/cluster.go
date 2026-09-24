@@ -9,6 +9,26 @@ import (
 // DefaultThreshold is the default cosine similarity threshold for same-speaker assignment.
 const DefaultThreshold = 0.65
 
+// stickyGraceWindow and stickyThresholdMargin implement a "sticky
+// speaker" continuity heuristic: VAD splits one person's continuous
+// turn into several short segments whenever they pause for a beat
+// between sentences (even under a second), and a short segment's
+// embedding is measurably noisier than a longer one's — observed live
+// as one real speaker's turn fragmenting into a fresh "Person N" for
+// almost every sentence, well before any other speaker had actually
+// started talking. If the best-matching centroid is also whoever was
+// just assigned, and not long ago, a near-miss on similarity is far
+// more likely to be "same person, noisier embedding" than "a different
+// person who happens to sound similar," so it's accepted as the same
+// speaker. The centroid itself is NOT updated on a sticky-only match
+// (see Assign) — only accepting it into the running average on a full,
+// confident match keeps a fragmented sentence from ever dragging a
+// good centroid toward a bad one.
+const (
+	stickyGraceWindow     = 3 * time.Second
+	stickyThresholdMargin = 0.15
+)
+
 // Tracker performs online speaker clustering using cosine similarity of embeddings.
 // Speakers are labeled "Person 1", "Person 2", etc. — optionally suffixed
 // with a real name in parens (e.g. "Person 2 (Nazanin Rame...)") once a
@@ -23,9 +43,15 @@ type Tracker struct {
 	// lastAssignedIdx/At track the most recent successful Assign, so a
 	// video hint (which has no direct link to a cluster ID — it only
 	// knows "this name is active right now") can be attributed to
-	// "whoever was probably just speaking" via SetHintForRecent.
+	// "whoever was probably just speaking" via SetHintForRecent, and so
+	// Assign itself can apply the sticky-speaker grace window above.
 	lastAssignedIdx int
 	lastAssignedAt  time.Time
+
+	// nowFn is time.Now by default; overridable in tests so the
+	// sticky-speaker grace window is deterministically testable
+	// without sleeping.
+	nowFn func() time.Time
 }
 
 // NewTracker creates a Tracker with the given cosine similarity threshold.
@@ -36,18 +62,23 @@ func NewTracker(threshold float64) *Tracker {
 	}
 	return &Tracker{
 		threshold: threshold,
+		nowFn:     time.Now,
 	}
 }
 
-// Assign assigns an embedding to a speaker, creating a new speaker if no match is found.
-// Returns a label like "Person 1", or "Person 1 (Name)" if a video hint
-// has already been attached to that speaker via SetHintForRecent.
-func (t *Tracker) Assign(embedding []float32) string {
+// Assign assigns an embedding to a speaker, creating a new speaker if no
+// match is found. Returns a label like "Person 1", or "Person 1 (Name)"
+// if a video hint has already been attached to that speaker via
+// SetHintForRecent, plus needsHint: true if this speaker still has no
+// hint attached, so a caller (internal/live's Coordinator) can signal
+// that a video-hint check is worth doing right away rather than waiting
+// for videohint.Poll's next scheduled tick — see Coordinator.HintNeeded.
+func (t *Tracker) Assign(embedding []float32) (label string, needsHint bool) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
 	if len(embedding) == 0 {
-		return "Unknown"
+		return "Unknown", false
 	}
 
 	// Find the best matching centroid
@@ -62,12 +93,27 @@ func (t *Tracker) Assign(embedding []float32) string {
 		}
 	}
 
+	now := t.nowFn()
+
 	if bestIdx >= 0 && bestSim >= t.threshold {
-		// Update centroid with running average
+		// Confident match: fold it into the running average.
 		t.updateCentroid(bestIdx, embedding)
 		t.lastAssignedIdx = bestIdx
-		t.lastAssignedAt = time.Now()
-		return t.label(bestIdx)
+		t.lastAssignedAt = now
+		return t.label(bestIdx), t.hints[bestIdx] == ""
+	}
+
+	sticky := bestIdx >= 0 && bestIdx == t.lastAssignedIdx &&
+		!t.lastAssignedAt.IsZero() && now.Sub(t.lastAssignedAt) <= stickyGraceWindow &&
+		bestSim >= t.threshold-stickyThresholdMargin
+
+	if sticky {
+		// Near-miss on similarity, but this is whoever was just
+		// speaking, moments ago -- treat it as the same speaker
+		// without folding it into the centroid (see doc comment above
+		// stickyGraceWindow for why not).
+		t.lastAssignedAt = now
+		return t.label(bestIdx), t.hints[bestIdx] == ""
 	}
 
 	// New speaker
@@ -78,8 +124,8 @@ func (t *Tracker) Assign(embedding []float32) string {
 	t.hints = append(t.hints, "")
 	idx := len(t.centroids) - 1
 	t.lastAssignedIdx = idx
-	t.lastAssignedAt = time.Now()
-	return t.label(idx)
+	t.lastAssignedAt = now
+	return t.label(idx), true
 }
 
 // label builds the display label for speaker idx: "Person N", or
@@ -105,7 +151,7 @@ func (t *Tracker) SetHintForRecent(name string, maxAge time.Duration) bool {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 
-	if len(t.centroids) == 0 || t.lastAssignedAt.IsZero() || time.Since(t.lastAssignedAt) > maxAge {
+	if len(t.centroids) == 0 || t.lastAssignedAt.IsZero() || t.nowFn().Sub(t.lastAssignedAt) > maxAge {
 		return false
 	}
 	t.hints[t.lastAssignedIdx] = name

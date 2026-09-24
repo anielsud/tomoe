@@ -185,6 +185,21 @@ body {
   flex-shrink: 0;
 }
 
+.videohint-thumb {
+  width: 24px;
+  height: 24px;
+  object-fit: cover;
+  border-radius: 4px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+}
+
+.videohint-thumb-sm {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+}
+
 .videohint-detail {
   flex: 1;
   overflow: hidden;

@@ -14,6 +14,7 @@ export interface VideoHintActivityEntry {
   stage: string;
   detail: string;
   name?: string;
+  thumbnail?: string; // data URI, only set for stage "ocr_hit"
 }
 
 export interface Session {
