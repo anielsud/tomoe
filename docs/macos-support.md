@@ -576,11 +576,12 @@ flow against a real Teams window confirming no regression.
      10-second tick**, so a newly-heard, still-unlabeled speaker could
      wait up to 10s for their first naming attempt. `Poll` now also
      takes a `trigger <-chan struct{}` (debounced separately from the
-     ticker via `minAttemptInterval`); `speaker.Tracker.Assign` reports
-     whether the assigned speaker still has no hint, and
-     `live.Coordinator.HintNeeded()` signals `trigger` the moment one
-     is heard — cutting a still-unknown speaker's first OCR attempt
-     from up to 10s down to a few seconds.
+     ticker via `minAttemptInterval`, now 1s — tightened from an
+     initial 3s); `speaker.Tracker.Assign` reports whether the assigned
+     speaker still has no hint, and `live.Coordinator.HintNeeded()`
+     signals `trigger` the moment one is heard — cutting a
+     still-unknown speaker's first OCR attempt from up to 10s down to
+     about a second.
    - Added a face-bubble thumbnail alongside the OCR'd text: a
      `StageOCRHit` `Event` now also carries a PNG crop of the matched
      ring's own bounding box (`RingThumbnailPNG` in
@@ -589,6 +590,59 @@ flow against a real Teams window confirming no regression.
      shows *who* was recognized next to the text, not just the text
      alone. Verified live: a real thumbnail rendered correctly in the
      ticker.
+   - **Two more real bugs found by reviewing the escalation library
+     itself** (~22 real snapshots accumulated from live meetings),
+     rather than by more live testing — with explicit authorization to
+     inspect the library's contents for this purpose:
+     - **The label geometry was modeled as a fraction of the ring's own
+       size; Teams renders it at a fixed font size instead.** The
+       original calibration (bottom 27% of ring height, full ring
+       width) was eyeballed against one gallery-tile screenshot and
+       never checked against a different scale. Two real escalated
+       frames at very different scales — a full-screen 1-on-1 tile
+       (~1794x1026) and a ~440x245 gallery tile — had label positions
+       that differed by more than 3x in ring-relative *fraction* terms,
+       but matched within a few pixels in *absolute* offset from the
+       ring's bottom edge and absolute label height, exactly what
+       fixed-size font rendering predicts. `LabelRegion` now stores
+       `BottomOffset`/`Height`/`MaxWidth` in absolute pixels instead of
+       `YFraction`/`HeightFraction` (`internal/videohint/label.go`,
+       `rule.go`). Re-running OCR against all 7 real escalated frames
+       that had a ring match: 0/7 succeeded under the old fractional
+       model, 7/7 succeed under the fixed-pixel model (2 fresh
+       failures fixed directly, the rest repeat instances of the same
+       two calls).
+     - **`FindMeetingWindow`'s title heuristic isn't enough to confirm
+       a window is actually showing a live call.** 7 of the ~22
+       escalations turned out to be two other kinds of window entirely:
+       a 1:1 chat conversation, and the post-meeting recording/playback
+       page (both Teams-owned, both non-trivially titled, neither an
+       actual call). One of them, worse than just wasting a capture,
+       produced a *plausible-looking wrong OCR read* — Vision happily
+       read the browser-style page's own window-title text off screen
+       and returned it as if it were a recognized speaker name. Fixed
+       with a new, cheap pre-check: `internal/videohint/chrome.go`'s
+       `DetectCallChrome` looks for the "Leave call" hang-up icon's red
+       glyph within a small, fixed-position search window (absolute
+       pixels from the frame's top-right corner, same reasoning as the
+       label fix — this is native toolbar chrome, not something that
+       scales with window size). Matched by hue+saturation rather than
+       exact RGB, so a light/dark theme's likely brightness-only shift
+       shouldn't defeat it — untested against an actual light-mode
+       capture, since none exists in this library yet, but a
+       deliberate design bet rather than an oversight. Calibrated
+       against the same library: exactly 110 matching pixels in 15/15
+       real call frames checked (across four different window sizes),
+       0/7 in every non-call frame. Wired into `Poll` as a hard gate
+       before Ring/Label are even attempted (`Rule.Chrome` in
+       `rule.go`) — a rejected frame now short-circuits with a new
+       `StageNotACall` event and is never written to the escalation
+       library at all, rather than adding review-queue noise nothing
+       could be calibrated from anyway. Retroactively applying both
+       fixes to the same ~22-snapshot library: escalation-worthy
+       snapshots drop from 22 to 7, and every one of the remaining 7 is
+       a genuine "ring wasn't visually present at that instant" miss,
+       not a bug.
    - Still open: window-finding for Zoom/Meet/Webex/Slack, none of
      which `internal/videohint` can capture anything for yet
      (Teams-only, reusing `FindMeetingWindow` as-is); `DetectRing`

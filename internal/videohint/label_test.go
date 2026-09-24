@@ -4,17 +4,32 @@ import "testing"
 
 func TestLabelRect(t *testing.T) {
 	ring := RingMatch{X: 1386, Y: 97, Width: 130, Height: 130}
-	label := LabelRegion{YFraction: 0.73, HeightFraction: 0.27}
+	label := LabelRegion{BottomOffset: 52, Height: 40, MaxWidth: 300}
 
 	x, y, w, h := LabelRect(ring, label)
+	// MaxWidth (300) is wider than the ring (130), so the crop clamps
+	// to the ring's own width rather than spilling past it.
 	if x != ring.X || w != ring.Width {
-		t.Errorf("LabelRect() x,w = %d,%d, want %d,%d (label spans ring's full width)", x, w, ring.X, ring.Width)
+		t.Errorf("LabelRect() x,w = %d,%d, want %d,%d (clamped to ring width)", x, w, ring.X, ring.Width)
 	}
-	if y != ring.Y+94 {
-		t.Errorf("LabelRect() y = %d, want %d", y, ring.Y+94)
+	if y != ring.Y+ring.Height-52 {
+		t.Errorf("LabelRect() y = %d, want %d", y, ring.Y+ring.Height-52)
 	}
-	if h != 35 {
-		t.Errorf("LabelRect() h = %d, want 35", h)
+	if h != 40 {
+		t.Errorf("LabelRect() h = %d, want 40", h)
+	}
+}
+
+func TestLabelRect_NarrowerThanRing(t *testing.T) {
+	ring := RingMatch{X: 5, Y: 97, Width: 1794, Height: 1026}
+	label := LabelRegion{BottomOffset: 52, Height: 40, MaxWidth: 300}
+
+	x, y, w, h := LabelRect(ring, label)
+	if x != ring.X || w != 300 {
+		t.Errorf("LabelRect() x,w = %d,%d, want %d,%d (MaxWidth, not clamped)", x, w, ring.X, 300)
+	}
+	if y != ring.Y+ring.Height-52 || h != 40 {
+		t.Errorf("LabelRect() y,h = %d,%d, want %d,%d", y, h, ring.Y+ring.Height-52, 40)
 	}
 }
 

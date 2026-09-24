@@ -10,12 +10,19 @@ import (
 
 // LabelRect computes the pixel rectangle of a meeting app's name-label
 // overlay within a captured frame, given a matched ring and that
-// platform's LabelRegion. The label spans the ring's full width.
+// platform's LabelRegion. Anchored to the ring's bottom-left corner by
+// a fixed pixel offset/size (see LabelRegion's doc comment for why
+// this is absolute pixels, not a fraction of the ring), and clamped to
+// the ring's own width so a small gallery tile doesn't spill the crop
+// into a neighboring tile.
 func LabelRect(ring RingMatch, label LabelRegion) (x, y, w, h int) {
 	x = ring.X
-	w = ring.Width
-	y = ring.Y + int(label.YFraction*float64(ring.Height))
-	h = int(label.HeightFraction * float64(ring.Height))
+	w = label.MaxWidth
+	if w <= 0 || w > ring.Width {
+		w = ring.Width
+	}
+	y = ring.Y + ring.Height - label.BottomOffset
+	h = label.Height
 	return x, y, w, h
 }
 
