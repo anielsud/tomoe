@@ -48,10 +48,11 @@ type Stats struct {
 
 // Coordinator manages one or two live transcription pipelines (mic + monitor).
 type Coordinator struct {
-	cfg        Config
-	segmentCh  chan session.Segment
-	activityCh chan struct{} // signalled when VAD detects ongoing speech
-	startTime  time.Time
+	cfg          Config
+	segmentCh    chan session.Segment
+	activityCh   chan struct{} // signalled when VAD detects ongoing speech
+	hintNeededCh chan struct{} // signalled when a monitor-source speaker with no video hint yet is heard
+	startTime    time.Time
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -73,9 +74,10 @@ func New(cfg Config) *Coordinator {
 		bufSize = 64
 	}
 	return &Coordinator{
-		cfg:        cfg,
-		segmentCh:  make(chan session.Segment, bufSize),
-		activityCh: make(chan struct{}, 1),
+		cfg:          cfg,
+		segmentCh:    make(chan session.Segment, bufSize),
+		activityCh:   make(chan struct{}, 1),
+		hintNeededCh: make(chan struct{}, 1),
 	}
 }
 
@@ -129,6 +131,16 @@ func (c *Coordinator) Segments() <-chan session.Segment {
 // no completed segment has been emitted yet.
 func (c *Coordinator) Activity() <-chan struct{} {
 	return c.activityCh
+}
+
+// HintNeeded returns a channel signalled whenever a monitor-source
+// speaker with no video hint attached yet is heard. Wire this into
+// videohint.Poll's trigger parameter so a still-unlabeled speaker gets
+// an immediate ring/OCR attempt instead of waiting for Poll's next
+// scheduled tick — see internal/speaker.Tracker.Assign's needsHint
+// return value, which is what actually decides when this fires.
+func (c *Coordinator) HintNeeded() <-chan struct{} {
+	return c.hintNeededCh
 }
 
 // Stop stops all pipelines and waits for them to finish.

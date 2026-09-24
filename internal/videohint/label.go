@@ -1,6 +1,12 @@
 package videohint
 
-import "fmt"
+import (
+	"bytes"
+	"fmt"
+	"image"
+	"image/color"
+	"image/png"
+)
 
 // LabelRect computes the pixel rectangle of a meeting app's name-label
 // overlay within a captured frame, given a matched ring and that
@@ -62,4 +68,34 @@ func RecognizeLabel(pix []byte, frameWidth, frameHeight int, ring RingMatch, lab
 		return "", err
 	}
 	return RecognizeText(crop, cw, ch)
+}
+
+// RingThumbnailPNG crops the ring's own bounding box out of frame (the
+// participant's video tile itself, not just their name label) and
+// PNG-encodes it. Pairing this with a StageOCRHit Event's recognized
+// name lets a viewer sanity-check the match at a glance — text alone
+// doesn't show who was actually on screen when it was recognized.
+func RingThumbnailPNG(pix []byte, frameWidth, frameHeight int, ring RingMatch) ([]byte, error) {
+	crop, cw, ch, err := cropRGB(pix, frameWidth, frameHeight, ring.X, ring.Y, ring.Width, ring.Height)
+	if err != nil {
+		return nil, err
+	}
+	return encodeRGBPNG(crop, cw, ch)
+}
+
+// encodeRGBPNG PNG-encodes a packed RGB (no padding, 3 bytes per
+// pixel) buffer in memory.
+func encodeRGBPNG(pix []byte, width, height int) ([]byte, error) {
+	img := image.NewRGBA(image.Rect(0, 0, width, height))
+	for y := 0; y < height; y++ {
+		for x := 0; x < width; x++ {
+			i := (y*width + x) * 3
+			img.Set(x, y, color.RGBA{R: pix[i], G: pix[i+1], B: pix[i+2], A: 255})
+		}
+	}
+	var buf bytes.Buffer
+	if err := png.Encode(&buf, img); err != nil {
+		return nil, fmt.Errorf("videohint: encoding PNG: %w", err)
+	}
+	return buf.Bytes(), nil
 }

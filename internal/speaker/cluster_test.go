@@ -12,8 +12,8 @@ func TestTrackerAssignSameSpeaker(t *testing.T) {
 	emb1 := []float32{1, 0, 0, 0, 0}
 	emb2 := []float32{0.99, 0.01, 0, 0, 0}
 
-	label1 := tracker.Assign(emb1)
-	label2 := tracker.Assign(emb2)
+	label1, _ := tracker.Assign(emb1)
+	label2, _ := tracker.Assign(emb2)
 
 	if label1 != "Person 1" {
 		t.Errorf("first label = %q, want %q", label1, "Person 1")
@@ -33,8 +33,8 @@ func TestTrackerAssignDifferentSpeakers(t *testing.T) {
 	emb1 := []float32{1, 0, 0, 0, 0}
 	emb2 := []float32{0, 1, 0, 0, 0}
 
-	label1 := tracker.Assign(emb1)
-	label2 := tracker.Assign(emb2)
+	label1, _ := tracker.Assign(emb1)
+	label2, _ := tracker.Assign(emb2)
 
 	if label1 != "Person 1" {
 		t.Errorf("first label = %q, want %q", label1, "Person 1")
@@ -48,14 +48,20 @@ func TestTrackerAssignDifferentSpeakers(t *testing.T) {
 }
 
 func TestTrackerThreshold(t *testing.T) {
-	// With a very high threshold, similar vectors should still be different speakers
+	// With a very high threshold, similar vectors should still be
+	// different speakers -- once the sticky-speaker grace window (see
+	// stickyGraceWindow) has elapsed, so this isolates the pure
+	// threshold check from that separate, intentional exception.
 	tracker := NewTracker(0.999)
+	clock := &fakeClock{t: time.Now()}
+	tracker.nowFn = clock.now
 
 	emb1 := []float32{1, 0, 0}
 	emb2 := []float32{0.95, 0.3, 0}
 
 	tracker.Assign(emb1)
-	label2 := tracker.Assign(emb2)
+	clock.advance(stickyGraceWindow + time.Second)
+	label2, _ := tracker.Assign(emb2)
 
 	if label2 != "Person 2" {
 		t.Errorf("with high threshold, label = %q, want %q", label2, "Person 2")
@@ -79,7 +85,7 @@ func TestTrackerReset(t *testing.T) {
 	}
 
 	// After reset, next embedding is Person 1 again
-	label := tracker.Assign([]float32{1, 0, 0})
+	label, _ := tracker.Assign([]float32{1, 0, 0})
 	if label != "Person 1" {
 		t.Errorf("after reset, label = %q, want %q", label, "Person 1")
 	}
@@ -87,7 +93,7 @@ func TestTrackerReset(t *testing.T) {
 
 func TestTrackerEmptyEmbedding(t *testing.T) {
 	tracker := NewTracker(0.8)
-	label := tracker.Assign(nil)
+	label, _ := tracker.Assign(nil)
 	if label != "Unknown" {
 		t.Errorf("empty embedding label = %q, want %q", label, "Unknown")
 	}
@@ -117,7 +123,7 @@ func TestTrackerMultipleSpeakers(t *testing.T) {
 	}
 
 	for i, emb := range speakers {
-		label := tracker.Assign(emb)
+		label, _ := tracker.Assign(emb)
 		want := "Person " + string(rune('1'+i))
 		if label != want {
 			t.Errorf("speaker %d label = %q, want %q", i, label, want)
@@ -126,7 +132,7 @@ func TestTrackerMultipleSpeakers(t *testing.T) {
 
 	// Re-assign same embeddings — should match existing speakers
 	for i, emb := range speakers {
-		label := tracker.Assign(emb)
+		label, _ := tracker.Assign(emb)
 		want := "Person " + string(rune('1'+i))
 		if label != want {
 			t.Errorf("re-assign speaker %d label = %q, want %q", i, label, want)
@@ -149,11 +155,11 @@ func TestTrackerSetHintForRecent(t *testing.T) {
 	}
 
 	// The hint should attach to Person 2 (most recently assigned), not Person 1.
-	label1 := tracker.Assign([]float32{0.99, 0.01, 0})
+	label1, _ := tracker.Assign([]float32{0.99, 0.01, 0})
 	if label1 != "Person 1" {
 		t.Errorf("Person 1 label = %q, want unchanged %q", label1, "Person 1")
 	}
-	label2 := tracker.Assign([]float32{0, 0.99, 0.01})
+	label2, _ := tracker.Assign([]float32{0, 0.99, 0.01})
 	if label2 != "Person 2 (Nazanin)" {
 		t.Errorf("Person 2 label = %q, want %q", label2, "Person 2 (Nazanin)")
 	}
@@ -181,8 +187,118 @@ func TestTrackerResetClearsHints(t *testing.T) {
 	tracker.SetHintForRecent("Nazanin", time.Minute)
 	tracker.Reset()
 
-	label := tracker.Assign([]float32{1, 0, 0})
+	label, _ := tracker.Assign([]float32{1, 0, 0})
 	if label != "Person 1" {
 		t.Errorf("after reset, label = %q, want plain %q (hint should be cleared)", label, "Person 1")
+	}
+}
+
+// fakeClock lets tests deterministically control Tracker.nowFn without
+// sleeping — see stickyGraceWindow's doc comment for why Assign needs
+// to be time-aware at all.
+type fakeClock struct{ t time.Time }
+
+func (c *fakeClock) now() time.Time          { return c.t }
+func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
+
+func TestTrackerStickySpeaker_AcceptsNearMissFromRecentSpeaker(t *testing.T) {
+	tracker := NewTracker(0.8)
+	clock := &fakeClock{t: time.Now()}
+	tracker.nowFn = clock.now
+
+	label1, _ := tracker.Assign([]float32{1, 0, 0, 0})
+	if label1 != "Person 1" {
+		t.Fatalf("first label = %q, want %q", label1, "Person 1")
+	}
+
+	// A noisier embedding from the same speaker's next short sentence:
+	// similarity to Person 1 falls just under the strict 0.8 threshold,
+	// but within the sticky margin (0.15), and it's well within the
+	// grace window.
+	clock.advance(500 * time.Millisecond)
+	near := []float32{0.7, 0.7141428, 0, 0} // cosine sim to {1,0,0,0} ~= 0.70
+	label2, _ := tracker.Assign(near)
+	if label2 != "Person 1" {
+		t.Errorf("near-miss recent-speaker label = %q, want %q (sticky match)", label2, "Person 1")
+	}
+	if tracker.NumSpeakers() != 1 {
+		t.Errorf("NumSpeakers() = %d, want 1 (sticky match should not create a new speaker)", tracker.NumSpeakers())
+	}
+}
+
+func TestTrackerStickySpeaker_DoesNotApplyPastGraceWindow(t *testing.T) {
+	tracker := NewTracker(0.8)
+	clock := &fakeClock{t: time.Now()}
+	tracker.nowFn = clock.now
+
+	tracker.Assign([]float32{1, 0, 0, 0}) // Person 1
+
+	clock.advance(stickyGraceWindow + time.Second)
+	near := []float32{0.7, 0.7141428, 0, 0}
+	label2, _ := tracker.Assign(near)
+	if label2 != "Person 2" {
+		t.Errorf("near-miss outside grace window label = %q, want %q (new speaker)", label2, "Person 2")
+	}
+}
+
+func TestTrackerStickySpeaker_DoesNotApplyToADifferentBestMatch(t *testing.T) {
+	tracker := NewTracker(0.8)
+	clock := &fakeClock{t: time.Now()}
+	tracker.nowFn = clock.now
+
+	tracker.Assign([]float32{1, 0, 0, 0}) // Person 1
+	tracker.Assign([]float32{0, 0, 0, 1}) // Person 2, now the most recently assigned
+
+	// A genuinely poor match for everyone (best match is Person 1, but
+	// nowhere near even the sticky margin) must still become a new
+	// speaker, regardless of timing.
+	clock.advance(100 * time.Millisecond)
+	label, _ := tracker.Assign([]float32{0.3, 0.3, 0.3, 0.3})
+	if label != "Person 3" {
+		t.Errorf("poor match label = %q, want %q (new speaker)", label, "Person 3")
+	}
+}
+
+func TestTrackerStickySpeaker_DoesNotPolluteCentroid(t *testing.T) {
+	tracker := NewTracker(0.8)
+	clock := &fakeClock{t: time.Now()}
+	tracker.nowFn = clock.now
+
+	tracker.Assign([]float32{1, 0, 0, 0}) // Person 1's centroid: {1,0,0,0}
+
+	clock.advance(time.Second)
+	tracker.Assign([]float32{0.7, 0.7141428, 0, 0}) // sticky match, must not update the centroid
+
+	// A fresh, perfectly-orthogonal embedding should still be judged
+	// against Person 1's ORIGINAL centroid, not one dragged toward the
+	// noisier sticky-matched sample.
+	clock.advance(time.Second)
+	label, _ := tracker.Assign([]float32{0, 1, 0, 0})
+	if label == "Person 1" {
+		t.Errorf("orthogonal embedding matched Person 1 — centroid was polluted by the sticky match")
+	}
+}
+
+func TestTrackerAssign_NeedsHintUntilOneAttaches(t *testing.T) {
+	tracker := NewTracker(0.8)
+
+	_, needsHint := tracker.Assign([]float32{1, 0, 0})
+	if !needsHint {
+		t.Error("brand new speaker: needsHint = false, want true")
+	}
+
+	tracker.SetHintForRecent("Nazanin", time.Minute)
+
+	_, needsHint = tracker.Assign([]float32{0.99, 0.01, 0})
+	if needsHint {
+		t.Error("speaker with an attached hint: needsHint = true, want false")
+	}
+}
+
+func TestTrackerAssign_EmptyEmbeddingNeverNeedsHint(t *testing.T) {
+	tracker := NewTracker(0.8)
+	_, needsHint := tracker.Assign(nil)
+	if needsHint {
+		t.Error("empty embedding: needsHint = true, want false (no real speaker to hint)")
 	}
 }

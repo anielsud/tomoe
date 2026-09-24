@@ -82,7 +82,11 @@ export default function VideoHintActivity() {
         title="How and when the screen-based speaker-naming hint is operating"
       >
         <span className="videohint-chevron">{expanded ? '▾' : '▸'}</span>
-        <span className="videohint-icon">{stageIcon(latest.stage)}</span>
+        {latest.thumbnail ? (
+          <img className="videohint-thumb videohint-thumb-sm" src={latest.thumbnail} alt="" />
+        ) : (
+          <span className="videohint-icon">{stageIcon(latest.stage)}</span>
+        )}
         <span className="videohint-detail">{latest.detail}</span>
         <span className="videohint-time">{relativeTime(latest.time)}</span>
       </button>
@@ -91,7 +95,11 @@ export default function VideoHintActivity() {
           {entries.map((entry, i) => (
             <div key={i} className={`videohint-activity-row stage-${entry.stage}`}>
               <span className="videohint-time">{new Date(entry.time).toLocaleTimeString()}</span>
-              <span className="videohint-icon">{stageIcon(entry.stage)}</span>
+              {entry.thumbnail ? (
+                <img className="videohint-thumb" src={entry.thumbnail} alt="" />
+              ) : (
+                <span className="videohint-icon">{stageIcon(entry.stage)}</span>
+              )}
               <span className="videohint-detail">{entry.detail}</span>
             </div>
           ))}

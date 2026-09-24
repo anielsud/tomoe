@@ -438,6 +438,47 @@ flow against a real Teams window confirming no regression.
      `Person 2 (Nazanin Rame...):` and `Person 3 (Per Gunsarfs):` once
      those hints landed, with earlier turns from the same speakers
      correctly left as plain `Person N`.
+
+   Follow-up fixes from a second live test pass, same day: real
+   multi-participant testing surfaced three concrete gaps in the above.
+   - **Confirmed (no code change needed): window capture already
+     survives occlusion.** `teamsvideo.CaptureWindowRGB` uses
+     `CGWindowListCreateImage` targeting a specific `CGWindowID` with
+     `kCGWindowImageBoundsIgnoreFraming` — it reads the window-server's
+     compositor buffer directly, not a screen region, so it doesn't
+     need the window frontmost or even visible. Verified live: minimized
+     the real Teams window and confirmed `CaptureWindowRGB` still
+     returned a correctly-sized frame.
+   - **Speaker clustering was fragmenting one person's continuous turn
+     into a fresh "Person N" per sentence** — a real bug hit live
+     testing (a participant's speech split across many single-sentence
+     VAD segments, each producing a noisier embedding than a longer
+     utterance, and just missing `speaker.Tracker`'s similarity
+     threshold often enough to register as a new speaker almost every
+     time). Fixed with a "sticky speaker" continuity heuristic
+     (`stickyGraceWindow`/`stickyThresholdMargin` in
+     `internal/speaker/cluster.go`): a near-miss similarity is still
+     accepted as the same speaker if the best-matching centroid is also
+     whoever was assigned moments ago — without folding the near-miss
+     embedding into that centroid, so a run of noisy sentences can't
+     drag a good centroid toward a bad one.
+   - **OCR was only ever attempted on `videohint.Poll`'s fixed
+     10-second tick**, so a newly-heard, still-unlabeled speaker could
+     wait up to 10s for their first naming attempt. `Poll` now also
+     takes a `trigger <-chan struct{}` (debounced separately from the
+     ticker via `minAttemptInterval`); `speaker.Tracker.Assign` reports
+     whether the assigned speaker still has no hint, and
+     `live.Coordinator.HintNeeded()` signals `trigger` the moment one
+     is heard — cutting a still-unknown speaker's first OCR attempt
+     from up to 10s down to a few seconds.
+   - Added a face-bubble thumbnail alongside the OCR'd text: a
+     `StageOCRHit` `Event` now also carries a PNG crop of the matched
+     ring's own bounding box (`RingThumbnailPNG` in
+     `internal/videohint/label.go` — the participant's video tile
+     itself, not just their name label), so the activity ticker/log
+     shows *who* was recognized next to the text, not just the text
+     alone. Verified live: a real thumbnail rendered correctly in the
+     ticker.
    - Still open: window-finding for Zoom/Meet/Webex/Slack, none of
      which `internal/videohint` can capture anything for yet
      (Teams-only, reusing `FindMeetingWindow` as-is); `DetectRing`
@@ -446,7 +487,12 @@ flow against a real Teams window confirming no regression.
      one recent speaker at once) currently only produces a hint for
      one of them; a hint with no recent-enough speaker to attach to
      (`SetHintForRecent` returns `false`) is logged but otherwise
-     silently dropped, not retried.
+     silently dropped, not retried; the sticky-speaker margin
+     (`stickyThresholdMargin = 0.15`) is a single hand-picked constant,
+     not tuned against a real dataset, and could in principle merge a
+     genuine quick speaker change if the new speaker's embedding
+     happens to still score closest to whoever spoke immediately
+     before them.
 2. **Persistent voiceprints.** A speaker cluster's embedding centroid
    *is* a voiceprint (noted in this doc's original architecture
    section) — this item is giving it a durable identity: once a video
@@ -477,6 +523,40 @@ flow against a real Teams window confirming no regression.
    of this is a live call, which is exactly why this session's guestaudio
    bugs took real debugging effort to catch (see above) rather than
    showing up in `go test`.
+5. **Two-pass transcription: realtime + a higher-fidelity re-pass.**
+   Today's transcript is single-pass — whatever Parakeet TDT streams
+   live during the meeting is the final text, forever. The ask is a
+   second pass, closer to Whisper's non-streaming/chunked style, that
+   revisits completed audio afterward with a larger context window
+   and/or a heavier model, upgrading the low-latency live line to a
+   more accurate final one without blocking the live view. Not built:
+   `internal/session` already stores each session's raw audio (M4A)
+   specifically so a later re-transcription is possible in principle
+   (`tomoe transcribe`/`RetranscribeSession` even exist as a *manual*,
+   whole-file batch path today), but there's no automatic background
+   second pass that revisits a session's segments as it goes, and no
+   UI distinction between "live, may still be refined" and "final."
+6. **Full participant names, not just what's visible in a partial UI
+   label.** Teams' active-speaker tile often truncates the name (e.g.
+   "Nazanin Rame…", cut off by the tile's width) — a fine naming hint,
+   not necessarily the participant's actual full name. Resolving the
+   truncation needs a second signal: reading the roster/participants
+   panel (a different, richer piece of Teams' UI than the
+   active-speaker tile) or an org-directory lookup once a partial name
+   is known. Not built — `internal/videohint` has no roster-reading
+   capability today, only the active-speaker tile+label.
+7. **In-call chat captured as transcript asides.** A meeting app's text
+   chat is a parallel channel Tomoe currently can't see at all —
+   messages posted mid-call (links, corrections, side comments) carry
+   real context a speech-only transcript misses. The ask is to capture
+   that chat stream and store it in the session transcript as
+   timestamped asides alongside the spoken segments, visually
+   distinguishable from speech. Needs its own capture mechanism (most
+   likely another rule-driven screen-read of the chat panel, in the
+   same spirit as `internal/videohint`'s ring/label reading, since
+   there's no known stable API to read a live Teams chat from outside
+   the app) plus a `session.Segment`-adjacent data shape for a
+   non-speech aside. No design work has started on this yet.
 
 ## Background
 

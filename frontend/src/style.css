@@ -161,7 +161,7 @@ body {
   align-items: center;
   gap: 8px;
   width: 100%;
-  padding: 6px 16px;
+  padding: 8px 16px;
   background: none;
   border: none;
   color: var(--text-dim);
@@ -185,6 +185,24 @@ body {
   flex-shrink: 0;
 }
 
+.videohint-thumb {
+  width: 72px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  border: 1px solid var(--border);
+  /* Source crops are small (a video tile, not a photo) — this keeps
+     the enlarged thumbnail from turning to mush when upscaled. */
+  image-rendering: -webkit-optimize-contrast;
+}
+
+.videohint-thumb-sm {
+  width: 32px;
+  height: 32px;
+  border-radius: 4px;
+}
+
 .videohint-detail {
   flex: 1;
   overflow: hidden;
@@ -198,7 +216,7 @@ body {
 }
 
 .videohint-activity-log {
-  max-height: 160px;
+  max-height: 320px;
   overflow-y: auto;
   padding: 4px 16px 8px;
 }
@@ -206,8 +224,8 @@ body {
 .videohint-activity-row {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 2px 0;
+  gap: 10px;
+  padding: 6px 0;
   color: var(--text-dim);
 }
 

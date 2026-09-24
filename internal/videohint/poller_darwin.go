@@ -17,17 +17,38 @@ const (
 	maxSnapshotsPerPoll = 5
 	// minSnapshotInterval rate-limits captures within that cap.
 	minSnapshotInterval = 60 * time.Second
+	// minAttemptInterval debounces trigger-driven attempts (see
+	// Poll's trigger parameter): a still-unlabeled speaker who keeps
+	// talking would otherwise re-signal on every utterance, hammering
+	// ScreenCaptureKit + Vision far faster than either needs to run.
+	// The scheduled ticker is unaffected by this — it always fires at
+	// its own interval regardless of when the last attempt happened.
+	minAttemptInterval = 3 * time.Second
 )
 
 // Poll periodically looks for a window FindMeetingWindow's heuristic
 // matches as Teams (the only window-finder wired up so far —
 // Zoom/Meet/Webex/Slack each need their own before this can capture
 // anything for them; see docs/macos-support.md), captures a frame, and
-// either produces a naming hint or escalates it to the pending snapshot
-// staging area (CaptureUnrecognizedUI / config.UnrecognizedUIPendingDir).
-// Only PlatformTeams has a calibrated rule today (see rule.go); every
-// other platform's rule table entry is still empty, so those always
-// escalate — expected, not a bug.
+// either produces a naming hint (logged for now — actually relabeling
+// an internal/speaker.Tracker cluster from a hint is separate,
+// not-yet-built follow-on work) or escalates it to the pending
+// snapshot staging area (CaptureUnrecognizedUI /
+// config.UnrecognizedUIPendingDir). Only PlatformTeams has a
+// calibrated rule today (see rule.go); every other platform's rule
+// table entry is still empty, so those always escalate — expected,
+// not a bug.
+//
+// A capture+detect attempt runs on every ticker tick (every interval),
+// AND immediately whenever trigger fires — internal/live's Coordinator
+// signals trigger the moment it hears a monitor-source speaker with no
+// video hint yet (see Coordinator.HintNeeded), so a still-unknown
+// speaker gets an OCR attempt as soon as possible instead of waiting up
+// to interval. trigger-driven attempts are debounced (minAttemptInterval)
+// so a speaker who keeps talking without ever getting a hint can't
+// trigger attempts faster than that; the ticker itself is never
+// debounced. trigger may be nil if a caller doesn't want this (e.g. a
+// bare interval-only poll).
 //
 // Every step is reported on events (one Event per stage reached this
 // tick, in order — see EventStage) so a caller can show not just
@@ -55,86 +76,113 @@ const (
 // Blocks until ctx is cancelled; meant to be run in its own goroutine,
 // one per live meeting session, cancelled when that session stops
 // (see internal/daemon and internal/backend's meeting start/stop).
-func Poll(ctx context.Context, interval time.Duration, events chan<- Event) {
+func Poll(ctx context.Context, interval time.Duration, trigger <-chan struct{}, events chan<- Event) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	var lastCapture time.Time
+	var lastAttempt time.Time
 	captured := 0
+
+	attempt := func(debounce bool) {
+		if debounce && !lastAttempt.IsZero() && time.Since(lastAttempt) < minAttemptInterval {
+			return
+		}
+		lastAttempt = time.Now()
+		pollOnce(events, &lastCapture, &captured)
+	}
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			platform := meeting.PlatformTeams // only window-finder wired up so far
-
-			windowID, err := teamsvideo.FindMeetingWindow()
-			if err != nil {
-				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageWindowNotFound, Detail: "no meeting window found on screen"})
-				continue // no meeting window on screen right now -- normal, not an error
-			}
-
-			frame, err := teamsvideo.CaptureWindowRGB(windowID)
-			if err != nil {
-				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageCaptureFailed, Detail: err.Error()})
-				continue
-			}
-			sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageFrameCaptured, Detail: fmt.Sprintf("captured %dx%d frame", frame.Width, frame.Height)})
-
-			reason := "no rule configured for this platform"
-			rule, ok := ruleFor(platform)
-			if !ok {
-				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoRule, Detail: reason})
-			} else if ring, found := DetectRing(frame.Pix, frame.Width, frame.Height, rule.Ring); found {
-				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageRingMatched, Detail: fmt.Sprintf("ring at (%d,%d) %dx%d, confidence %.2f", ring.X, ring.Y, ring.Width, ring.Height, ring.Confidence)})
-
-				if !rule.Label.configured() {
-					reason = "ring found but no label region configured"
-					sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoLabelRegion, Detail: reason})
-				} else {
-					name, ocrErr := RecognizeLabel(frame.Pix, frame.Width, frame.Height, *ring, rule.Label)
-					if ocrErr == nil && name != "" {
-						sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageOCRHit, Detail: fmt.Sprintf("OCR read %q from the label region", name), Name: name})
-						continue // got a usable hint -- nothing to escalate this tick
-					}
-					reason = "ring found but OCR produced no text"
-					detail := reason
-					if ocrErr != nil {
-						detail = fmt.Sprintf("%s: %v", reason, ocrErr)
-					}
-					sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageOCRMiss, Detail: detail})
-				}
-			} else {
-				reason = "no ring match found"
-				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoRingMatch, Detail: reason})
-			}
-
-			if captured >= maxSnapshotsPerPoll {
-				continue
-			}
-			if !lastCapture.IsZero() && time.Since(lastCapture) < minSnapshotInterval {
-				continue
-			}
-
-			meta := SnapshotMeta{
-				Platform: platform,
-				// WindowTitle/WindowOwner are left blank: FindMeetingWindow
-				// doesn't expose what it matched internally, and adding
-				// that lookup is out of scope for this change (teamsvideo
-				// itself doesn't need modifying otherwise).
-				Width:     frame.Width,
-				Height:    frame.Height,
-				Timestamp: time.Now(),
-				Reason:    reason,
-			}
-			if err := CaptureUnrecognizedUI(meta, frame.Pix, frame.Width, frame.Height); err != nil {
-				fmt.Printf("videohint: failed to capture snapshot: %v\n", err)
-				continue
-			}
-			sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageEscalated, Detail: fmt.Sprintf("captured snapshot for review (%s)", reason)})
-			lastCapture = time.Now()
-			captured++
+			attempt(false)
+		case <-trigger:
+			attempt(true)
 		}
 	}
+}
+
+// pollOnce runs one capture+detect(+escalate) attempt — the body of a
+// single Poll tick, factored out so both the scheduled ticker and an
+// immediate trigger (see Poll) share exactly one implementation.
+// lastCapture/captured are the same rate-limit/cap state Poll's loop
+// carries across attempts, passed by pointer since both trigger- and
+// ticker-driven attempts share it.
+func pollOnce(events chan<- Event, lastCapture *time.Time, captured *int) {
+	platform := meeting.PlatformTeams // only window-finder wired up so far
+
+	windowID, err := teamsvideo.FindMeetingWindow()
+	if err != nil {
+		sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageWindowNotFound, Detail: "no meeting window found on screen"})
+		return // no meeting window on screen right now -- normal, not an error
+	}
+
+	frame, err := teamsvideo.CaptureWindowRGB(windowID)
+	if err != nil {
+		sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageCaptureFailed, Detail: err.Error()})
+		return
+	}
+	sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageFrameCaptured, Detail: fmt.Sprintf("captured %dx%d frame", frame.Width, frame.Height)})
+
+	reason := "no rule configured for this platform"
+	rule, ok := ruleFor(platform)
+	if !ok {
+		sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoRule, Detail: reason})
+	} else if ring, found := DetectRing(frame.Pix, frame.Width, frame.Height, rule.Ring); found {
+		sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageRingMatched, Detail: fmt.Sprintf("ring at (%d,%d) %dx%d, confidence %.2f", ring.X, ring.Y, ring.Width, ring.Height, ring.Confidence)})
+
+		if !rule.Label.configured() {
+			reason = "ring found but no label region configured"
+			sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoLabelRegion, Detail: reason})
+		} else {
+			name, ocrErr := RecognizeLabel(frame.Pix, frame.Width, frame.Height, *ring, rule.Label)
+			if ocrErr == nil && name != "" {
+				// Best-effort: a thumbnail failure shouldn't discard an
+				// otherwise-good naming hint.
+				thumb, thumbErr := RingThumbnailPNG(frame.Pix, frame.Width, frame.Height, *ring)
+				if thumbErr != nil {
+					thumb = nil
+				}
+				sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageOCRHit, Detail: fmt.Sprintf("OCR read %q from the label region", name), Name: name, Thumbnail: thumb})
+				return // got a usable hint -- nothing to escalate this tick
+			}
+			reason = "ring found but OCR produced no text"
+			detail := reason
+			if ocrErr != nil {
+				detail = fmt.Sprintf("%s: %v", reason, ocrErr)
+			}
+			sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageOCRMiss, Detail: detail})
+		}
+	} else {
+		reason = "no ring match found"
+		sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoRingMatch, Detail: reason})
+	}
+
+	if *captured >= maxSnapshotsPerPoll {
+		return
+	}
+	if !lastCapture.IsZero() && time.Since(*lastCapture) < minSnapshotInterval {
+		return
+	}
+
+	meta := SnapshotMeta{
+		Platform: platform,
+		// WindowTitle/WindowOwner are left blank: FindMeetingWindow
+		// doesn't expose what it matched internally, and adding
+		// that lookup is out of scope for this change (teamsvideo
+		// itself doesn't need modifying otherwise).
+		Width:     frame.Width,
+		Height:    frame.Height,
+		Timestamp: time.Now(),
+		Reason:    reason,
+	}
+	if err := CaptureUnrecognizedUI(meta, frame.Pix, frame.Width, frame.Height); err != nil {
+		fmt.Printf("videohint: failed to capture snapshot: %v\n", err)
+		return
+	}
+	sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageEscalated, Detail: fmt.Sprintf("captured snapshot for review (%s)", reason)})
+	*lastCapture = time.Now()
+	*captured++
 }

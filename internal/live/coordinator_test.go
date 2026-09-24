@@ -194,9 +194,9 @@ func TestTrackerIntegration(t *testing.T) {
 	emb1 := []float32{1, 0, 0, 0}
 	emb2 := []float32{0, 1, 0, 0}
 
-	label1 := tracker.Assign(emb1)
-	label2 := tracker.Assign(emb2)
-	label3 := tracker.Assign(emb1) // Same as emb1
+	label1, _ := tracker.Assign(emb1)
+	label2, _ := tracker.Assign(emb2)
+	label3, _ := tracker.Assign(emb1) // Same as emb1
 
 	if label1 != "Person 1" {
 		t.Errorf("label1 = %q, want %q", label1, "Person 1")
