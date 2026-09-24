@@ -1,4 +1,4 @@
-.PHONY: dev-deps dev-tools stage-frontend fmt lint vet test test-integration test-coverage build build-gui build-cuda package install install-gpu clean download-model dev-gui
+.PHONY: dev-deps dev-tools stage-frontend fmt lint vet test test-integration test-coverage build build-gui build-cuda package install install-gui-mac install-gpu clean download-model dev-gui
 
 BINARY      := tomoe
 GUI_BINARY  := tomoe-gui
@@ -10,6 +10,11 @@ INSTALL_DIR := $(GOBIN)
 LINT_VERSION := v2.11.3
 SHERPA_VER   := v1.12.28
 TOMOE_LIB    := $(HOME)/.local/share/tomoe/lib
+
+# macOS .app bundle install (install-gui-mac target)
+APP_NAME         := Tomoe
+APP_BUNDLE       := build/darwin/$(APP_NAME).app
+APPLICATIONS_DIR := /Applications
 
 UNAME := $(shell uname)
 
@@ -130,6 +135,21 @@ install: build ## Install to GOPATH/bin
 ifeq ($(HAS_WEBKIT),yes)
 	install -m 755 $(GUI_BINARY) $(INSTALL_DIR)/$(GUI_BINARY)
 endif
+
+install-gui-mac: build-gui ## Rebuild the GUI and (re)install /Applications/Tomoe.app + Dock icon (macOS only)
+ifneq ($(UNAME),Darwin)
+	$(error install-gui-mac is macOS-only)
+endif
+	rm -rf $(APP_BUNDLE)
+	mkdir -p $(APP_BUNDLE)/Contents/MacOS
+	mkdir -p $(APP_BUNDLE)/Contents/Resources
+	cp $(GUI_BINARY) $(APP_BUNDLE)/Contents/MacOS/$(GUI_BINARY)
+	sed 's/__VERSION__/$(VERSION)/g' packaging/macos/Info.plist.template > $(APP_BUNDLE)/Contents/Info.plist
+	codesign --sign - --force --deep $(APP_BUNDLE)
+	rm -rf "$(APPLICATIONS_DIR)/$(APP_NAME).app"
+	ditto $(APP_BUNDLE) "$(APPLICATIONS_DIR)/$(APP_NAME).app"
+	@echo "Installed $(APPLICATIONS_DIR)/$(APP_NAME).app (version $(VERSION))"
+	@echo "First launch after this will need to re-grant mic/screen-recording/accessibility permissions if the bundle's signature changed."
 
 install-gpu: ## Install CUDA toolkit + sherpa-onnx GPU libraries for NVIDIA acceleration
 	@echo "=== Step 1: Installing CUDA 12 toolkit + cuDNN 9 ==="
