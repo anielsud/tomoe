@@ -47,6 +47,13 @@ type App struct {
 	currentSess     *session.Session
 	videoHintCancel context.CancelFunc
 
+	// videoHintMu guards videoHintActivity, a short ring buffer of the
+	// current session's videohint.Event trace — separate from mu since
+	// emitVideoHintEvents runs concurrently with the rest of the session
+	// lifecycle and has no reason to contend with it.
+	videoHintMu       sync.Mutex
+	videoHintActivity []videohint.Event
+
 	// trayDictCh is signalled by the tray "Start/Stop Dictation" menu item.
 	// Carries language code; "" = stop.
 	trayDictCh chan string
@@ -350,7 +357,12 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	// reasoning as dictCancel above.
 	videoHintCtx, videoHintCancel := context.WithCancel(a.ctx)
 	a.videoHintCancel = videoHintCancel
-	go videohint.Poll(videoHintCtx, 10*time.Second)
+	a.videoHintMu.Lock()
+	a.videoHintActivity = nil
+	a.videoHintMu.Unlock()
+	videoHintEvents := make(chan videohint.Event, 32)
+	go videohint.Poll(videoHintCtx, 10*time.Second, videoHintEvents)
+	go a.emitVideoHintEvents(videoHintCtx, videoHintEvents)
 
 	// Start emitting segments to frontend
 	go a.emitSegments()

@@ -8,6 +8,14 @@ export interface Segment {
   language?: string;
 }
 
+export interface VideoHintActivityEntry {
+  time: string;
+  platform: string;
+  stage: string;
+  detail: string;
+  name?: string;
+}
+
 export interface Session {
   id: string;
   title: string;

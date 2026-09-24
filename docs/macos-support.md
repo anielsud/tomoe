@@ -394,23 +394,59 @@ flow against a real Teams window confirming no regression.
      backing array by raw pointer across the cgo boundary isn't safe.
    - `videohint.Poll` now actually attempts OCR when Teams' ring
      matches, instead of always escalating: a recognized name is
-     logged as a naming hint (de-duplicated so it doesn't spam once
-     per poll tick); no ring match, no configured label region, or
-     empty OCR output all still fall through to the existing
-     escalation path unchanged.
+     reported as a naming hint via `Poll`'s new `events` channel (see
+     PR C below — this replaced an earlier de-duplicated-`Printf`
+     version once there was a real consumer for a structured event);
+     no ring match, no configured label region, or empty OCR output
+     all still fall through to the existing escalation path unchanged.
    - Verified against real cropped frames from the live call (deleted
      after use, never committed): OCR correctly read a real
      participant's name back from both a tight label-only crop and a
      wider ring+label crop.
-   - **Not done yet (PR C):** wiring a successful ring+OCR result into
-     actually relabeling an `internal/speaker.Tracker` cluster during a
-     live session — this PR only logs the hint. Also still open:
-     window-finding for Zoom/Meet/Webex/Slack, none of which
-     `internal/videohint` can capture anything for yet (Teams-only,
-     reusing `FindMeetingWindow` as-is); `DetectRing` returns only its
-     single best-scoring match, so a frame with two simultaneous rings
-     (observed live — Teams can highlight more than one recent
-     speaker at once) currently only produces a hint for one of them.
+
+   PR C of three, **done**: wiring a successful ring+OCR result into
+   actually relabeling an `internal/speaker.Tracker` cluster live, plus
+   a GUI activity trace so the app shows not just *what* it's doing but
+   *how and when*.
+   - `videohint.Poll` gained an `events chan<- Event` parameter: one
+     `Event` per pipeline stage it reaches each tick (window
+     found/not, frame captured, ring matched/not, OCR hit/miss,
+     escalated), non-blocking so a slow/absent consumer never stalls
+     polling. `speaker.Tracker` gained `SetHintForRecent(name,
+     maxAge)`: since a video hint only knows "this name is active
+     right now," not which cluster ID it belongs to, it's attributed
+     to whichever cluster the audio pipeline most recently assigned an
+     embedding to (both signals are keyed to the same monitor-source
+     audio) — the resulting label is `"Person N (Name)"`, baked in at
+     `Tracker.Assign` time, so only turns transcribed *after* a hint
+     lands show the name; earlier turns correctly keep the plain
+     `"Person N"` they were labeled with at the time.
+   - `internal/daemon` and `internal/backend` each drain their own
+     `events` channel: the CLI daemon logs every stage (consistent
+     with its existing verbose-logging stance); the GUI additionally
+     buffers a short ring of recent events (`GetVideoHintActivity`, for
+     a panel opened mid-session) and forwards each one live via a new
+     `"videohint:activity"` Wails event.
+   - New `VideoHintActivity` frontend component: a collapsed one-line
+     ticker (latest stage + relative time) above the transcript, only
+     rendered on macOS (`systemAudioMode === 'auto'`), expandable into
+     a scrolling log of the last 50 stages.
+   - Verified live against a real, active, multi-participant Teams
+     call: watched the ticker report real stages in real time
+     (`no ring match found` → `OCR read "Nazanin Rame…" from the label
+     region`), and confirmed the transcript pane actually rendered
+     `Person 2 (Nazanin Rame...):` and `Person 3 (Per Gunsarfs):` once
+     those hints landed, with earlier turns from the same speakers
+     correctly left as plain `Person N`.
+   - Still open: window-finding for Zoom/Meet/Webex/Slack, none of
+     which `internal/videohint` can capture anything for yet
+     (Teams-only, reusing `FindMeetingWindow` as-is); `DetectRing`
+     returns only its single best-scoring match, so a frame with two
+     simultaneous rings (observed live — Teams can highlight more than
+     one recent speaker at once) currently only produces a hint for
+     one of them; a hint with no recent-enough speaker to attach to
+     (`SetHintForRecent` returns `false`) is logged but otherwise
+     silently dropped, not retried.
 2. **Persistent voiceprints.** A speaker cluster's embedding centroid
    *is* a voiceprint (noted in this doc's original architecture
    section) — this item is giving it a durable identity: once a video

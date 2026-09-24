@@ -14,10 +14,13 @@ function formatTime(seconds: number): string {
 }
 
 function speakerClass(speaker: string): string {
+  // startsWith, not ===: once a video hint attaches a name, the label
+  // becomes "Person 1 (Nazanin Rame...)" — still the same speaker, and
+  // should keep the same color.
   if (speaker === 'You') return 'you';
-  if (speaker === 'Person 1') return 'person-1';
-  if (speaker === 'Person 2') return 'person-2';
-  if (speaker === 'Person 3') return 'person-3';
+  if (speaker.startsWith('Person 1')) return 'person-1';
+  if (speaker.startsWith('Person 2')) return 'person-2';
+  if (speaker.startsWith('Person 3')) return 'person-3';
   return 'other';
 }
 
