@@ -28,7 +28,7 @@ func TestTrackerPeekDoesNotChangeClusters(t *testing.T) {
 	if got := tracker.Peek([]float32{0, 1, 0, 0}); got != "Person 1" {
 		t.Errorf("Peek within the grace window = %q, want %q", got, "Person 1")
 	}
-	clock.advance(stickyGraceWindow)
+	clock.advance(DefaultTuning().StickyGraceWindow)
 	if got := tracker.Peek([]float32{0, 1, 0, 0}); got != "Person 2" {
 		t.Errorf("Peek after the grace window = %q, want %q", got, "Person 2")
 	}
