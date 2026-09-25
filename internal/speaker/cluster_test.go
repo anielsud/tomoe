@@ -666,3 +666,24 @@ func TestTrackerStickySpeaker_CustomMargin(t *testing.T) {
 		t.Errorf("near-miss beyond a 0.05 margin label = %q, want %q", label, "Person 2")
 	}
 }
+
+func TestTracker_LastDecision(t *testing.T) {
+	tracker := NewTracker(0.8)
+	clock := &fakeClock{t: time.Now()}
+	tracker.nowFn = clock.now
+
+	if got := tracker.LastDecision(); got != "" {
+		t.Errorf("LastDecision() before any Assign = %q, want empty", got)
+	}
+
+	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second)
+	if got := tracker.LastDecision(); got != DecisionNewSpeaker {
+		t.Errorf("LastDecision() = %q, want %q", got, DecisionNewSpeaker)
+	}
+
+	clock.advance(time.Second)
+	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second)
+	if got := tracker.LastDecision(); got != DecisionConfident {
+		t.Errorf("LastDecision() = %q, want %q", got, DecisionConfident)
+	}
+}
