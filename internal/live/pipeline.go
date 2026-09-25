@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
@@ -455,7 +456,7 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 
 	spk := job.speaker
 	if job.unannounced {
-		spk = c.speakerLabel(job.source, job.embedding)
+		spk = c.speakerLabel(job.source, job.embedding, sampleDuration(job.samples))
 	}
 	return session.Segment{
 		ID:        job.id,
@@ -470,7 +471,12 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 
 // assignSpeaker determines the speaker label for a segment.
 func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) string {
-	return c.speakerLabel(source, c.speakerEmbedding(source, samples))
+	return c.speakerLabel(source, c.speakerEmbedding(source, samples), sampleDuration(samples))
+}
+
+// sampleDuration is how long samples (at vadSampleRate) plays for.
+func sampleDuration(samples []float32) time.Duration {
+	return time.Duration(float64(len(samples)) / vadSampleRate * float64(time.Second))
 }
 
 // provisionalSpeaker labels a live segment from its first fraction of a
@@ -507,7 +513,9 @@ func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []f
 
 // speakerLabel maps a segment's embedding (from speakerEmbedding) to a
 // speaker label, clustering monitor-source speakers via the Tracker.
-func (c *Coordinator) speakerLabel(source SourceType, embedding []float32) string {
+// duration is how much audio the embedding was computed from (see
+// minAssignDuration's doc comment in internal/speaker).
+func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, duration time.Duration) string {
 	if source == SourceMic {
 		return "You"
 	}
@@ -518,7 +526,7 @@ func (c *Coordinator) speakerLabel(source SourceType, embedding []float32) strin
 
 	// For monitor source, try speaker embedding + clustering
 	if len(embedding) > 0 && c.cfg.Tracker != nil {
-		label, needsHint := c.cfg.Tracker.Assign(embedding)
+		label, needsHint := c.cfg.Tracker.Assign(embedding, duration)
 		if needsHint {
 			// Non-blocking: a video-hint check is worth doing right
 			// away rather than waiting for videohint.Poll's next

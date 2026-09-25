@@ -17,7 +17,7 @@ func TestTrackerPeekDoesNotChangeClusters(t *testing.T) {
 		t.Fatalf("Peek created a speaker")
 	}
 
-	tracker.Assign([]float32{1, 0, 0, 0}) // Person 1
+	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1
 	if got := tracker.Peek([]float32{0.99, 0.1, 0, 0}); got != "Person 1" {
 		t.Errorf("Peek on a confident match = %q, want %q", got, "Person 1")
 	}
