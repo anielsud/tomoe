@@ -467,3 +467,163 @@ func TestStopIdempotent(t *testing.T) {
 	c.Stop()
 	c.Stop()
 }
+
+// --- Two-pass refinement (pass 2) tests ---
+//
+// refineWorker is pure Go coordination logic (no cgo/ONNX dependency),
+// so it's tested directly here rather than through a full Start()/Stop()
+// cycle, which would need a real VAD model to construct a pipeline at
+// all (see processPipeline's `if vad == nil { return }` guard) — same
+// reason the rest of this file's Start()-based tests never exercise
+// real transcription.
+
+func TestRefineWorker_EmitsUpdateOnSuccess(t *testing.T) {
+	eng := &mockEngine{result: &transcribe.Result{Text: "refined text", Language: "en"}}
+	c := New(Config{Engine: eng})
+
+	c.refineWG.Add(1)
+	go c.refineWorker()
+
+	c.refineCh <- refinementJob{
+		id: "seg-1", samples: []float32{0.1, 0.2}, speaker: "Person 1",
+		startTime: 1.0, endTime: 2.0, source: SourceMonitor, pass1Text: "rough text",
+	}
+	close(c.refineCh)
+
+	update := <-c.segmentUpdateCh
+	if update.ID != "seg-1" {
+		t.Errorf("ID = %q, want %q", update.ID, "seg-1")
+	}
+	if update.Text != "refined text" {
+		t.Errorf("Text = %q, want %q (pass-2 result)", update.Text, "refined text")
+	}
+	if update.Status != "" {
+		t.Errorf("Status = %q, want %q (final)", update.Status, "")
+	}
+	if update.Speaker != "Person 1" || update.Source != string(SourceMonitor) {
+		t.Errorf("Speaker/Source = %q/%q, want %q/%q", update.Speaker, update.Source, "Person 1", SourceMonitor)
+	}
+}
+
+func TestRefineWorker_FallsBackToPass1TextOnEngineError(t *testing.T) {
+	eng := &mockEngine{err: fmt.Errorf("decode failed")}
+	c := New(Config{Engine: eng})
+
+	c.refineWG.Add(1)
+	go c.refineWorker()
+
+	c.refineCh <- refinementJob{
+		id: "seg-2", samples: []float32{0.1}, speaker: "You",
+		startTime: 0, endTime: 1, source: SourceMic, pass1Text: "rough text",
+	}
+	close(c.refineCh)
+
+	update := <-c.segmentUpdateCh
+	if update.Text != "rough text" {
+		t.Errorf("Text = %q, want %q (pass-1 fallback)", update.Text, "rough text")
+	}
+	if update.Status != "" {
+		t.Errorf("Status = %q, want %q (finalized even on refinement failure)", update.Status, "")
+	}
+}
+
+func TestRefineWorker_FallsBackToPass1TextOnEmptyResult(t *testing.T) {
+	eng := &mockEngine{result: &transcribe.Result{Text: "   "}}
+	c := New(Config{Engine: eng})
+
+	c.refineWG.Add(1)
+	go c.refineWorker()
+
+	c.refineCh <- refinementJob{
+		id: "seg-3", samples: []float32{0.1}, speaker: "You",
+		pass1Text: "rough text",
+	}
+	close(c.refineCh)
+
+	update := <-c.segmentUpdateCh
+	if update.Text != "rough text" {
+		t.Errorf("Text = %q, want %q (pass-1 fallback on blank pass-2 result)", update.Text, "rough text")
+	}
+}
+
+func TestSegmentUpdatesChannelAccessor(t *testing.T) {
+	c := New(Config{})
+	if c.SegmentUpdates() == nil {
+		t.Error("SegmentUpdates() = nil, want a channel")
+	}
+}
+
+// --- Live partial (pass 1, mid-utterance) tests ---
+
+func TestEmitLivePartial_BuffersUntilMinAudioReached(t *testing.T) {
+	c := New(Config{})
+	var live liveState
+
+	// Not enough accumulated audio yet -- must not emit anything.
+	live.audio = make([]float32, minLiveAudioSamples-1)
+	c.emitLivePartial(SourceMic, &live, "hello")
+
+	select {
+	case seg := <-c.segmentCh:
+		t.Fatalf("emitLivePartial() emitted %+v before minLiveAudioSamples was reached", seg)
+	default:
+	}
+	if live.id != "" {
+		t.Error("live.id set before minLiveAudioSamples was reached")
+	}
+}
+
+func TestEmitLivePartial_FirstEmissionCreatesLiveSegment(t *testing.T) {
+	c := New(Config{})
+	var live liveState
+	live.audio = make([]float32, minLiveAudioSamples)
+
+	c.emitLivePartial(SourceMic, &live, "hello")
+
+	seg := <-c.segmentCh
+	if seg.Status != "live" {
+		t.Errorf("Status = %q, want %q", seg.Status, "live")
+	}
+	if seg.Text != "hello" {
+		t.Errorf("Text = %q, want %q", seg.Text, "hello")
+	}
+	if seg.Speaker != "You" {
+		t.Errorf("Speaker = %q, want %q (mic source)", seg.Speaker, "You")
+	}
+	if live.id == "" {
+		t.Error("live.id not set after first emission")
+	}
+}
+
+func TestEmitLivePartial_SubsequentCallsUpdateInPlace(t *testing.T) {
+	c := New(Config{})
+	var live liveState
+	live.audio = make([]float32, minLiveAudioSamples)
+
+	c.emitLivePartial(SourceMic, &live, "hello")
+	first := <-c.segmentCh
+
+	c.emitLivePartial(SourceMic, &live, "hello world")
+	update := <-c.segmentUpdateCh
+
+	if update.ID != first.ID {
+		t.Errorf("update ID = %q, want %q (same segment, same utterance)", update.ID, first.ID)
+	}
+	if update.Text != "hello world" {
+		t.Errorf("update Text = %q, want %q", update.Text, "hello world")
+	}
+	if update.Status != "live" {
+		t.Errorf("update Status = %q, want %q", update.Status, "live")
+	}
+	if update.StartTime != first.StartTime {
+		t.Errorf("update StartTime = %v, want unchanged %v", update.StartTime, first.StartTime)
+	}
+}
+
+func TestLiveStateReset(t *testing.T) {
+	live := liveState{partial: "x", id: "seg-1", speaker: "You", startTime: 1, audio: []float32{1, 2}}
+	live.reset()
+	if live.partial != "" || live.id != "" || live.speaker != "" || live.startTime != 0 || live.audio != nil {
+		t.Errorf("reset() left non-zero state: %+v", live)
+	}
+}

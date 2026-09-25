@@ -38,6 +38,12 @@ type App struct {
 	store       *session.Store
 	modelMgr    *models.Manager
 	detector    *meeting.Detector
+	// streamingEngine powers live transcription's realtime ("pass 1")
+	// pass; nil if the English streaming model isn't downloaded, in
+	// which case sessions fall back to today's single-pass behavior.
+	// English-only today, so only wired into live.Config when the
+	// selected session language is "en" — see StartSession.
+	streamingEngine transcribe.StreamingEngine
 
 	mu              sync.Mutex
 	recording       bool // meeting recording in progress
@@ -134,6 +140,24 @@ func (a *App) Startup(ctx context.Context) {
 		}
 	}
 
+	// Create the realtime streaming engine if the English streaming
+	// model is available (see internal/live's two-pass pipeline). Not
+	// required for anything else to work — sessions just fall back to
+	// single-pass without it.
+	if status.EnglishStreamingReady {
+		streamingEngine, err := transcribe.NewStreamingEngine(transcribe.StreamingConfig{
+			EncoderPath: status.EnglishStreamingEncoderPath,
+			DecoderPath: status.EnglishStreamingDecoderPath,
+			JoinerPath:  status.EnglishStreamingJoinerPath,
+			TokensPath:  status.EnglishStreamingTokensPath,
+		})
+		if err == nil {
+			a.streamingEngine = streamingEngine
+		} else {
+			fmt.Printf("Warning: failed to load English streaming model: %v (live transcription will use single-pass mode)\n", err)
+		}
+	}
+
 	// Create speaker embedder if available
 	if status.SpeakerEmbeddingReady {
 		embedder, err := speaker.NewEmbedder(status.SpeakerEmbeddingPath)
@@ -203,6 +227,9 @@ func (a *App) Shutdown(ctx context.Context) {
 	}
 	if a.embedder != nil {
 		a.embedder.Close()
+	}
+	if a.streamingEngine != nil {
+		a.streamingEngine.Close()
 	}
 }
 
@@ -278,6 +305,11 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		Tracker:           a.tracker,
 		VADPath:           status.VADPath,
 		SegmentBufferSize: 64,
+	}
+	// Realtime pass is English-only (see internal/transcribe's
+	// StreamingEngine); other languages keep today's single-pass path.
+	if lang == "en" {
+		cfg.StreamingEngine = a.streamingEngine
 	}
 
 	// Set up mic capturer
@@ -366,6 +398,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 
 	// Start emitting segments to frontend
 	go a.emitSegments()
+	go a.emitSegmentUpdates()
 
 	wailsRuntime.EventsEmit(a.ctx, "session:started", a.currentSess.ID)
 	return nil

@@ -23,3 +23,32 @@ func (a *App) emitSegments() {
 		wailsRuntime.EventsEmit(a.ctx, "transcript:segment", seg)
 	}
 }
+
+// emitSegmentUpdates reads pass-2 refinements from the coordinator
+// (same segment ID as something emitSegments already sent, superseding
+// text) and emits them to the frontend as a distinct event, since the
+// frontend needs to update a line in place rather than append a new
+// one. Must be called as a goroutine. Runs until the coordinator's
+// segment-update channel is closed. Only fires anything when the
+// session was started with two-pass transcription enabled — see
+// live.Config.StreamingEngine.
+func (a *App) emitSegmentUpdates() {
+	if a.coordinator == nil {
+		return
+	}
+
+	for seg := range a.coordinator.SegmentUpdates() {
+		a.mu.Lock()
+		if a.currentSess != nil {
+			for i := range a.currentSess.Segments {
+				if a.currentSess.Segments[i].ID == seg.ID {
+					a.currentSess.Segments[i] = seg
+					break
+				}
+			}
+		}
+		a.mu.Unlock()
+
+		wailsRuntime.EventsEmit(a.ctx, "transcript:segment:update", seg)
+	}
+}

@@ -145,6 +145,24 @@ func runStart(cmd *cobra.Command, args []string) error {
 		opts.Detector = meeting.NewDetector()
 	}
 
+	// Create the realtime streaming engine (optional — only if the
+	// English streaming model is downloaded; see internal/live's
+	// two-pass pipeline). Sessions fall back to single-pass without it.
+	if status.EnglishStreamingReady {
+		streamingEngine, err := transcribe.NewStreamingEngine(transcribe.StreamingConfig{
+			EncoderPath: status.EnglishStreamingEncoderPath,
+			DecoderPath: status.EnglishStreamingDecoderPath,
+			JoinerPath:  status.EnglishStreamingJoinerPath,
+			TokensPath:  status.EnglishStreamingTokensPath,
+		})
+		if err == nil {
+			opts.StreamingEngine = streamingEngine
+			defer streamingEngine.Close()
+		} else {
+			fmt.Fprintf(os.Stderr, "Warning: failed to load English streaming model: %v (live transcription will use single-pass mode)\n", err)
+		}
+	}
+
 	// Run daemon
 	d := daemon.New(cfg, engines, svc, opts)
 	return d.Run(context.Background())

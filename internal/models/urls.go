@@ -59,4 +59,26 @@ const (
 	decoderFile = "decoder.int8.onnx"
 	joinerFile  = "joiner.int8.onnx"
 	tokensFile  = "tokens.txt"
+
+	// ── English streaming Zipformer transducer (~70MB int8) ─────────────
+	// Realtime ("pass 1") transcription: this is what actually lets text
+	// appear as it's spoken. Parakeet (above) is offline-only — feeding it
+	// audio incrementally isn't possible, only a complete segment at a
+	// time — so it stays as the "pass 2" refinement engine (see
+	// internal/live's two-pass pipeline) instead of the live path.
+
+	// EnglishStreamingArchiveURL is the download URL for the English
+	// streaming Zipformer model archive.
+	EnglishStreamingArchiveURL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-streaming-zipformer-en-2023-06-26.tar.bz2"
+
+	// EnglishStreamingSubdir is the directory name after extraction.
+	EnglishStreamingSubdir = "sherpa-onnx-streaming-zipformer-en-2023-06-26"
+
+	// English streaming model files inside the extraction directory (the
+	// archive ships both fp32 and int8 weights together; int8 is what we
+	// use, matching Parakeet's own INT8 convention).
+	englishStreamingEncoderFile = "encoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
+	englishStreamingDecoderFile = "decoder-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
+	englishStreamingJoinerFile  = "joiner-epoch-99-avg-1-chunk-16-left-128.int8.onnx"
+	englishStreamingTokensFile  = "tokens.txt"
 )

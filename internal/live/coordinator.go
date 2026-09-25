@@ -37,6 +37,14 @@ type Config struct {
 	VADPath string
 	// SegmentBufferSize is the channel buffer for output segments.
 	SegmentBufferSize int
+	// StreamingEngine enables two-pass transcription (optional, nil to
+	// keep today's single-pass behavior): pass 1 is StreamingEngine,
+	// decoded incrementally so text appears as it's spoken rather than
+	// only once a whole VAD segment completes; pass 2 re-decodes the
+	// same completed segment through Engine (offline, allowed to be
+	// slower/better) and supersedes pass 1's text once ready. See
+	// pipeline.go's drainVAD.
+	StreamingEngine transcribe.StreamingEngine
 }
 
 // Stats holds runtime statistics about the coordinator.
@@ -53,6 +61,18 @@ type Coordinator struct {
 	activityCh   chan struct{} // signalled when VAD detects ongoing speech
 	hintNeededCh chan struct{} // signalled when a monitor-source speaker with no video hint yet is heard
 	startTime    time.Time
+
+	// segmentUpdateCh carries revisions to a segment already sent on
+	// segmentCh (same ID) -- pass 2's refined text superseding pass 1's.
+	// Only used when cfg.StreamingEngine is set.
+	segmentUpdateCh chan session.Segment
+	// refineCh queues pass-2 refinement jobs from drainVAD to
+	// refineWorker. Deliberately drained to completion on shutdown (see
+	// Start's closer goroutine) rather than abandoned on ctx.Done(), so
+	// a segment queued for refinement right as the session stops still
+	// gets its update rather than staying "pending" forever.
+	refineCh chan refinementJob
+	refineWG sync.WaitGroup
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
@@ -74,10 +94,12 @@ func New(cfg Config) *Coordinator {
 		bufSize = 64
 	}
 	return &Coordinator{
-		cfg:          cfg,
-		segmentCh:    make(chan session.Segment, bufSize),
-		activityCh:   make(chan struct{}, 1),
-		hintNeededCh: make(chan struct{}, 1),
+		cfg:             cfg,
+		segmentCh:       make(chan session.Segment, bufSize),
+		segmentUpdateCh: make(chan session.Segment, bufSize),
+		activityCh:      make(chan struct{}, 1),
+		hintNeededCh:    make(chan struct{}, 1),
+		refineCh:        make(chan refinementJob, bufSize),
 	}
 }
 
@@ -112,18 +134,39 @@ func (c *Coordinator) Start(ctx context.Context) error {
 		go c.processPipeline(ctx, c.cfg.MonitorCapturer, SourceMonitor)
 	}
 
-	// Closer goroutine: waits for all pipelines to finish, then closes the segment channel.
+	c.refineWG.Add(1)
+	go c.refineWorker()
+
+	// Closer goroutine: waits for all pipelines to finish (including
+	// their final VAD flush, which may still enqueue a last refinement
+	// job or two), only THEN closes refineCh -- so refineWorker keeps
+	// draining right up until every queued job has actually run, never
+	// abandoning a "pending" segment mid-refinement -- and only after
+	// refineWorker itself has finished does it close the two segment
+	// channels, since a late refinement update would otherwise arrive
+	// after SegmentUpdates() looks closed to a consumer.
 	go func() {
 		c.wg.Wait()
+		close(c.refineCh)
+		c.refineWG.Wait()
 		close(c.segmentCh)
+		close(c.segmentUpdateCh)
 	}()
 
 	return nil
 }
 
-// Segments returns the channel that receives transcribed segments.
+// Segments returns the channel that receives newly-transcribed segments.
 func (c *Coordinator) Segments() <-chan session.Segment {
 	return c.segmentCh
+}
+
+// SegmentUpdates returns the channel that receives revisions to a
+// segment already delivered on Segments() (same ID): pass 2's refined
+// text superseding pass 1's, once ready. Only fires when the Config
+// this Coordinator was created with set StreamingEngine.
+func (c *Coordinator) SegmentUpdates() <-chan session.Segment {
+	return c.segmentUpdateCh
 }
 
 // Activity returns a channel signalled when VAD detects ongoing speech.
