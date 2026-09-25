@@ -15,6 +15,7 @@ const (
 	StageWindowNotFound EventStage = "window_not_found"
 	StageCaptureFailed  EventStage = "capture_failed"
 	StageFrameCaptured  EventStage = "frame_captured"
+	StageNotACall       EventStage = "not_a_call"
 	StageNoRule         EventStage = "no_rule"
 	StageRingMatched    EventStage = "ring_matched"
 	StageNoRingMatch    EventStage = "no_ring_match"

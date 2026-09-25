@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"sync"
 	"time"
 
@@ -12,6 +13,7 @@ import (
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
+	"github.com/sosuke-ai/tomoe-pc/internal/audiosources"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/gpu"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
@@ -263,19 +265,48 @@ func (a *App) ListMonitorSources() ([]audio.DeviceInfo, error) {
 	return audio.ListMonitorSources()
 }
 
-// SystemAudioMode reports how meeting mode's second audio source is
-// selected, so the frontend can render an honest label instead of
-// always showing a Linux-shaped device picker: "manual" (Linux — pick
-// a PulseAudio monitor source from ListMonitorSources, which is always
-// empty on macOS since no such concept exists there) or "auto" (macOS —
-// StartSession's monitorDevice argument is ignored; internal/meetingaudio
-// always tries to auto-detect the active meeting window instead, no
-// selection needed or possible).
+// SystemAudioMode reports which kind of second-audio-source picker the
+// frontend should show: "manual" (Linux — pick a PulseAudio monitor
+// source from ListMonitorSources) or "auto" (macOS — pick from
+// ListAudioSources instead, a live list of apps currently producing
+// audio, plus an always-present "Everything"; see StartSession's
+// monitorDevice argument, which on macOS carries that selection rather
+// than a PulseAudio device name).
 func (a *App) SystemAudioMode() string {
 	if runtime.GOOS == "darwin" {
 		return "auto"
 	}
 	return "manual"
+}
+
+// AudioSourceView is the camelCase JSON view of one selectable macOS
+// audio source for the frontend's picker.
+type AudioSourceView struct {
+	ID   string `json:"id"`   // "everything", or a decimal PID -- pass straight back as StartSession's monitorDevice
+	Name string `json:"name"` // human-readable, e.g. "Everything" or "Microsoft Teams"
+}
+
+// ListAudioSources returns macOS's second-audio-source picker options:
+// "Everything" (always first, whole-system audio, no speaker
+// diarization — see live.Config.SkipMonitorDiarization) followed by
+// every app currently producing audio output
+// (internal/audiosources.ListActive). Empty (not an error) on Linux,
+// where SystemAudioMode() already tells the frontend to use
+// ListMonitorSources instead.
+func (a *App) ListAudioSources() ([]AudioSourceView, error) {
+	out := []AudioSourceView{{ID: "everything", Name: "Everything"}}
+
+	active, err := audiosources.ListActive()
+	if err != nil {
+		return out, nil // "Everything" is still a valid answer even if enumeration failed
+	}
+	for _, src := range active {
+		out = append(out, AudioSourceView{
+			ID:   strconv.Itoa(src.PID),
+			Name: src.Name,
+		})
+	}
+	return out, nil
 }
 
 // StartSession begins a new live transcription session.
@@ -322,11 +353,9 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	}
 
 	// Set up monitor capturer (optional) — the second audio source
-	// (system/PulseAudio monitor on Linux, the meeting window's guest
-	// audio via ScreenCaptureKit on macOS). See internal/meetingaudio.
-	// Called unconditionally (not gated on monitorDevice != "") because
-	// macOS has no device-name concept here at all -- it always tries
-	// to find an active meeting window regardless of the hint.
+	// (a PulseAudio monitor device on Linux, chosen from
+	// ListMonitorSources; a specific app or "everything" on macOS,
+	// chosen from ListAudioSources — see internal/meetingaudio).
 	monCapturer, err := meetingaudio.NewMonitorSource(monitorDevice)
 	if err != nil {
 		if cfg.MicCapturer != nil {
@@ -336,6 +365,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	}
 	if monCapturer != nil {
 		cfg.MonitorCapturer = monCapturer
+		cfg.SkipMonitorDiarization = monitorDevice == "everything"
 	}
 
 	// Reset speaker tracker for new session

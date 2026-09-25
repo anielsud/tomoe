@@ -132,6 +132,28 @@ func TestAssignSpeakerMonitorNoEmbedder(t *testing.T) {
 	}
 }
 
+func TestAssignSpeakerMonitorSkipDiarization(t *testing.T) {
+	c := &Coordinator{
+		cfg: Config{SkipMonitorDiarization: true},
+	}
+
+	label := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2})
+	if label != "System Audio" {
+		t.Errorf("monitor speaker with SkipMonitorDiarization = %q, want %q", label, "System Audio")
+	}
+}
+
+func TestAssignSpeakerMicUnaffectedBySkipDiarization(t *testing.T) {
+	c := &Coordinator{
+		cfg: Config{SkipMonitorDiarization: true},
+	}
+
+	label := c.assignSpeaker(SourceMic, []float32{0.1, 0.2})
+	if label != "You" {
+		t.Errorf("mic speaker with SkipMonitorDiarization = %q, want %q (mic is unaffected)", label, "You")
+	}
+}
+
 func TestNextSegID(t *testing.T) {
 	c := &Coordinator{}
 

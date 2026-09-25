@@ -165,6 +165,59 @@ func TestTrackerSetHintForRecent(t *testing.T) {
 	}
 }
 
+func TestTrackerSetHintForRecent_KeepsFullNameOverLaterTruncation(t *testing.T) {
+	tracker := NewTracker(0.8)
+	tracker.Assign([]float32{0, 1, 0}) // Person 1
+
+	if ok := tracker.SetHintForRecent("Nazanin Ramezani", time.Minute); !ok {
+		t.Fatal("SetHintForRecent() = false, want true")
+	}
+	// Re-select Person 1 as most recently assigned, then attach a
+	// truncated read of the same name (as a tile label might produce
+	// on a later OCR pass) -- it must not clobber the full name.
+	tracker.Assign([]float32{0, 0.99, 0.01})
+	if ok := tracker.SetHintForRecent("Nazanin Rame…", time.Minute); !ok {
+		t.Fatal("SetHintForRecent() = false, want true")
+	}
+
+	label, _ := tracker.Assign([]float32{0, 0.98, 0.02})
+	if label != "Person 1 (Nazanin Ramezani)" {
+		t.Errorf("label = %q, want full name kept, got truncated overwrite", label)
+	}
+}
+
+func TestTrackerSetHintForRecent_UpgradesTruncatedNameToFuller(t *testing.T) {
+	tracker := NewTracker(0.8)
+	tracker.Assign([]float32{0, 1, 0}) // Person 1
+
+	tracker.SetHintForRecent("Nazanin Rame…", time.Minute)
+	tracker.Assign([]float32{0, 0.99, 0.01})
+	if ok := tracker.SetHintForRecent("Nazanin Ramezani", time.Minute); !ok {
+		t.Fatal("SetHintForRecent() = false, want true")
+	}
+
+	label, _ := tracker.Assign([]float32{0, 0.98, 0.02})
+	if label != "Person 1 (Nazanin Ramezani)" {
+		t.Errorf("label = %q, want the fuller name to replace the truncated one", label)
+	}
+}
+
+func TestTrackerSetHintForRecent_UnrelatedNameOverwrites(t *testing.T) {
+	tracker := NewTracker(0.8)
+	tracker.Assign([]float32{0, 1, 0}) // Person 1
+
+	tracker.SetHintForRecent("Nazanin Ramezani", time.Minute)
+	tracker.Assign([]float32{0, 0.99, 0.01})
+	if ok := tracker.SetHintForRecent("Colin Whittingham", time.Minute); !ok {
+		t.Fatal("SetHintForRecent() = false, want true")
+	}
+
+	label, _ := tracker.Assign([]float32{0, 0.98, 0.02})
+	if label != "Person 1 (Colin Whittingham)" {
+		t.Errorf("label = %q, want an unrelated name to overwrite normally", label)
+	}
+}
+
 func TestTrackerSetHintForRecent_TooOld(t *testing.T) {
 	tracker := NewTracker(0.8)
 	tracker.Assign([]float32{1, 0, 0})
@@ -300,5 +353,25 @@ func TestTrackerAssign_EmptyEmbeddingNeverNeedsHint(t *testing.T) {
 	_, needsHint := tracker.Assign(nil)
 	if needsHint {
 		t.Error("empty embedding: needsHint = true, want false (no real speaker to hint)")
+	}
+}
+
+func TestIsTruncationOf(t *testing.T) {
+	cases := []struct {
+		short, long string
+		want        bool
+	}{
+		{"Nazanin Rame…", "Nazanin Ramezani", true},
+		{"nazanin rame", "Nazanin Ramezani", true}, // case-insensitive
+		{"Nazanin Ramezani", "Nazanin Ramezani", true},
+		{"Nazanin Ramezani", "Nazanin Rame…", false}, // short is actually longer
+		{"Colin", "Nazanin Ramezani", false},         // not a prefix at all
+		{"", "Nazanin Ramezani", false},
+		{"Nazanin", "", false},
+	}
+	for _, c := range cases {
+		if got := isTruncationOf(c.short, c.long); got != c.want {
+			t.Errorf("isTruncationOf(%q, %q) = %v, want %v", c.short, c.long, got, c.want)
+		}
 	}
 }

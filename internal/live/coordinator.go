@@ -45,6 +45,17 @@ type Config struct {
 	// slower/better) and supersedes pass 1's text once ready. See
 	// pipeline.go's drainVAD.
 	StreamingEngine transcribe.StreamingEngine
+	// SkipMonitorDiarization disables speaker embedding/clustering for
+	// the monitor source, labeling every monitor-source segment
+	// "System Audio" instead of attempting "Person N" identification.
+	// Set this when the monitor source is a whole-system audio tap
+	// (macOS's "Everything" source-picker option) rather than one
+	// specific app's audio: a system-wide tap can mix multiple
+	// unrelated audio streams together (notifications, music, several
+	// apps at once), so per-embedding speaker clustering isn't
+	// meaningful there the way it is for one app's own audio. Defaults
+	// to false (diarize), unchanged from before this field existed.
+	SkipMonitorDiarization bool
 }
 
 // Stats holds runtime statistics about the coordinator.

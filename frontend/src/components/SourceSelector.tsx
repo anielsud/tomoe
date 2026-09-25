@@ -1,4 +1,4 @@
-import { DeviceInfo } from '../types';
+import { DeviceInfo, AudioSourceView } from '../types';
 
 interface Props {
   devices: DeviceInfo[];
@@ -8,17 +8,20 @@ interface Props {
   onMicChange: (device: string) => void;
   onMonitorChange: (device: string) => void;
   disabled: boolean;
-  // "manual" (Linux: pick a PulseAudio monitor source below) or "auto"
-  // (macOS: the second audio source is always auto-detected — the
-  // active meeting window's audio via ScreenCaptureKit — so there's
-  // nothing to pick; showing the manual picker's empty "No System
-  // Audio" state here would misleadingly suggest nothing is captured).
+  // "manual" (Linux: pick a PulseAudio monitor source, below) or
+  // "auto" (macOS: pick from audioSources instead — a live list of
+  // apps currently producing audio, plus an always-present
+  // "Everything"; see ListAudioSources).
   systemAudioMode: 'manual' | 'auto';
+  // macOS only (empty on Linux, where systemAudioMode is "manual" and
+  // this isn't used) — see App.tsx's periodic refresh while this
+  // picker is visible and not recording.
+  audioSources: AudioSourceView[];
 }
 
 export default function SourceSelector({
   devices, monitors, micDevice, monitorDevice,
-  onMicChange, onMonitorChange, disabled, systemAudioMode,
+  onMicChange, onMonitorChange, disabled, systemAudioMode, audioSources,
 }: Props) {
   return (
     <>
@@ -41,9 +44,17 @@ export default function SourceSelector({
       </select>
 
       {systemAudioMode === 'auto' ? (
-        <span className="system-audio-auto" title="Automatically captures the active meeting window's audio (e.g. Microsoft Teams) via ScreenCaptureKit — no selection needed">
-          System Audio: Auto-detect
-        </span>
+        <select
+          value={monitorDevice}
+          onChange={(e) => onMonitorChange(e.target.value)}
+          disabled={disabled}
+          title="System Audio — 'Everything' captures the whole system's audio without trying to tell speakers apart; picking a specific app captures just that app's audio, with speaker identification"
+        >
+          <option value="">No System Audio</option>
+          {audioSources.map(s => (
+            <option key={s.id} value={s.id}>{s.name}</option>
+          ))}
+        </select>
       ) : (
         <select
           value={monitorDevice}

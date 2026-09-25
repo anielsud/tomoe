@@ -23,7 +23,7 @@ const (
 	// ScreenCaptureKit + Vision far faster than either needs to run.
 	// The scheduled ticker is unaffected by this — it always fires at
 	// its own interval regardless of when the last attempt happened.
-	minAttemptInterval = 3 * time.Second
+	minAttemptInterval = 1 * time.Second
 )
 
 // Poll periodically looks for a window FindMeetingWindow's heuristic
@@ -64,14 +64,18 @@ const (
 // wiring is the caller's job (internal/daemon, internal/backend), since
 // only they hold both the Tracker and this goroutine's lifecycle.
 //
-// Escalated snapshots are NOT the permanent library: FindMeetingWindow
+// Escalated snapshots are NOT the permanent library. FindMeetingWindow
 // matches any non-trivial-titled Microsoft-Teams-owned window, which
-// includes plain chat tabs, not just an actual call — confirmed live
-// during this feature's own testing, capturing a real private chat
-// conversation instead of a meeting. Nothing captured here is treated
-// as safe to keep or use for calibration until a human explicitly
-// reviews and approves it via `tomoe videohint approve` — see
-// ApproveSnapshot.
+// includes plain chat tabs and the post-meeting recording/playback
+// page, not just an actual call — confirmed live during this feature's
+// own testing, capturing a real private chat conversation and a
+// recording page instead of a meeting. Rule.Chrome (see rule.go) now
+// gates on real active-call chrome before Ring/Label are even
+// attempted, which rules out both of those specific cases, but it's a
+// narrower, differently-fallible check (a fixed icon match) than "is
+// this really a call," so nothing captured here is treated as safe to
+// keep or use for calibration until a human explicitly reviews and
+// approves it via `tomoe videohint approve` — see ApproveSnapshot.
 //
 // Blocks until ctx is cancelled; meant to be run in its own goroutine,
 // one per live meeting session, cancelled when that session stops
@@ -128,6 +132,16 @@ func pollOnce(events chan<- Event, lastCapture *time.Time, captured *int) {
 
 	reason := "no rule configured for this platform"
 	rule, ok := ruleFor(platform)
+	if ok && rule.Chrome.configured() && !DetectCallChrome(frame.Pix, frame.Width, frame.Height, rule.Chrome) {
+		// FindMeetingWindow's title heuristic alone can match a window
+		// that's Teams-owned and non-trivially titled but isn't
+		// actually a call (confirmed live: a chat conversation, a
+		// post-meeting recording/playback page) -- neither has
+		// anything worth calibrating a Ring/Label rule from, so this
+		// is a hard stop, not an escalation: nothing captured here.
+		sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNotACall, Detail: "captured window has no active-call chrome (Leave button not found) -- likely not a live call"})
+		return
+	}
 	if !ok {
 		sendEvent(events, Event{Time: time.Now(), Platform: platform, Stage: StageNoRule, Detail: reason})
 	} else if ring, found := DetectRing(frame.Pix, frame.Width, frame.Height, rule.Ring); found {
