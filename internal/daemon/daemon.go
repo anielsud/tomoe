@@ -511,7 +511,8 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	// cancel field elsewhere in this file.
 	videoHintCtx, videoHintCancel := context.WithCancel(ctx)
 	videoHintEvents := make(chan videohint.Event, 32)
-	go videohint.Poll(videoHintCtx, 10*time.Second, coordinator.HintNeeded(), videoHintEvents)
+	pollInterval, triggerDebounce := d.cfg.Meeting.VideoHintTiming()
+	go videohint.Poll(videoHintCtx, pollInterval, triggerDebounce, coordinator.HintNeeded(), videoHintEvents)
 	go func() {
 		for {
 			select {
