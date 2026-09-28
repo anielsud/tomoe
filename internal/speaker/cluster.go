@@ -244,10 +244,6 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 	}
 
 	now := t.nowFn()
-	sinceLast := time.Duration(-1)
-	if !t.lastAssignedAt.IsZero() {
-		sinceLast = now.Sub(t.lastAssignedAt)
-	}
 
 	if bestIdx >= 0 && bestSim >= t.tuning.Threshold {
 		// Confident match: fold it into the running average.
@@ -255,7 +251,6 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 		t.lastAssignedIdx = bestIdx
 		t.lastAssignedAt = now
 		t.lastDecision = DecisionConfident
-		debugLogAssign(t.lastDecision, bestIdx, bestSim, duration, sinceLast, t.tuning.Threshold)
 		return t.label(bestIdx), t.hints[bestIdx] == ""
 	}
 
@@ -270,7 +265,6 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 		// StickyGraceWindow for why not).
 		t.lastAssignedAt = now
 		t.lastDecision = DecisionSticky
-		debugLogAssign(t.lastDecision, bestIdx, bestSim, duration, sinceLast, t.tuning.Threshold)
 		return t.label(bestIdx), t.hints[bestIdx] == ""
 	}
 
@@ -302,7 +296,6 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 		t.lastAssignedIdx = idx
 		t.lastAssignedAt = now
 		t.lastDecision = DecisionShortSegment
-		debugLogAssign(t.lastDecision, idx, bestSim, duration, sinceLast, t.tuning.Threshold)
 		return t.label(idx), t.hints[idx] == ""
 	}
 
@@ -316,19 +309,7 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 	t.lastAssignedIdx = idx
 	t.lastAssignedAt = now
 	t.lastDecision = DecisionNewSpeaker
-	debugLogAssign(t.lastDecision, idx, bestSim, duration, sinceLast, t.tuning.Threshold)
 	return t.label(idx), true
-}
-
-// debugLogAssign is a TEMPORARY diagnostic: prints the real numbers
-// behind every clustering decision (which similarity/duration/timing
-// values actually occur against real captured audio) so
-// threshold/margin/window constants above can be tuned from real data
-// instead of guesses. Remove once real-world values have been
-// gathered and the constants above are retuned against them.
-func debugLogAssign(decision AssignDecision, idx int, bestSim float64, duration, sinceLast time.Duration, threshold float64) {
-	fmt.Printf("speaker: assign decision=%-13s idx=%d bestSim=%.3f threshold=%.3f dur=%v sinceLast=%v\n",
-		decision, idx, bestSim, threshold, duration, sinceLast)
 }
 
 // label builds the display label for speaker idx: "Person N", or
