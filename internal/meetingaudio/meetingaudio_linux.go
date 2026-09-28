@@ -8,10 +8,12 @@ import (
 
 // NewMonitorSource resolves deviceHint (falling back to
 // audio.DefaultMonitorDevice() if empty) and wraps it as a
-// StreamCapturer, or returns (nil, nil) if no monitor device is
-// available — unchanged from what internal/daemon and internal/backend
-// did inline before this package existed.
+// StreamCapturer, or returns (nil, nil) if deviceHint is NoSource or no
+// monitor device is available.
 func NewMonitorSource(deviceHint string) (*audio.StreamCapturer, error) {
+	if deviceHint == NoSource {
+		return nil, nil
+	}
 	device := deviceHint
 	if device == "" {
 		device = audio.DefaultMonitorDevice()

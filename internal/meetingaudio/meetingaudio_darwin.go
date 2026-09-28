@@ -17,7 +17,7 @@ import (
 // sourceHint (from the frontend's source picker — see
 // internal/audiosources.ListActive and internal/backend's
 // ListAudioSources/StartSession):
-//   - "" (nothing selected): no monitor capture, mic-only.
+//   - "" (nothing selected) or NoSource: no monitor capture, mic-only.
 //   - "everything": the whole system's audio output, not tied to any
 //     one app (internal/guestaudio.NewSystemCapturer).
 //   - a decimal PID (e.g. "1234", from ListActive): that specific
@@ -36,7 +36,7 @@ import (
 // failure here would make meeting mode strictly worse than today for
 // no benefit.
 func NewMonitorSource(sourceHint string) (*audio.StreamCapturer, error) {
-	if sourceHint == "" {
+	if sourceHint == "" || sourceHint == NoSource {
 		return nil, nil
 	}
 

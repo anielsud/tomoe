@@ -1,6 +1,7 @@
 package backend
 
 import (
+	"runtime"
 	"testing"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
@@ -47,5 +48,15 @@ func TestBytesWriter(t *testing.T) {
 	}
 	if string(buf) != "hello world" {
 		t.Errorf("buf = %q, want %q", string(buf), "hello world")
+	}
+}
+
+func TestListAudioSourcesEmptyOffDarwin(t *testing.T) {
+	if runtime.GOOS == "darwin" {
+		t.Skip("macOS lists Everything plus active apps")
+	}
+	got, err := NewApp().ListAudioSources()
+	if err != nil || len(got) != 0 {
+		t.Errorf("ListAudioSources() = (%v, %v), want no sources: \"everything\" can't be captured here", got, err)
 	}
 }

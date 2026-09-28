@@ -50,7 +50,8 @@ export default function SourceSelector({
           disabled={disabled}
           title="System Audio — 'Everything' captures the whole system's audio without trying to tell speakers apart; picking a specific app captures just that app's audio, with speaker identification"
         >
-          <option value="">No System Audio</option>
+          {/* "none", not "": the backend treats "" as "use the default source". */}
+          <option value="none">No System Audio</option>
           {audioSources.map(s => (
             <option key={s.id} value={s.id}>{s.name}</option>
           ))}
@@ -62,7 +63,7 @@ export default function SourceSelector({
           disabled={disabled}
           title="System Audio"
         >
-          <option value="">No System Audio</option>
+          <option value="none">No System Audio</option>
           {monitors.map(d => (
             <option key={d.ID} value={d.Name}>
               {d.Name}{d.IsDefault ? ' *' : ''}
