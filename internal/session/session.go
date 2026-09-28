@@ -35,3 +35,42 @@ type Segment struct {
 	// two-pass pipeline.
 	Status string `json:"status,omitempty"`
 }
+
+// statusRank orders Segment.Status values by how settled the text is:
+// "live" < "pending" < "" (final).
+func statusRank(status string) int {
+	switch status {
+	case "live":
+		return 0
+	case "pending":
+		return 1
+	default:
+		return 2
+	}
+}
+
+// UpsertSegment applies a segment or a revision of one (same ID) to the
+// session. Live transcription delivers new segments and revisions on
+// separate channels, so a revision can arrive before its segment, or a
+// segment's first emission can be dropped altogether; either way the
+// segment is inserted, in StartTime order. A revision never regresses a
+// segment to a less settled status (a stale "live" partial arriving
+// after the final text is ignored).
+func (s *Session) UpsertSegment(seg Segment) {
+	for i := range s.Segments {
+		if s.Segments[i].ID != seg.ID {
+			continue
+		}
+		if statusRank(s.Segments[i].Status) <= statusRank(seg.Status) {
+			s.Segments[i] = seg
+		}
+		return
+	}
+	at := len(s.Segments)
+	for at > 0 && s.Segments[at-1].StartTime > seg.StartTime {
+		at--
+	}
+	s.Segments = append(s.Segments, Segment{})
+	copy(s.Segments[at+1:], s.Segments[at:])
+	s.Segments[at] = seg
+}
