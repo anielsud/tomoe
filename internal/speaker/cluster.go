@@ -7,6 +7,20 @@ import (
 	"time"
 )
 
+// AssignDecision identifies which rule inside Assign produced a label
+// on the most recent call — exposed via LastDecision (not a change to
+// Assign's own return signature, to avoid touching its many existing
+// callers) so a caller like a diagnostics view can show *how* a
+// segment was labeled, not just what the label ended up being.
+type AssignDecision string
+
+const (
+	DecisionConfident    AssignDecision = "confident"
+	DecisionSticky       AssignDecision = "sticky"
+	DecisionShortSegment AssignDecision = "short-segment"
+	DecisionNewSpeaker   AssignDecision = "new-speaker"
+)
+
 // DefaultThreshold is the default cosine similarity threshold for
 // same-speaker assignment. Lowered from an original 0.65 to 0.55 after
 // live diagnostic logging against a real multi-participant call: across
@@ -112,6 +126,10 @@ type Tracker struct {
 	lastAssignedIdx int
 	lastAssignedAt  time.Time
 
+	// lastDecision records which branch of Assign produced the most
+	// recent label -- see AssignDecision and LastDecision.
+	lastDecision AssignDecision
+
 	// aliasOf redirects a merged-away cluster index to the canonical
 	// index it was merged into (see mergeInto/canonical). A
 	// merged-away slot's centroid/count/hint entries are left in
@@ -174,6 +192,16 @@ func (t *Tracker) SetTuning(tuning Tuning) {
 	t.mu.Unlock()
 }
 
+// LastDecision returns which branch of Assign produced its most
+// recent label ("" before Assign has ever been called) -- see
+// AssignDecision. Meant for a diagnostics view correlating audio-side
+// reasoning with the transcript, not for any behavioral decision.
+func (t *Tracker) LastDecision() AssignDecision {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.lastDecision
+}
+
 // Tuning returns the tracker's current tuning (e.g. for logging what
 // values a decision was actually made under).
 func (t *Tracker) Tuning() Tuning {
@@ -222,6 +250,7 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 		t.updateCentroid(bestIdx, embedding)
 		t.lastAssignedIdx = bestIdx
 		t.lastAssignedAt = now
+		t.lastDecision = DecisionConfident
 		return t.label(bestIdx), t.hints[bestIdx] == ""
 	}
 
@@ -235,6 +264,7 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 		// without folding it into the centroid (see doc comment above
 		// StickyGraceWindow for why not).
 		t.lastAssignedAt = now
+		t.lastDecision = DecisionSticky
 		return t.label(bestIdx), t.hints[bestIdx] == ""
 	}
 
@@ -265,6 +295,7 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 		}
 		t.lastAssignedIdx = idx
 		t.lastAssignedAt = now
+		t.lastDecision = DecisionShortSegment
 		return t.label(idx), t.hints[idx] == ""
 	}
 
@@ -277,6 +308,7 @@ func (t *Tracker) Assign(embedding []float32, duration time.Duration) (label str
 	idx := len(t.centroids) - 1
 	t.lastAssignedIdx = idx
 	t.lastAssignedAt = now
+	t.lastDecision = DecisionNewSpeaker
 	return t.label(idx), true
 }
 
