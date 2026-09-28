@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { Segment } from '../types';
+import { upsertSegment } from '../hooks/useTranscript';
 
 const MAX_SEGMENTS = 300;
 
@@ -74,11 +75,16 @@ export default function DiagnosticsPane() {
   const [autoScroll, setAutoScroll] = useState(true);
 
   useEffect(() => {
+    // New segments and their revisions travel on separate events that can
+    // arrive in either order (see useTranscript's upsertSegment, which this
+    // reuses) -- a naive append-then-map-by-id would silently drop a
+    // revision that overtakes its segment, or a segment whose first send
+    // was dropped under a full channel buffer.
     const cancelNew = EventsOn('transcript:segment', (seg: Segment) => {
-      setSegments(prev => [...prev, seg].slice(-MAX_SEGMENTS));
+      setSegments(prev => upsertSegment(prev, seg).slice(-MAX_SEGMENTS));
     });
     const cancelUpdate = EventsOn('transcript:segment:update', (seg: Segment) => {
-      setSegments(prev => prev.map(s => (s.id === seg.id ? seg : s)));
+      setSegments(prev => upsertSegment(prev, seg).slice(-MAX_SEGMENTS));
     });
     return () => {
       cancelNew();
