@@ -203,6 +203,36 @@ func (t *Tracker) NumSpeakers() int {
 	return len(t.centroids)
 }
 
+// Peek returns a provisional label for embedding without changing any
+// state: the best-matching speaker if it clears the threshold, otherwise
+// whoever was assigned within stickyGraceWindow, otherwise the label a new
+// speaker would get. Live transcription shows it while an utterance is
+// still in progress, from its first half second of audio, which is too
+// little for Assign: an embedding that short rarely clears the threshold,
+// so every utterance would become a new speaker. The real Assign happens
+// once the whole utterance is available.
+func (t *Tracker) Peek(embedding []float32) string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if len(embedding) == 0 {
+		return "Unknown"
+	}
+	bestIdx, bestSim := -1, 0.0
+	for i, centroid := range t.centroids {
+		if sim := CosineSimilarity(embedding, centroid); sim > bestSim {
+			bestIdx, bestSim = i, sim
+		}
+	}
+	if bestIdx >= 0 && bestSim >= t.threshold {
+		return t.label(bestIdx)
+	}
+	if len(t.centroids) > 0 && !t.lastAssignedAt.IsZero() && t.nowFn().Sub(t.lastAssignedAt) <= stickyGraceWindow {
+		return t.label(t.lastAssignedIdx)
+	}
+	return fmt.Sprintf("Person %d", len(t.centroids)+1)
+}
+
 // updateCentroid updates a centroid with a new embedding using running average.
 func (t *Tracker) updateCentroid(idx int, embedding []float32) {
 	count := float32(t.counts[idx])

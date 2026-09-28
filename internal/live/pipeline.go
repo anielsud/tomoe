@@ -30,6 +30,13 @@ const (
 // refinementJob is one pass-2 request: re-decode a completed segment's
 // audio through the (offline, higher-quality) Engine and supersede the
 // pass-1 text already emitted for it.
+//
+// A segment pass 1 produced no text for (typically a short "yes"/"ok"
+// that finished before the streaming model emitted anything) was never
+// shown, so it is queued unannounced: refineWorker emits it as a new
+// segment if pass 2 finds speech, and drops it otherwise. Its speaker is
+// only decided then, from embedding, so noise that decodes to nothing
+// never reaches the speaker tracker.
 type refinementJob struct {
 	id        string
 	samples   []float32
@@ -38,6 +45,9 @@ type refinementJob struct {
 	endTime   float64
 	source    SourceType
 	pass1Text string // fallback if refinement produces nothing usable
+
+	unannounced bool
+	embedding   []float32 // unannounced only; see speakerEmbedding
 }
 
 // liveState tracks pass 1's in-progress utterance for one pipeline: the
@@ -47,6 +57,7 @@ type refinementJob struct {
 // utterance in progress."
 type liveState struct {
 	partial   string
+	shown     string // last text actually emitted for the live segment
 	id        string
 	speaker   string
 	startTime float64
@@ -108,6 +119,7 @@ func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCaptu
 			// Flush VAD and process remaining segments
 			vad.Flush()
 			c.drainVAD(vad, source, streamSess, &live)
+			c.finishLive(source, &live)
 			return
 
 		case window, ok := <-windows:
@@ -115,6 +127,7 @@ func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCaptu
 				// Channel closed — capturer stopped
 				vad.Flush()
 				c.drainVAD(vad, source, streamSess, &live)
+				c.finishLive(source, &live)
 				return
 			}
 
@@ -159,16 +172,17 @@ func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCaptu
 // segment; every call after that updates the same segment ID in place.
 // "live" (not "pending") signals to consumers that this text may still
 // change because the person is still talking, not just because pass 2
-// hasn't run yet — see drainVAD, which is what actually transitions a
-// segment to "pending" once the utterance itself is done.
+// hasn't run yet — see handleSegment, which is what actually transitions
+// a segment to "pending" once the utterance itself is done.
 func (c *Coordinator) emitLivePartial(source SourceType, live *liveState, text string) {
 	if live.id == "" {
 		if len(live.audio) < minLiveAudioSamples {
 			return
 		}
 		live.id = c.nextSegID()
-		live.speaker = c.assignSpeaker(source, live.audio)
+		live.speaker = c.provisionalSpeaker(source, live.audio)
 		live.startTime = c.elapsed()
+		live.shown = text
 
 		seg := session.Segment{
 			ID:        live.id,
@@ -197,6 +211,7 @@ func (c *Coordinator) emitLivePartial(source SourceType, live *liveState, text s
 		Language:  "en",
 		Status:    "live",
 	}
+	live.shown = text
 	select {
 	case c.segmentUpdateCh <- seg:
 	default:
@@ -219,140 +234,84 @@ func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceT
 
 		// Apply DSP pipeline
 		samples := audio.ProcessPipeline(segment.Samples, vadSampleRate, -40)
-		duration := float64(len(samples)) / vadSampleRate
-		endTime := c.elapsed()
-		startTime := endTime - duration
-
-		if streamSess != nil {
-			text := strings.TrimSpace(live.partial)
-			streamSess.Reset()
-
-			if text == "" {
-				live.reset()
-				continue
-			}
-
-			// Reuse the speaker already assigned when the live partial
-			// first appeared, if there was one — recomputing from this
-			// segment's full audio would risk a different "Person N"
-			// for the very utterance that was already shown under the
-			// first one, and would double-count this utterance into
-			// the tracker's centroid. An utterance that finished before
-			// accumulating minLiveAudioSamples never got a live partial
-			// at all, so falls back to computing it fresh here, exactly
-			// as before live partials existed.
-			id := live.id
-			spk := live.speaker
-			wasLive := id != ""
-			if !wasLive {
-				id = c.nextSegID()
-				spk = c.assignSpeaker(source, samples)
-			}
-
-			seg := session.Segment{
-				ID:        id,
-				Speaker:   spk,
-				Text:      text,
-				StartTime: startTime,
-				EndTime:   endTime,
-				Source:    string(source),
-				Language:  "en",
-				Status:    "pending",
-			}
-			if wasLive {
-				select {
-				case c.segmentUpdateCh <- seg:
-				default:
-				}
-			} else {
-				select {
-				case c.segmentCh <- seg:
-				default:
-				}
-			}
-
-			select {
-			case c.refineCh <- refinementJob{
-				id: id, samples: samples, speaker: spk,
-				startTime: startTime, endTime: endTime, source: source,
-				pass1Text: text,
-			}:
-			default:
-				// Refinement queue is backed up -- pass 1's text stands
-				// as final rather than blocking the live pipeline.
-			}
-
-			live.reset()
-		} else {
-			// Single-pass (no streaming engine configured): unchanged
-			// from before this feature existed.
-			spk := c.assignSpeaker(source, samples)
-
-			c.transcribeMu.Lock()
-			result, err := c.cfg.Engine.TranscribeDirect(samples)
-			c.transcribeMu.Unlock()
-
-			if err != nil || result == nil || strings.TrimSpace(result.Text) == "" {
-				continue
-			}
-
-			seg := session.Segment{
-				ID:        c.nextSegID(),
-				Speaker:   spk,
-				Text:      strings.TrimSpace(result.Text),
-				StartTime: startTime,
-				EndTime:   endTime,
-				Source:    string(source),
-				Language:  result.Language,
-			}
-			select {
-			case c.segmentCh <- seg:
-			default:
-			}
-		}
-
-		// Update counters
-		if source == SourceMic {
-			c.micCount.Add(1)
-		} else {
-			c.monitorCount.Add(1)
-		}
+		c.handleSegment(source, samples, streamSess, live)
 	}
 }
 
-// refineWorker drains refinement jobs (pass 2): re-decode a segment's
-// audio through the offline Engine (allowed to be slower/better than
-// pass 1's streaming decode) and supersede its text via segmentUpdateCh.
-// Runs until refineCh is closed (see Start) rather than on ctx.Done(),
-// so a job queued right at shutdown still gets processed.
-func (c *Coordinator) refineWorker() {
-	defer c.refineWG.Done()
+// handleSegment transcribes one completed VAD segment (already DSP
+// processed). Split out of drainVAD so it can be tested without a VAD
+// model.
+func (c *Coordinator) handleSegment(source SourceType, samples []float32, streamSess transcribe.StreamingSession, live *liveState) {
+	duration := float64(len(samples)) / vadSampleRate
+	endTime := c.elapsed()
+	startTime := endTime - duration
 
-	for job := range c.refineCh {
-		c.transcribeMu.Lock()
-		result, err := c.cfg.Engine.TranscribeDirect(job.samples)
-		c.transcribeMu.Unlock()
+	if streamSess == nil {
+		c.transcribeSinglePass(source, samples, startTime, endTime)
+		return
+	}
 
-		text := job.pass1Text
-		lang := "en"
-		if err == nil && result != nil && strings.TrimSpace(result.Text) != "" {
-			text = strings.TrimSpace(result.Text)
-			if result.Language != "" {
-				lang = result.Language
-			}
+	text := strings.TrimSpace(live.partial)
+	streamSess.Reset()
+
+	if text == "" && live.id == "" {
+		// Pass 1 never produced text for this utterance. Pass 2 still gets
+		// a chance at it, the same as single-pass would have.
+		c.queueUnannounced(source, samples, startTime, endTime)
+		live.reset()
+		return
+	}
+	if text == "" {
+		// A live segment is showing but pass 1's hypothesis has since
+		// gone blank; keep the utterance and let pass 2 supply the text.
+		text = live.shown
+	}
+
+	// A live segment keeps its ID, but its speaker label was only
+	// provisional (see provisionalSpeaker): the real assignment uses the
+	// whole utterance, as single-pass does, and may relabel the line.
+	id := live.id
+	wasLive := id != ""
+	if !wasLive {
+		id = c.nextSegID()
+	}
+	spk := c.assignSpeaker(source, samples)
+	live.reset()
+
+	seg := session.Segment{
+		ID:        id,
+		Speaker:   spk,
+		Text:      text,
+		StartTime: startTime,
+		EndTime:   endTime,
+		Source:    string(source),
+		Language:  "en",
+		Status:    "pending",
+	}
+	if wasLive {
+		select {
+		case c.segmentUpdateCh <- seg:
+		default:
 		}
-		// Either way, Status becomes "" (final): refinement failing just
-		// means pass 1's text is what stands, not that the segment stays
-		// marked "pending" forever.
-		seg := session.Segment{
-			ID:        job.id,
-			Speaker:   job.speaker,
-			Text:      text,
-			StartTime: job.startTime,
-			EndTime:   job.endTime,
-			Source:    string(job.source),
-			Language:  lang,
+	} else {
+		select {
+		case c.segmentCh <- seg:
+		default:
 		}
+	}
+	c.countSegment(source)
+
+	select {
+	case c.refineCh <- refinementJob{
+		id: id, samples: samples, speaker: spk,
+		startTime: startTime, endTime: endTime, source: source,
+		pass1Text: text,
+	}:
+	default:
+		// Refinement queue is backed up -- pass 1's text stands as final
+		// rather than blocking the live pipeline, and consumers have to be
+		// told so or the segment stays "pending" forever.
+		seg.Status = ""
 		select {
 		case c.segmentUpdateCh <- seg:
 		default:
@@ -360,8 +319,195 @@ func (c *Coordinator) refineWorker() {
 	}
 }
 
+// queueUnannounced hands a segment pass 1 produced no text for to pass 2
+// (see refinementJob). If the refinement queue is backed up it decodes
+// synchronously instead: dropping it would lose speech outright, which
+// is worse than briefly stalling this pipeline.
+func (c *Coordinator) queueUnannounced(source SourceType, samples []float32, startTime, endTime float64) {
+	job := refinementJob{
+		id: c.nextSegID(), samples: samples,
+		startTime: startTime, endTime: endTime, source: source,
+		unannounced: true,
+		embedding:   c.speakerEmbedding(source, samples),
+	}
+	select {
+	case c.refineCh <- job:
+	default:
+		if seg, ok := c.refine(job); ok {
+			select {
+			case c.segmentCh <- seg:
+			default:
+			}
+			c.countSegment(source)
+		}
+	}
+}
+
+// transcribeSinglePass is the single-pass path (no streaming engine
+// configured): one synchronous decode per completed segment, emitted as
+// final immediately.
+func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32, startTime, endTime float64) {
+	c.transcribeMu.Lock()
+	result, err := c.cfg.Engine.TranscribeDirect(samples)
+	c.transcribeMu.Unlock()
+
+	if err != nil || result == nil || strings.TrimSpace(result.Text) == "" {
+		return
+	}
+
+	// Only after the text check: a segment that decodes to nothing (noise,
+	// a cough) must not create or move a speaker centroid.
+	spk := c.assignSpeaker(source, samples)
+
+	seg := session.Segment{
+		ID:        c.nextSegID(),
+		Speaker:   spk,
+		Text:      strings.TrimSpace(result.Text),
+		StartTime: startTime,
+		EndTime:   endTime,
+		Source:    string(source),
+		Language:  result.Language,
+	}
+	select {
+	case c.segmentCh <- seg:
+	default:
+	}
+	c.countSegment(source)
+}
+
+// finishLive runs when a pipeline stops with a live segment still open
+// (its utterance never completed as a VAD segment), so that segment gets
+// refined text like any other instead of staying "live" in the saved
+// session. The refinement queue is still open here -- it is only closed
+// once every pipeline has returned -- and blocking on it is fine this
+// late, since the pipeline has nothing left to read.
+func (c *Coordinator) finishLive(source SourceType, live *liveState) {
+	if live.id == "" {
+		return
+	}
+	text := strings.TrimSpace(live.partial)
+	if text == "" {
+		text = live.shown
+	}
+	c.refineCh <- refinementJob{
+		id: live.id, samples: live.audio, speaker: c.assignSpeaker(source, live.audio),
+		startTime: live.startTime, endTime: c.elapsed(), source: source,
+		pass1Text: text,
+	}
+	c.countSegment(source)
+	live.reset()
+}
+
+// countSegment updates the per-source counters reported by Stats.
+func (c *Coordinator) countSegment(source SourceType) {
+	if source == SourceMic {
+		c.micCount.Add(1)
+	} else {
+		c.monitorCount.Add(1)
+	}
+}
+
+// refineWorker drains refinement jobs (pass 2): re-decode a segment's
+// audio through the offline Engine (allowed to be slower/better than
+// pass 1's streaming decode) and supersede its text via segmentUpdateCh,
+// or emit it on segmentCh if it was never announced. Runs until refineCh
+// is closed (see Start) rather than on ctx.Done(), so a job queued right
+// at shutdown still gets processed. Its sends block: this is the final
+// text for the segment, and Start's closer goroutine keeps both segment
+// channels open until this worker returns.
+func (c *Coordinator) refineWorker() {
+	defer c.refineWG.Done()
+
+	for job := range c.refineCh {
+		seg, ok := c.refine(job)
+		if !ok {
+			continue
+		}
+		if job.unannounced {
+			c.segmentCh <- seg
+			c.countSegment(job.source)
+		} else {
+			c.segmentUpdateCh <- seg
+		}
+	}
+}
+
+// refine runs pass 2 for one job and returns the final segment. ok is
+// false only for an unannounced job pass 2 found no speech in: there is
+// nothing to show for it. Otherwise refinement failing just means pass
+// 1's text is what stands, not that the segment stays "pending" forever.
+func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
+	c.transcribeMu.Lock()
+	result, err := c.cfg.Engine.TranscribeDirect(job.samples)
+	c.transcribeMu.Unlock()
+
+	text := job.pass1Text
+	lang := "en"
+	if err == nil && result != nil && strings.TrimSpace(result.Text) != "" {
+		text = strings.TrimSpace(result.Text)
+		if result.Language != "" {
+			lang = result.Language
+		}
+	}
+	if text == "" {
+		return session.Segment{}, false
+	}
+
+	spk := job.speaker
+	if job.unannounced {
+		spk = c.speakerLabel(job.source, job.embedding)
+	}
+	return session.Segment{
+		ID:        job.id,
+		Speaker:   spk,
+		Text:      text,
+		StartTime: job.startTime,
+		EndTime:   job.endTime,
+		Source:    string(job.source),
+		Language:  lang,
+	}, true
+}
+
 // assignSpeaker determines the speaker label for a segment.
 func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) string {
+	return c.speakerLabel(source, c.speakerEmbedding(source, samples))
+}
+
+// provisionalSpeaker labels a live segment from its first fraction of a
+// second of audio without touching the tracker's clusters (see
+// speaker.Tracker.Peek); handleSegment assigns the real label once the
+// utterance is complete.
+func (c *Coordinator) provisionalSpeaker(source SourceType, samples []float32) string {
+	if source == SourceMic {
+		return "You"
+	}
+	if c.cfg.SkipMonitorDiarization {
+		return "System Audio"
+	}
+	if embedding := c.speakerEmbedding(source, samples); len(embedding) > 0 {
+		return c.cfg.Tracker.Peek(embedding)
+	}
+	return "Other"
+}
+
+// speakerEmbedding extracts the embedding speakerLabel needs, or nil for
+// sources labeled without one. Split from speakerLabel so the embedding
+// can be computed on the pipeline goroutine (the Embedder is not safe for
+// concurrent use) while the label is decided later by refineWorker.
+func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []float32 {
+	if source == SourceMic || c.cfg.SkipMonitorDiarization || c.cfg.Embedder == nil || c.cfg.Tracker == nil {
+		return nil
+	}
+	embedding, err := c.cfg.Embedder.Extract(samples)
+	if err != nil {
+		return nil
+	}
+	return embedding
+}
+
+// speakerLabel maps a segment's embedding (from speakerEmbedding) to a
+// speaker label, clustering monitor-source speakers via the Tracker.
+func (c *Coordinator) speakerLabel(source SourceType, embedding []float32) string {
 	if source == SourceMic {
 		return "You"
 	}
@@ -371,22 +517,19 @@ func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) string
 	}
 
 	// For monitor source, try speaker embedding + clustering
-	if c.cfg.Embedder != nil && c.cfg.Tracker != nil {
-		embedding, err := c.cfg.Embedder.Extract(samples)
-		if err == nil && len(embedding) > 0 {
-			label, needsHint := c.cfg.Tracker.Assign(embedding)
-			if needsHint {
-				// Non-blocking: a video-hint check is worth doing right
-				// away rather than waiting for videohint.Poll's next
-				// scheduled tick, but this pipeline must never stall
-				// waiting for a slow/absent consumer.
-				select {
-				case c.hintNeededCh <- struct{}{}:
-				default:
-				}
+	if len(embedding) > 0 && c.cfg.Tracker != nil {
+		label, needsHint := c.cfg.Tracker.Assign(embedding)
+		if needsHint {
+			// Non-blocking: a video-hint check is worth doing right
+			// away rather than waiting for videohint.Poll's next
+			// scheduled tick, but this pipeline must never stall
+			// waiting for a slow/absent consumer.
+			select {
+			case c.hintNeededCh <- struct{}{}:
+			default:
 			}
-			return label
 		}
+		return label
 	}
 
 	return "Other"
