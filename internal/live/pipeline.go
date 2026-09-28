@@ -180,7 +180,7 @@ func (c *Coordinator) emitLivePartial(source SourceType, live *liveState, text s
 			return
 		}
 		live.id = c.nextSegID()
-		live.speaker = c.assignSpeaker(source, live.audio)
+		live.speaker = c.provisionalSpeaker(source, live.audio)
 		live.startTime = c.elapsed()
 		live.shown = text
 
@@ -267,21 +267,15 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 		text = live.shown
 	}
 
-	// Reuse the speaker already assigned when the live partial first
-	// appeared, if there was one — recomputing from this segment's full
-	// audio would risk a different "Person N" for the very utterance that
-	// was already shown under the first one, and would double-count this
-	// utterance into the tracker's centroid. An utterance that finished
-	// before accumulating minLiveAudioSamples never got a live partial at
-	// all, so falls back to computing it fresh here, exactly as before
-	// live partials existed.
+	// A live segment keeps its ID, but its speaker label was only
+	// provisional (see provisionalSpeaker): the real assignment uses the
+	// whole utterance, as single-pass does, and may relabel the line.
 	id := live.id
-	spk := live.speaker
 	wasLive := id != ""
 	if !wasLive {
 		id = c.nextSegID()
-		spk = c.assignSpeaker(source, samples)
 	}
+	spk := c.assignSpeaker(source, samples)
 	live.reset()
 
 	seg := session.Segment{
@@ -396,7 +390,7 @@ func (c *Coordinator) finishLive(source SourceType, live *liveState) {
 		text = live.shown
 	}
 	c.refineCh <- refinementJob{
-		id: live.id, samples: live.audio, speaker: live.speaker,
+		id: live.id, samples: live.audio, speaker: c.assignSpeaker(source, live.audio),
 		startTime: live.startTime, endTime: c.elapsed(), source: source,
 		pass1Text: text,
 	}
@@ -477,6 +471,23 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 // assignSpeaker determines the speaker label for a segment.
 func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) string {
 	return c.speakerLabel(source, c.speakerEmbedding(source, samples))
+}
+
+// provisionalSpeaker labels a live segment from its first fraction of a
+// second of audio without touching the tracker's clusters (see
+// speaker.Tracker.Peek); handleSegment assigns the real label once the
+// utterance is complete.
+func (c *Coordinator) provisionalSpeaker(source SourceType, samples []float32) string {
+	if source == SourceMic {
+		return "You"
+	}
+	if c.cfg.SkipMonitorDiarization {
+		return "System Audio"
+	}
+	if embedding := c.speakerEmbedding(source, samples); len(embedding) > 0 {
+		return c.cfg.Tracker.Peek(embedding)
+	}
+	return "Other"
 }
 
 // speakerEmbedding extracts the embedding speakerLabel needs, or nil for

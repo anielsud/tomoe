@@ -142,8 +142,10 @@ func TestFinishLive_RefinesOpenLiveSegment(t *testing.T) {
 
 	runRefineWorker(c)
 	update := <-c.segmentUpdateCh
-	if update.ID != "seg-9" || update.Text != "refined" || update.Status != "" || update.Speaker != "Person 1" {
-		t.Errorf("update = %+v, want seg-9 finalized with refined text", update)
+	// "Person 1" was only the provisional label; the real assignment from
+	// the accumulated audio gives "Other" here since there's no embedder.
+	if update.ID != "seg-9" || update.Text != "refined" || update.Status != "" || update.Speaker != "Other" {
+		t.Errorf("update = %+v, want seg-9 finalized with refined text and a real speaker assignment", update)
 	}
 }
 
