@@ -247,6 +247,7 @@ func (m *Manager) Download(force bool) error {
 		if err := m.downloadAndExtractArchive(EnglishStreamingArchiveURL); err != nil {
 			fmt.Printf("Warning: failed to download English streaming model: %v (live transcription will fall back to non-realtime mode)\n", err)
 		} else {
+			pruneEnglishStreaming(filepath.Join(m.modelDir, EnglishStreamingSubdir))
 			fmt.Println("English streaming Zipformer model downloaded and extracted.")
 		}
 	} else {
@@ -330,6 +331,26 @@ func (m *Manager) downloadAndExtractArchive(url string) error {
 	reader := io.TeeReader(resp.Body, bar)
 
 	return extractTarBz2(reader, m.modelDir)
+}
+
+// pruneEnglishStreaming deletes the model weights the streaming archive
+// ships but the realtime pass never loads: its fp32 .onnx files alone are
+// ~250MB of the ~320MB extracted. Only .onnx files are touched.
+func pruneEnglishStreaming(dir string) {
+	keep := map[string]bool{
+		englishStreamingEncoderFile: true,
+		englishStreamingDecoderFile: true,
+		englishStreamingJoinerFile:  true,
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return
+	}
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".onnx") && !keep[e.Name()] {
+			_ = os.Remove(filepath.Join(dir, e.Name()))
+		}
+	}
 }
 
 // extractTarBz2 extracts a tar.bz2 stream to the destination directory.

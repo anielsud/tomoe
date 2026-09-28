@@ -375,3 +375,33 @@ func TestIsTruncationOf(t *testing.T) {
 		}
 	}
 }
+
+func TestTrackerStickySpeaker_DisabledByZeroMargin(t *testing.T) {
+	for _, margin := range []float64{0, -0.1} {
+		tracker := NewTracker(0.8)
+		tracker.SetStickyMargin(margin)
+		clock := &fakeClock{t: time.Now()}
+		tracker.nowFn = clock.now
+
+		tracker.Assign([]float32{1, 0, 0, 0}) // Person 1
+		clock.advance(500 * time.Millisecond)
+		label, _ := tracker.Assign([]float32{0.7, 0.7141428, 0, 0}) // ~0.70, a near-miss
+		if label != "Person 2" {
+			t.Errorf("margin %v: near-miss label = %q, want %q (heuristic off)", margin, label, "Person 2")
+		}
+	}
+}
+
+func TestTrackerStickySpeaker_CustomMargin(t *testing.T) {
+	tracker := NewTracker(0.8)
+	tracker.SetStickyMargin(0.05) // tighter than the ~0.10 miss below
+	clock := &fakeClock{t: time.Now()}
+	tracker.nowFn = clock.now
+
+	tracker.Assign([]float32{1, 0, 0, 0})
+	clock.advance(500 * time.Millisecond)
+	label, _ := tracker.Assign([]float32{0.7, 0.7141428, 0, 0})
+	if label != "Person 2" {
+		t.Errorf("near-miss beyond a 0.05 margin label = %q, want %q", label, "Person 2")
+	}
+}

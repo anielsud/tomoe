@@ -10,7 +10,7 @@ import (
 // DefaultThreshold is the default cosine similarity threshold for same-speaker assignment.
 const DefaultThreshold = 0.65
 
-// stickyGraceWindow and stickyThresholdMargin implement a "sticky
+// stickyGraceWindow and DefaultStickyMargin implement a "sticky
 // speaker" continuity heuristic: VAD splits one person's continuous
 // turn into several short segments whenever they pause for a beat
 // between sentences (even under a second), and a short segment's
@@ -25,9 +25,12 @@ const DefaultThreshold = 0.65
 // (see Assign) — only accepting it into the running average on a full,
 // confident match keeps a fragmented sentence from ever dragging a
 // good centroid toward a bad one.
+//
+// DefaultStickyMargin is the default margin; SetStickyMargin changes it
+// (0 turns the heuristic off).
 const (
-	stickyGraceWindow     = 3 * time.Second
-	stickyThresholdMargin = 0.15
+	stickyGraceWindow   = 3 * time.Second
+	DefaultStickyMargin = 0.15
 )
 
 // Tracker performs online speaker clustering using cosine similarity of embeddings.
@@ -35,11 +38,12 @@ const (
 // with a real name in parens (e.g. "Person 2 (Nazanin Rame...)") once a
 // hint attaches that cluster via SetHintForRecent; see its doc comment.
 type Tracker struct {
-	mu        sync.Mutex
-	threshold float64
-	centroids [][]float32 // one centroid per known speaker
-	counts    []int       // number of embeddings merged into each centroid
-	hints     []string    // one optional name-hint per speaker, parallel to centroids
+	mu           sync.Mutex
+	threshold    float64
+	stickyMargin float64     // see DefaultStickyMargin
+	centroids    [][]float32 // one centroid per known speaker
+	counts       []int       // number of embeddings merged into each centroid
+	hints        []string    // one optional name-hint per speaker, parallel to centroids
 
 	// lastAssignedIdx/At track the most recent successful Assign, so a
 	// video hint (which has no direct link to a cluster ID — it only
@@ -62,9 +66,19 @@ func NewTracker(threshold float64) *Tracker {
 		threshold = DefaultThreshold
 	}
 	return &Tracker{
-		threshold: threshold,
-		nowFn:     time.Now,
+		threshold:    threshold,
+		stickyMargin: DefaultStickyMargin,
+		nowFn:        time.Now,
 	}
+}
+
+// SetStickyMargin sets how far below the threshold a near-miss may fall
+// and still go to the speaker assigned within stickyGraceWindow (see
+// DefaultStickyMargin). 0, or a negative value, turns the heuristic off.
+func (t *Tracker) SetStickyMargin(margin float64) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.stickyMargin = max(margin, 0)
 }
 
 // Assign assigns an embedding to a speaker, creating a new speaker if no
@@ -104,9 +118,9 @@ func (t *Tracker) Assign(embedding []float32) (label string, needsHint bool) {
 		return t.label(bestIdx), t.hints[bestIdx] == ""
 	}
 
-	sticky := bestIdx >= 0 && bestIdx == t.lastAssignedIdx &&
+	sticky := t.stickyMargin > 0 && bestIdx >= 0 && bestIdx == t.lastAssignedIdx &&
 		!t.lastAssignedAt.IsZero() && now.Sub(t.lastAssignedAt) <= stickyGraceWindow &&
-		bestSim >= t.threshold-stickyThresholdMargin
+		bestSim >= t.threshold-t.stickyMargin
 
 	if sticky {
 		// Near-miss on similarity, but this is whoever was just

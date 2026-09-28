@@ -23,7 +23,7 @@ Two modes of operation:
 ```
 Go binary → cgo → sherpa-onnx C API → ONNX Runtime (CUDA EP / CPU EP)
   → Parakeet TDT 0.6B v3 INT8 (encoder + decoder + joiner, 25 languages)
-  → English streaming Zipformer INT8 (~70MB, live pass-1 via OnlineRecognizer)
+  → English streaming Zipformer INT8 (~73MB on disk, ~310MB download; live pass-1 via OnlineRecognizer)
   → Bengali Zipformer transducer (~87MB, streaming via OnlineRecognizer)
   → Silero VAD (~2MB)
   → 3D-Speaker embedding model (~25MB)
