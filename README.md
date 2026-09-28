@@ -27,7 +27,7 @@ make dev-tools
 # Build CLI + GUI
 make build
 
-# First run — auto-detects system, creates config, downloads models (~375MB)
+# First run — auto-detects system, creates config, downloads models (~690MB)
 ./tomoe
 
 # Or launch the GUI
@@ -107,6 +107,7 @@ decoding_method = 'greedy_search'  # or 'modified_beam_search' for hotwords
 hotwords_file = ''                 # path to hotwords.txt (one word/phrase per line)
 hotwords_score = 1.5               # boost score for hotwords
 max_active_paths = 4               # beam width for modified_beam_search
+two_pass = true                    # English meetings: live streaming text, refined per utterance
 
 [multilingual]
 enabled = false
@@ -126,6 +127,7 @@ max_speech_duration = 30.0
 min_silence_duration = 0.5
 auto_save = true
 auto_detect = true
+sticky_speaker_margin = 0.15  # keep a near-miss with the speaker heard <3s ago; 0 = off
 ```
 
 ## Architecture

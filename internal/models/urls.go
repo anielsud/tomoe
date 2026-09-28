@@ -60,7 +60,9 @@ const (
 	joinerFile  = "joiner.int8.onnx"
 	tokensFile  = "tokens.txt"
 
-	// ── English streaming Zipformer transducer (~70MB int8) ─────────────
+	// ── English streaming Zipformer transducer ──────────────────────────
+	// The archive is a ~310MB download (fp32 and int8 weights); only the
+	// ~73MB of int8 files below are kept after extraction.
 	// Realtime ("pass 1") transcription: this is what actually lets text
 	// appear as it's spoken. Parakeet (above) is offline-only — feeding it
 	// audio incrementally isn't possible, only a complete segment at a

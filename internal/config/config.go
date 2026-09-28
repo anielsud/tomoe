@@ -38,6 +38,11 @@ type TranscriptionConfig struct {
 	HotwordsScore  float32 `toml:"hotwords_score"`
 	DecodingMethod string  `toml:"decoding_method"` // "greedy_search" or "modified_beam_search"
 	MaxActivePaths int     `toml:"max_active_paths"`
+	// TwoPass enables two-pass live transcription for English meetings
+	// when the English streaming model is downloaded: streaming text as
+	// it's spoken, refined by Parakeet once each utterance ends. false
+	// keeps single-pass (Parakeet only, text appears per utterance).
+	TwoPass bool `toml:"two_pass"`
 }
 
 // OutputConfig holds output behavior settings.
@@ -63,6 +68,10 @@ type MeetingConfig struct {
 	MinSilenceDuration float64 `toml:"min_silence_duration"` // seconds
 	AutoSave           bool    `toml:"auto_save"`            // save session on stop
 	AutoDetect         bool    `toml:"auto_detect"`          // auto-detect meetings via PulseAudio
+	// StickySpeakerMargin is how far below speaker_threshold a segment's
+	// similarity may fall and still be assigned to the speaker heard in
+	// the last few seconds (see speaker.Tracker). 0 turns it off.
+	StickySpeakerMargin float64 `toml:"sticky_speaker_margin"`
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -81,6 +90,7 @@ func DefaultConfig() *Config {
 			DecodingMethod: "greedy_search",
 			HotwordsScore:  1.5,
 			MaxActivePaths: 4,
+			TwoPass:        true,
 		},
 		Output: OutputConfig{
 			AutoPaste:      true,
@@ -99,6 +109,8 @@ func DefaultConfig() *Config {
 			MinSilenceDuration: 0.5,
 			AutoSave:           true,
 			AutoDetect:         true,
+			// Matches speaker.DefaultStickyMargin.
+			StickySpeakerMargin: 0.15,
 		},
 	}
 }

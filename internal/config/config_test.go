@@ -368,3 +368,40 @@ func TestExistsWhenFilePresent(t *testing.T) {
 		t.Error("Exists() = false after config file is created")
 	}
 }
+
+func TestTwoPassAndStickyMarginDefaultOnForExistingConfigs(t *testing.T) {
+	// Configs written before these options existed keep today's behavior.
+	path := filepath.Join(t.TempDir(), "config.toml")
+	old := "[transcription]\ngpu_enabled = true\n\n[meeting]\nspeaker_threshold = 0.65\n"
+	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !cfg.Transcription.TwoPass {
+		t.Error("Transcription.TwoPass = false, want true (default)")
+	}
+	if cfg.Meeting.StickySpeakerMargin != 0.15 {
+		t.Errorf("Meeting.StickySpeakerMargin = %v, want 0.15 (default)", cfg.Meeting.StickySpeakerMargin)
+	}
+}
+
+func TestTwoPassAndStickyMarginOptOut(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfgText := "[transcription]\ntwo_pass = false\n\n[meeting]\nsticky_speaker_margin = 0.0\n"
+	if err := os.WriteFile(path, []byte(cfgText), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Transcription.TwoPass {
+		t.Error("Transcription.TwoPass = true, want false")
+	}
+	if cfg.Meeting.StickySpeakerMargin != 0 {
+		t.Errorf("Meeting.StickySpeakerMargin = %v, want 0", cfg.Meeting.StickySpeakerMargin)
+	}
+}

@@ -312,3 +312,38 @@ func createTestTarBz2(t *testing.T, files map[string]string) []byte {
 	}
 	return out.Bytes()
 }
+
+func TestPruneEnglishStreamingKeepsOnlyInt8Model(t *testing.T) {
+	modelDir := t.TempDir()
+	dir := filepath.Join(modelDir, EnglishStreamingSubdir)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	keep := []string{englishStreamingEncoderFile, englishStreamingDecoderFile, englishStreamingJoinerFile, englishStreamingTokensFile, "README.md"}
+	drop := []string{
+		"encoder-epoch-99-avg-1-chunk-16-left-128.onnx",
+		"decoder-epoch-99-avg-1-chunk-16-left-128.onnx",
+		"joiner-epoch-99-avg-1-chunk-16-left-128.onnx",
+	}
+	for _, name := range append(append([]string{}, keep...), drop...) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("x"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	pruneEnglishStreaming(dir)
+
+	for _, name := range keep {
+		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
+			t.Errorf("%s was removed: %v", name, err)
+		}
+	}
+	for _, name := range drop {
+		if _, err := os.Stat(filepath.Join(dir, name)); !os.IsNotExist(err) {
+			t.Errorf("%s still present (err=%v), want removed", name, err)
+		}
+	}
+	if !NewManager(modelDir).Check().EnglishStreamingReady {
+		t.Error("streaming model no longer complete after pruning")
+	}
+}

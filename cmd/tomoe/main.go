@@ -136,6 +136,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 				threshold = cfg.Meeting.SpeakerThreshold
 			}
 			opts.Tracker = speaker.NewTracker(threshold)
+			opts.Tracker.SetStickyMargin(cfg.Meeting.StickySpeakerMargin)
 			defer emb.Close()
 		}
 	}
@@ -148,7 +149,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 	// Create the realtime streaming engine (optional — only if the
 	// English streaming model is downloaded; see internal/live's
 	// two-pass pipeline). Sessions fall back to single-pass without it.
-	if status.EnglishStreamingReady {
+	if status.EnglishStreamingReady && cfg.Transcription.TwoPass {
 		streamingEngine, err := transcribe.NewStreamingEngine(transcribe.StreamingConfig{
 			EncoderPath: status.EnglishStreamingEncoderPath,
 			DecoderPath: status.EnglishStreamingDecoderPath,

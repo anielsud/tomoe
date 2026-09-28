@@ -157,7 +157,7 @@ func (a *App) Startup(ctx context.Context) {
 	// model is available (see internal/live's two-pass pipeline). Not
 	// required for anything else to work — sessions just fall back to
 	// single-pass without it.
-	if status.EnglishStreamingReady {
+	if status.EnglishStreamingReady && cfg.Transcription.TwoPass {
 		streamingEngine, err := transcribe.NewStreamingEngine(transcribe.StreamingConfig{
 			EncoderPath: status.EnglishStreamingEncoderPath,
 			DecoderPath: status.EnglishStreamingDecoderPath,
@@ -181,6 +181,7 @@ func (a *App) Startup(ctx context.Context) {
 				threshold = cfg.Meeting.SpeakerThreshold
 			}
 			a.tracker = speaker.NewTracker(threshold)
+			a.tracker.SetStickyMargin(cfg.Meeting.StickySpeakerMargin)
 		}
 	}
 
