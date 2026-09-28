@@ -485,12 +485,13 @@ func (t *Tracker) NumSpeakers() int {
 
 // Peek returns a provisional label for embedding without changing any
 // state: the best-matching speaker if it clears the threshold, otherwise
-// whoever was assigned within stickyGraceWindow, otherwise the label a new
-// speaker would get. Live transcription shows it while an utterance is
-// still in progress, from its first half second of audio, which is too
-// little for Assign: an embedding that short rarely clears the threshold,
-// so every utterance would become a new speaker. The real Assign happens
-// once the whole utterance is available.
+// whoever was assigned within StickyGraceWindow (unless
+// StickyThresholdMargin has disabled that heuristic -- see SetTuning),
+// otherwise the label a new speaker would get. Live transcription shows
+// it while an utterance is still in progress, from its first half second
+// of audio, which is too little for Assign: an embedding that short
+// rarely clears the threshold, so every utterance would become a new
+// speaker. The real Assign happens once the whole utterance is available.
 func (t *Tracker) Peek(embedding []float32) string {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -507,7 +508,8 @@ func (t *Tracker) Peek(embedding []float32) string {
 	if bestIdx >= 0 && bestSim >= t.tuning.Threshold {
 		return t.label(bestIdx)
 	}
-	if len(t.centroids) > 0 && !t.lastAssignedAt.IsZero() && t.nowFn().Sub(t.lastAssignedAt) <= t.tuning.StickyGraceWindow {
+	if t.tuning.StickyThresholdMargin > 0 && len(t.centroids) > 0 &&
+		!t.lastAssignedAt.IsZero() && t.nowFn().Sub(t.lastAssignedAt) <= t.tuning.StickyGraceWindow {
 		return t.label(t.lastAssignedIdx)
 	}
 	return fmt.Sprintf("Person %d", len(t.centroids)+1)
