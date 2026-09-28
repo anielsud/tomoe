@@ -230,3 +230,48 @@ func TestDiscardSnapshot_NotFound(t *testing.T) {
 		t.Error("DiscardSnapshot() with a nonexistent id should return an error")
 	}
 }
+
+func TestSnapshotOperationsRejectPathLikeIDs(t *testing.T) {
+	root := t.TempDir()
+	pendingDir := filepath.Join(root, "pending")
+	approvedDir := filepath.Join(root, "approved")
+	for _, dir := range []string{pendingDir, approvedDir, filepath.Join(pendingDir, "snap-1")} {
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	for _, id := range []string{"", ".", "..", "../approved", "snap-1/..", `..\approved`} {
+		if err := DiscardSnapshot(pendingDir, id); err == nil {
+			t.Errorf("DiscardSnapshot(%q) succeeded, want an invalid-id error", id)
+		}
+		if err := ApproveSnapshot(pendingDir, approvedDir, id); err == nil {
+			t.Errorf("ApproveSnapshot(%q) succeeded, want an invalid-id error", id)
+		}
+		if _, err := ReadSnapshotFrame(pendingDir, id); err == nil {
+			t.Errorf("ReadSnapshotFrame(%q) succeeded, want an invalid-id error", id)
+		}
+	}
+
+	for _, dir := range []string{pendingDir, approvedDir, filepath.Join(pendingDir, "snap-1")} {
+		if _, err := os.Stat(dir); err != nil {
+			t.Errorf("%s was removed or moved: %v", dir, err)
+		}
+	}
+}
+
+func TestReadSnapshotFrame(t *testing.T) {
+	dir := t.TempDir()
+	meta := SnapshotMeta{Platform: meeting.PlatformTeams, Timestamp: time.Now()}
+	if err := CaptureSnapshot(dir, meta, make([]byte, 4*4*3), 4, 4); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := ListSnapshots(dir)
+	if err != nil || len(pending) != 1 {
+		t.Fatalf("ListSnapshots = (%v, %v), want one snapshot", pending, err)
+	}
+	data, err := ReadSnapshotFrame(dir, pending[0].ID)
+	if err != nil || len(data) == 0 {
+		t.Errorf("ReadSnapshotFrame = (%d bytes, %v), want the PNG", len(data), err)
+	}
+}
