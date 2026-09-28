@@ -7,6 +7,8 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"regexp"
+	"slices"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
@@ -246,6 +248,9 @@ func ReidentifyByDiarization(sess *Session, cfg DiarizeConfig) (int, error) {
 	if _, err := os.Stat(sess.AudioPath); err != nil {
 		return 0, fmt.Errorf("audio file not found: %s", sess.AudioPath)
 	}
+	if !slices.ContainsFunc(sess.Segments, diarizable) {
+		return 0, nil
+	}
 
 	// Extract monitor audio (format-aware: M4A track extraction or legacy MP3 midpoint split)
 	samples, err := extractMonitorAudio(sess.AudioPath, sess)
@@ -270,38 +275,91 @@ func ReidentifyByDiarization(sess *Session, cfg DiarizeConfig) (int, error) {
 		return 0, nil
 	}
 
-	// For each transcript segment, find the diarization segment with the most overlap.
-	count := 0
-	for i := range sess.Segments {
-		seg := &sess.Segments[i]
-		if seg.Speaker == "You" || seg.Source == "mic" {
+	return relabelByDiarization(sess.Segments, diarSegments, speakerMap, cfg.Verbose), nil
+}
+
+// diarizable reports whether a transcript segment's speaker label should
+// come from diarization: not the mic ("You"), and not "System Audio",
+// which live transcription uses for a whole-system audio tap (macOS's
+// "Everything" source) precisely because per-speaker clustering isn't
+// meaningful there.
+func diarizable(seg Segment) bool {
+	return seg.Source != "mic" && seg.Speaker != "You" && seg.Speaker != "System Audio"
+}
+
+// hintLabel matches a live speaker label with a video-hint name attached,
+// "Person N (Name)" (see speaker.Tracker).
+var hintLabel = regexp.MustCompile(`^Person \d+ \((.+)\)$`)
+
+// relabelByDiarization gives each diarizable segment the label of the
+// diarization speaker it overlaps most, returning how many it relabeled.
+//
+// Diarization only knows anonymous clusters, but live labels can carry a
+// real name from a video hint. A cluster whose segments were live-labeled
+// with a name keeps it, "Person K (Name)"; if its segments carried
+// different names, the one with the most speaking time wins (on a tie,
+// the longer name, so a full name beats a truncated read of it).
+func relabelByDiarization(segs []Segment, diar []DiarizeSegment, speakerMap map[int]string, verbose bool) int {
+	assigned := make([]int, len(segs))
+	nameTime := make(map[int]map[string]float64)
+	for i, seg := range segs {
+		assigned[i] = -1
+		if !diarizable(seg) {
 			continue
 		}
 
 		bestOverlap := 0.0
-		bestSpeaker := -1
-
-		for _, ds := range diarSegments {
-			overlapStart := math.Max(seg.StartTime, ds.Start)
-			overlapEnd := math.Min(seg.EndTime, ds.End)
-			overlap := overlapEnd - overlapStart
+		for _, ds := range diar {
+			overlap := math.Min(seg.EndTime, ds.End) - math.Max(seg.StartTime, ds.Start)
 			if overlap > bestOverlap {
 				bestOverlap = overlap
-				bestSpeaker = ds.Speaker
+				assigned[i] = ds.Speaker
 			}
 		}
-
-		if bestSpeaker >= 0 && bestOverlap > 0 {
-			seg.Speaker = speakerMap[bestSpeaker]
-			count++
-			if cfg.Verbose {
-				fmt.Printf("  transcript seg %d [%.1fs-%.1fs] → %s (overlap %.1fs)\n",
-					i, seg.StartTime, seg.EndTime, seg.Speaker, bestOverlap)
+		if assigned[i] < 0 {
+			continue
+		}
+		if m := hintLabel.FindStringSubmatch(seg.Speaker); m != nil {
+			if nameTime[assigned[i]] == nil {
+				nameTime[assigned[i]] = make(map[string]float64)
 			}
+			nameTime[assigned[i]][m[1]] += seg.EndTime - seg.StartTime
 		}
 	}
 
-	return count, nil
+	labels := make(map[int]string, len(speakerMap))
+	for spk, label := range speakerMap {
+		if name := topName(nameTime[spk]); name != "" {
+			label = fmt.Sprintf("%s (%s)", label, name)
+		}
+		labels[spk] = label
+	}
+
+	count := 0
+	for i := range segs {
+		label, ok := labels[assigned[i]]
+		if assigned[i] < 0 || !ok {
+			continue
+		}
+		segs[i].Speaker = label
+		count++
+		if verbose {
+			fmt.Printf("  transcript seg %d [%.1fs-%.1fs] → %s\n", i, segs[i].StartTime, segs[i].EndTime, label)
+		}
+	}
+	return count
+}
+
+// topName returns the name with the most speaking time (ties: the longer
+// name, then alphabetical, so the result is deterministic).
+func topName(nameTime map[string]float64) string {
+	best, bestTime := "", -1.0
+	for name, t := range nameTime {
+		if t > bestTime || (t == bestTime && (len(name) > len(best) || (len(name) == len(best) && name < best))) {
+			best, bestTime = name, t
+		}
+	}
+	return best
 }
 
 // extractMonitorAudio returns the monitor audio samples for diarization.
