@@ -273,6 +273,7 @@ func (a *App) ListMonitorSources() ([]audio.DeviceInfo, error) {
 // monitorDevice argument, which on macOS carries that selection rather
 // than a PulseAudio device name).
 func (a *App) SystemAudioMode() string {
+	a.fixSignals()
 	if runtime.GOOS == "darwin" {
 		return "auto"
 	}
@@ -292,8 +293,13 @@ type AudioSourceView struct {
 // every app currently producing audio output
 // (internal/audiosources.ListActive). Empty (not an error) on Linux,
 // where SystemAudioMode() already tells the frontend to use
-// ListMonitorSources instead.
+// ListMonitorSources instead, and where "everything" isn't a capturable
+// source.
 func (a *App) ListAudioSources() ([]AudioSourceView, error) {
+	a.fixSignals()
+	if runtime.GOOS != "darwin" {
+		return []AudioSourceView{}, nil
+	}
 	out := []AudioSourceView{{ID: "everything", Name: "Everything"}}
 
 	active, err := audiosources.ListActive()

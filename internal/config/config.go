@@ -57,7 +57,7 @@ type MultilingualConfig struct {
 // MeetingConfig holds Phase 2 meeting transcription settings.
 type MeetingConfig struct {
 	DefaultSources     string  `toml:"default_sources"`      // "mic", "monitor", "both"
-	MonitorDevice      string  `toml:"monitor_device"`       // monitor source device name
+	MonitorDevice      string  `toml:"monitor_device"`       // monitor source device name; "" = default monitor (Linux), "none" = mic only
 	SpeakerThreshold   float64 `toml:"speaker_threshold"`    // cosine similarity threshold
 	MaxSpeechDuration  float64 `toml:"max_speech_duration"`  // seconds
 	MinSilenceDuration float64 `toml:"min_silence_duration"` // seconds

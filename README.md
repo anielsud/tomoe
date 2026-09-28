@@ -120,7 +120,7 @@ silence_timeout = 5.0
 
 [meeting]
 default_sources = 'both'
-monitor_device = ''
+monitor_device = ''       # '' = default monitor source, 'none' = mic only
 speaker_threshold = 0.65
 max_speech_duration = 30.0
 min_silence_duration = 0.5

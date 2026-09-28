@@ -97,7 +97,9 @@ function App() {
       setAudioSources(sources || []);
       // Default to "Everything" (matches the old auto-detect's
       // always-on-if-available behavior) rather than leaving the
-      // picker on "No System Audio" until the user notices it.
+      // picker unset until the user notices it. Only when nothing is
+      // selected yet: an explicit "No System Audio" is "none", so this
+      // periodic refresh never overrides it.
       setMonitorDevice(prev => prev || 'everything');
     } catch (e) {
       console.error('Failed to load audio sources:', e);
