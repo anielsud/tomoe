@@ -140,3 +140,44 @@ func TestDetectRing_NoMatchingColor(t *testing.T) {
 		t.Errorf("DetectRing() matched with no ring-colored pixels present: %+v", match)
 	}
 }
+
+// noisyRingFrame is a Retina-sized frame with the Teams ring plus many
+// small ring-colored specks (e.g. an avatar or shared screen using the
+// same accent color), each its own connected component.
+func noisyRingFrame(specks int) ([]byte, int, int, RingConfig) {
+	const width, height = 2880, 1800
+	ringColor := [3]uint8{129, 136, 243}
+	pix := drawTestFrame(width, height, [3]uint8{30, 30, 30}, 900, 500, 440, 245, 6, ringColor)
+	for i := 0; i < specks; i++ {
+		x, y := (i*97)%width, 1200+(i*53)%500
+		for dy := 0; dy < 2; dy++ {
+			for dx := 0; dx < 2; dx++ {
+				idx := ((y+dy)*width + x + dx) * 3
+				if idx+2 < len(pix) {
+					pix[idx], pix[idx+1], pix[idx+2] = ringColor[0], ringColor[1], ringColor[2]
+				}
+			}
+		}
+	}
+	cfg := RingConfig{TargetColor: ringColor, ColorTolerance: 25, MinAreaFraction: 0.0001, MaxAreaFraction: 0.05}
+	return pix, width, height, cfg
+}
+
+func TestDetectRing_FindsRingAmongManySpecks(t *testing.T) {
+	pix, width, height, cfg := noisyRingFrame(2000)
+	match, ok := DetectRing(pix, width, height, cfg)
+	if !ok {
+		t.Fatal("DetectRing() found no match, want the ring")
+	}
+	if match.X != 900 || match.Y != 500 || match.Width != 440 || match.Height != 245 {
+		t.Errorf("match = %+v, want the 440x245 ring at (900,500)", match)
+	}
+}
+
+func BenchmarkDetectRing_NoisyRetinaFrame(b *testing.B) {
+	pix, width, height, cfg := noisyRingFrame(2000)
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		DetectRing(pix, width, height, cfg)
+	}
+}

@@ -25,6 +25,11 @@ type WindowCapturer struct {
 	mu      sync.Mutex
 	samples []float32
 	started bool
+	// resampler keeps anti-alias filter state and the fractional sample
+	// position across callbacks (see audio.Resampler); recreated if the
+	// tap's sample rate ever changes.
+	resampler *audio.Resampler
+	srcRateHz int
 }
 
 // NewWindowCapturer creates a Capturer-shaped wrapper around a Tap for
@@ -45,11 +50,15 @@ func NewSystemCapturer() *WindowCapturer {
 }
 
 func (wc *WindowCapturer) onSamples(samples []float32, sampleRateHz float64) {
-	resampled := audio.Resample(samples, int(sampleRateHz), audio.CaptureSampleRate)
+	rate := int(sampleRateHz)
 
 	wc.mu.Lock()
-	wc.samples = append(wc.samples, resampled...)
-	wc.mu.Unlock()
+	defer wc.mu.Unlock()
+	if wc.resampler == nil || rate != wc.srcRateHz {
+		wc.resampler = audio.NewResampler(rate, audio.CaptureSampleRate)
+		wc.srcRateHz = rate
+	}
+	wc.samples = append(wc.samples, wc.resampler.Process(samples)...)
 }
 
 // Start is idempotent: meetingaudio_darwin.go calls it once up front to

@@ -182,6 +182,76 @@ func Resample(samples []float32, srcRateHz, dstRateHz int) []float32 {
 	return out
 }
 
+// Resampler is Resample for audio that arrives in chunks, such as
+// capture callbacks. Calling Resample on each chunk separately restarts
+// the anti-alias filter at every chunk boundary (a click each time) and
+// drops each chunk's fractional trailing output sample (the resampled
+// stream slowly falls behind real time: ~1ms per second for 1024-sample
+// chunks at 48kHz). A Resampler carries both across calls, so chunked
+// output matches resampling the whole stream at once. Not safe for
+// concurrent use.
+type Resampler struct {
+	srcRateHz, dstRateHz int
+	alpha                float32                  // anti-alias low-pass coefficient; 0 when upsampling
+	lp                   [antiAliasPasses]float32 // each cascaded pass's previous output
+	started              bool
+	pending              []float32 // filtered input not yet fully consumed by interpolation
+	pos                  float64   // next output sample's position within pending
+}
+
+// NewResampler returns a Resampler converting srcRateHz to dstRateHz.
+func NewResampler(srcRateHz, dstRateHz int) *Resampler {
+	r := &Resampler{srcRateHz: srcRateHz, dstRateHz: dstRateHz}
+	if srcRateHz > dstRateHz && dstRateHz > 0 {
+		// Same filter as Resample (see LowPassFilter).
+		rc := 1.0 / (2.0 * math.Pi * float64(float32(dstRateHz)*0.45))
+		dt := 1.0 / float64(srcRateHz)
+		r.alpha = float32(dt / (rc + dt))
+	}
+	return r
+}
+
+// Process resamples the next chunk of the stream. The last input sample
+// is held back until the next chunk arrives (it's needed to interpolate
+// across the boundary), so output lags input by at most one sample.
+func (r *Resampler) Process(samples []float32) []float32 {
+	if len(samples) == 0 || r.srcRateHz <= 0 || r.dstRateHz <= 0 || r.srcRateHz == r.dstRateHz {
+		return samples
+	}
+
+	for _, x := range samples {
+		if r.alpha > 0 {
+			for p := range r.lp {
+				if !r.started {
+					r.lp[p] = x
+				} else {
+					r.lp[p] += r.alpha * (x - r.lp[p])
+				}
+				x = r.lp[p]
+			}
+		}
+		r.started = true
+		r.pending = append(r.pending, x)
+	}
+
+	ratio := float64(r.srcRateHz) / float64(r.dstRateHz)
+	var out []float32
+	for {
+		idx := int(r.pos)
+		if idx+1 >= len(r.pending) {
+			break
+		}
+		frac := float32(r.pos - float64(idx))
+		out = append(out, r.pending[idx]+(r.pending[idx+1]-r.pending[idx])*frac)
+		r.pos += ratio
+	}
+
+	consumed := min(int(r.pos), len(r.pending))
+	r.pending = append(r.pending[:0], r.pending[consumed:]...)
+	r.pos -= float64(consumed)
+	return out
+}
+
 // ProcessPipeline applies all DSP steps in sequence:
 // DC offset removal → high-pass filter (80Hz) → normalize → noise gate.
 // Set gateDB to 0 to skip the noise gate step.
