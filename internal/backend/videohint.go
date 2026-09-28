@@ -4,13 +4,10 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"os"
-	"path/filepath"
 	"time"
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
-	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
 
@@ -88,6 +85,7 @@ func (a *App) emitVideoHintEvents(ctx context.Context, events chan videohint.Eve
 // mid-session can backfill history instead of only showing events from
 // the moment it mounted.
 func (a *App) GetVideoHintActivity() []VideoHintActivityEntry {
+	a.fixSignals()
 	a.videoHintMu.Lock()
 	defer a.videoHintMu.Unlock()
 
@@ -120,6 +118,7 @@ type VideoHintSummary struct {
 // window can be the wrong thing entirely, e.g. a chat tab, not an
 // actual call).
 func (a *App) ListPendingVideoHints() ([]VideoHintSummary, error) {
+	a.fixSignals()
 	pending, err := videohint.ListPendingUnrecognizedUIs()
 	if err != nil {
 		return nil, err
@@ -146,8 +145,8 @@ func (a *App) ListPendingVideoHints() ([]VideoHintSummary, error) {
 // doesn't expose the local filesystem to the frontend directly, so the
 // image has to travel as a bound-method response like everything else.
 func (a *App) GetVideoHintImage(id string) (string, error) {
-	path := filepath.Join(config.UnrecognizedUIPendingDir(), id, "frame.png")
-	data, err := os.ReadFile(path)
+	a.fixSignals()
+	data, err := videohint.ReadPendingUnrecognizedUIFrame(id)
 	if err != nil {
 		return "", fmt.Errorf("reading snapshot image: %w", err)
 	}
@@ -158,11 +157,13 @@ func (a *App) GetVideoHintImage(id string) (string, error) {
 // unrecognized-UI library — the only way anything reaches it; see
 // videohint.ApproveSnapshot's doc comment for why.
 func (a *App) ApproveVideoHint(id string) error {
+	a.fixSignals()
 	return videohint.ApproveUnrecognizedUI(id)
 }
 
 // DiscardVideoHint permanently deletes a pending snapshot without
 // approving it.
 func (a *App) DiscardVideoHint(id string) error {
+	a.fixSignals()
 	return videohint.DiscardUnrecognizedUI(id)
 }

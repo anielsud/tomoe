@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -135,7 +136,10 @@ func ListSnapshots(dir string) ([]PendingSnapshot, error) {
 // entirely (e.g. a chat tab that happens to be open, not an actual
 // call), so nothing is promoted automatically.
 func ApproveSnapshot(pendingDir, approvedDir, id string) error {
-	src := filepath.Join(pendingDir, id)
+	src, err := snapshotPath(pendingDir, id)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("videohint: pending snapshot %q not found: %w", id, err)
 	}
@@ -151,11 +155,34 @@ func ApproveSnapshot(pendingDir, approvedDir, id string) error {
 // DiscardSnapshot permanently deletes a pending snapshot without
 // approving it.
 func DiscardSnapshot(pendingDir, id string) error {
-	src := filepath.Join(pendingDir, id)
+	src, err := snapshotPath(pendingDir, id)
+	if err != nil {
+		return err
+	}
 	if _, err := os.Stat(src); err != nil {
 		return fmt.Errorf("videohint: pending snapshot %q not found: %w", id, err)
 	}
 	return os.RemoveAll(src)
+}
+
+// ReadSnapshotFrame returns a pending snapshot's captured frame.png.
+func ReadSnapshotFrame(pendingDir, id string) ([]byte, error) {
+	src, err := snapshotPath(pendingDir, id)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(filepath.Join(src, "frame.png"))
+}
+
+// snapshotPath resolves a snapshot ID inside dir. IDs arrive from the
+// frontend and the CLI, so anything other than a single path element is
+// rejected: "" would resolve to dir itself and "../approved" to a sibling,
+// both of which DiscardSnapshot would then delete.
+func snapshotPath(dir, id string) (string, error) {
+	if id == "" || id == "." || id == ".." || strings.ContainsAny(id, `/\`) {
+		return "", fmt.Errorf("videohint: invalid snapshot id %q", id)
+	}
+	return filepath.Join(dir, id), nil
 }
 
 // ListPendingUnrecognizedUIs, ApproveUnrecognizedUI, and
@@ -173,4 +200,8 @@ func ApproveUnrecognizedUI(id string) error {
 
 func DiscardUnrecognizedUI(id string) error {
 	return DiscardSnapshot(config.UnrecognizedUIPendingDir(), id)
+}
+
+func ReadPendingUnrecognizedUIFrame(id string) ([]byte, error) {
+	return ReadSnapshotFrame(config.UnrecognizedUIPendingDir(), id)
 }

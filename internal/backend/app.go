@@ -78,6 +78,13 @@ type App struct {
 	// state. Buffer keeps the foreground non-blocking under burst.
 	saveQueue chan *saveRequest
 	saveWG    sync.WaitGroup
+
+	// shuttingDown (guarded by mu) refuses new sessions once Shutdown has
+	// begun; stopWG counts StopSession calls between claiming a session
+	// and enqueueing its save, which Shutdown waits for before closing
+	// saveQueue.
+	shuttingDown bool
+	stopWG       sync.WaitGroup
 }
 
 // saveRequest is a unit of work for the background save worker.
@@ -202,6 +209,7 @@ func (a *App) Shutdown(ctx context.Context) {
 
 	// Snapshot mutable fields under lock before acting on them.
 	a.mu.Lock()
+	a.shuttingDown = true
 	recording := a.recording
 	dictCoord := a.dictCoordinator
 	dictCancel := a.dictCancel
@@ -219,6 +227,12 @@ func (a *App) Shutdown(ctx context.Context) {
 	if a.detector != nil {
 		a.detector.Stop()
 	}
+
+	// A StopSession from the tray, hotkey or meeting detector that claimed
+	// the session just before Shutdown may still be about to enqueue its
+	// save; closing saveQueue under it would panic (send on closed
+	// channel) and lose the session.
+	a.stopWG.Wait()
 
 	// Drain pending saves before closing engines/embedder, since a save in
 	// flight may still be using sherpa-onnx state.
@@ -325,6 +339,10 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	a.fixSignals()
 	a.mu.Lock()
 	defer a.mu.Unlock()
+
+	if a.shuttingDown {
+		return fmt.Errorf("shutting down")
+	}
 
 	if a.recording {
 		return fmt.Errorf("session already in progress")
@@ -454,6 +472,9 @@ func (a *App) StopSession() (*session.Session, error) {
 		a.mu.Unlock()
 		return nil, fmt.Errorf("no session in progress")
 	}
+	// Counted from claiming the session until its save is queued; see stopWG.
+	a.stopWG.Add(1)
+	defer a.stopWG.Done()
 
 	coordinator := a.coordinator
 	sess := a.currentSess
