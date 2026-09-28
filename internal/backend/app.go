@@ -54,6 +54,9 @@ type App struct {
 	dictCancel      context.CancelFunc
 	currentSess     *session.Session
 	videoHintCancel context.CancelFunc
+	// segmentsDone is closed once the current session's coordinator has
+	// delivered its last segment and refinement (see emitSessionSegments).
+	segmentsDone <-chan struct{}
 
 	// videoHintMu guards videoHintActivity, a short ring buffer of the
 	// current session's videohint.Event trace — separate from mu since
@@ -79,8 +82,9 @@ type App struct {
 
 // saveRequest is a unit of work for the background save worker.
 type saveRequest struct {
-	sess        *session.Session
-	coordinator *live.Coordinator
+	sess         *session.Session
+	coordinator  *live.Coordinator
+	segmentsDone <-chan struct{} // see App.segmentsDone
 }
 
 const saveQueueDepth = 16
@@ -433,8 +437,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	go a.emitVideoHintEvents(videoHintCtx, videoHintEvents)
 
 	// Start emitting segments to frontend
-	go a.emitSegments()
-	go a.emitSegmentUpdates()
+	a.segmentsDone = a.emitSessionSegments(coordinator.Segments(), coordinator.SegmentUpdates(), a.currentSess)
 
 	wailsRuntime.EventsEmit(a.ctx, "session:started", a.currentSess.ID)
 	return nil
@@ -455,10 +458,12 @@ func (a *App) StopSession() (*session.Session, error) {
 	coordinator := a.coordinator
 	sess := a.currentSess
 	videoHintCancel := a.videoHintCancel
+	segmentsDone := a.segmentsDone
 	a.recording = false
 	a.currentSess = nil
 	a.coordinator = nil
 	a.videoHintCancel = nil
+	a.segmentsDone = nil
 	a.mu.Unlock()
 
 	if videoHintCancel != nil {
@@ -477,7 +482,7 @@ func (a *App) StopSession() (*session.Session, error) {
 
 	// Hand off to the serial save worker so the next StartSession can
 	// proceed immediately while encoding + diarization run in the background.
-	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator}
+	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator, segmentsDone: segmentsDone}
 
 	return sess, nil
 }
@@ -497,6 +502,13 @@ func (a *App) saveWorker() {
 func (a *App) persistSession(req *saveRequest) {
 	sess := req.sess
 	coordinator := req.coordinator
+
+	// Pass-2 refinements still queued at stop keep arriving after
+	// StopSession returns; save only once they have all been applied, so
+	// the saved text is the refined text and no segment is left "pending".
+	if req.segmentsDone != nil {
+		<-req.segmentsDone
+	}
 
 	var tracks [][]float32
 	if coordinator.IsDualSource() {

@@ -2,6 +2,7 @@ package session
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -197,5 +198,43 @@ func TestSegmentJSONFields(t *testing.T) {
 		if _, ok := m[key]; !ok {
 			t.Errorf("missing JSON key %q", key)
 		}
+	}
+}
+
+func TestUpsertSegmentAppendsAndReplaces(t *testing.T) {
+	s := &Session{}
+	s.UpsertSegment(Segment{ID: "seg-1", Text: "hel", StartTime: 1, Status: "live"})
+	s.UpsertSegment(Segment{ID: "seg-1", Text: "hello", StartTime: 1, Status: "pending"})
+	s.UpsertSegment(Segment{ID: "seg-1", Text: "Hello.", StartTime: 1})
+
+	if len(s.Segments) != 1 || s.Segments[0].Text != "Hello." || s.Segments[0].Status != "" {
+		t.Fatalf("segments = %+v, want one final \"Hello.\"", s.Segments)
+	}
+}
+
+func TestUpsertSegmentRevisionBeforeSegment(t *testing.T) {
+	s := &Session{}
+	// The final revision overtakes the segment's first "live" emission.
+	s.UpsertSegment(Segment{ID: "seg-1", Text: "Hello.", StartTime: 1})
+	s.UpsertSegment(Segment{ID: "seg-1", Text: "hel", StartTime: 1, Status: "live"})
+
+	if len(s.Segments) != 1 || s.Segments[0].Text != "Hello." || s.Segments[0].Status != "" {
+		t.Fatalf("segments = %+v, want the final text kept", s.Segments)
+	}
+}
+
+func TestUpsertSegmentInsertsInStartTimeOrder(t *testing.T) {
+	s := &Session{}
+	s.UpsertSegment(Segment{ID: "a", StartTime: 1})
+	s.UpsertSegment(Segment{ID: "c", StartTime: 5})
+	s.UpsertSegment(Segment{ID: "b", StartTime: 3}) // e.g. emitted late, after pass 2
+	s.UpsertSegment(Segment{ID: "d", StartTime: 5}) // ties keep arrival order
+
+	var got []string
+	for _, seg := range s.Segments {
+		got = append(got, seg.ID)
+	}
+	if strings.Join(got, ",") != "a,b,c,d" {
+		t.Errorf("order = %v, want a,b,c,d", got)
 	}
 }

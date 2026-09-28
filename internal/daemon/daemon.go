@@ -479,7 +479,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		defer drainWG.Done()
 		for seg := range coordinator.Segments() {
 			mu.Lock()
-			sess.Segments = append(sess.Segments, seg)
+			sess.UpsertSegment(seg)
 			mu.Unlock()
 			if seg.Language != "" {
 				fmt.Printf("[%s] [%s] %s: %s\n", formatTimestamp(seg.StartTime), seg.Language, seg.Speaker, seg.Text)
@@ -491,13 +491,10 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	go func() {
 		defer drainWG.Done()
 		for seg := range coordinator.SegmentUpdates() {
+			// Upsert rather than update in place: a revision can overtake
+			// its segment, which travels on the other channel.
 			mu.Lock()
-			for i := range sess.Segments {
-				if sess.Segments[i].ID == seg.ID {
-					sess.Segments[i] = seg
-					break
-				}
-			}
+			sess.UpsertSegment(seg)
 			mu.Unlock()
 			fmt.Printf("[%s] %s: %s (refined)\n", formatTimestamp(seg.StartTime), seg.Speaker, seg.Text)
 		}
