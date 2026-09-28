@@ -4,12 +4,14 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/sigfix"
+	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
 )
 
@@ -41,6 +43,7 @@ type refinementJob struct {
 	id        string
 	samples   []float32
 	speaker   string
+	decision  speaker.AssignDecision // see speakerLabel; "" if speaker is unset
 	startTime float64
 	endTime   float64
 	source    SourceType
@@ -275,7 +278,7 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 	if !wasLive {
 		id = c.nextSegID()
 	}
-	spk := c.assignSpeaker(source, samples)
+	spk, decision := c.assignSpeaker(source, samples)
 	live.reset()
 
 	seg := session.Segment{
@@ -287,6 +290,7 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 		Source:    string(source),
 		Language:  "en",
 		Status:    "pending",
+		Decision:  string(decision),
 	}
 	if wasLive {
 		select {
@@ -303,7 +307,7 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 
 	select {
 	case c.refineCh <- refinementJob{
-		id: id, samples: samples, speaker: spk,
+		id: id, samples: samples, speaker: spk, decision: decision,
 		startTime: startTime, endTime: endTime, source: source,
 		pass1Text: text,
 	}:
@@ -357,7 +361,7 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 
 	// Only after the text check: a segment that decodes to nothing (noise,
 	// a cough) must not create or move a speaker centroid.
-	spk := c.assignSpeaker(source, samples)
+	spk, decision := c.assignSpeaker(source, samples)
 
 	seg := session.Segment{
 		ID:        c.nextSegID(),
@@ -367,6 +371,7 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 		EndTime:   endTime,
 		Source:    string(source),
 		Language:  result.Language,
+		Decision:  string(decision),
 	}
 	select {
 	case c.segmentCh <- seg:
@@ -389,8 +394,9 @@ func (c *Coordinator) finishLive(source SourceType, live *liveState) {
 	if text == "" {
 		text = live.shown
 	}
+	spk, decision := c.assignSpeaker(source, live.audio)
 	c.refineCh <- refinementJob{
-		id: live.id, samples: live.audio, speaker: c.assignSpeaker(source, live.audio),
+		id: live.id, samples: live.audio, speaker: spk, decision: decision,
 		startTime: live.startTime, endTime: c.elapsed(), source: source,
 		pass1Text: text,
 	}
@@ -453,9 +459,9 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 		return session.Segment{}, false
 	}
 
-	spk := job.speaker
+	spk, decision := job.speaker, job.decision
 	if job.unannounced {
-		spk = c.speakerLabel(job.source, job.embedding)
+		spk, decision = c.speakerLabel(job.source, job.embedding, sampleDuration(job.samples))
 	}
 	return session.Segment{
 		ID:        job.id,
@@ -465,12 +471,19 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 		EndTime:   job.endTime,
 		Source:    string(job.source),
 		Language:  lang,
+		Decision:  string(decision),
 	}, true
 }
 
-// assignSpeaker determines the speaker label for a segment.
-func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) string {
-	return c.speakerLabel(source, c.speakerEmbedding(source, samples))
+// assignSpeaker determines the speaker label for a segment, and which
+// rule inside speaker.Tracker.Assign produced it (see speakerLabel).
+func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) (string, speaker.AssignDecision) {
+	return c.speakerLabel(source, c.speakerEmbedding(source, samples), sampleDuration(samples))
+}
+
+// sampleDuration is how long samples (at vadSampleRate) plays for.
+func sampleDuration(samples []float32) time.Duration {
+	return time.Duration(float64(len(samples)) / vadSampleRate * float64(time.Second))
 }
 
 // provisionalSpeaker labels a live segment from its first fraction of a
@@ -506,31 +519,51 @@ func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []f
 }
 
 // speakerLabel maps a segment's embedding (from speakerEmbedding) to a
-// speaker label, clustering monitor-source speakers via the Tracker.
-func (c *Coordinator) speakerLabel(source SourceType, embedding []float32) string {
+// speaker label, clustering monitor-source speakers via the Tracker, and
+// which rule inside Tracker.Assign produced it ("" when Assign was never
+// called, e.g. "You"/"System Audio"/"Other") -- see speaker.AssignDecision
+// and session.Segment.Decision, which a diagnostics view uses to show how
+// each line was labeled. duration is how much audio the embedding was
+// computed from (see minAssignDuration's doc comment in internal/speaker).
+func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, duration time.Duration) (string, speaker.AssignDecision) {
 	if source == SourceMic {
-		return "You"
+		return "You", ""
 	}
 
 	if c.cfg.SkipMonitorDiarization {
-		return "System Audio"
+		return "System Audio", ""
 	}
 
 	// For monitor source, try speaker embedding + clustering
 	if len(embedding) > 0 && c.cfg.Tracker != nil {
-		label, needsHint := c.cfg.Tracker.Assign(embedding)
-		if needsHint {
+		before := c.cfg.Tracker.NumSpeakers()
+		label, needsHint := c.cfg.Tracker.Assign(embedding, duration)
+		decision := c.cfg.Tracker.LastDecision()
+		isNew := c.cfg.Tracker.NumSpeakers() > before
+
+		if isNew {
+			// A brand-new speaker is rarer and more valuable to
+			// resolve than an ordinary "still no hint" retry --
+			// found live: waiting on the regular debounced trigger
+			// alone made naming attempts feel too infrequent to
+			// ever catch a fast-moving ring. Fire twice,
+			// bypassing the usual debounce entirely: once right
+			// now, and once again ~500ms later in case the ring/
+			// label hadn't rendered yet on the first attempt.
+			c.signalHintNeeded(true)
+			go func() {
+				time.Sleep(500 * time.Millisecond)
+				c.signalHintNeeded(true)
+			}()
+		} else if needsHint {
 			// Non-blocking: a video-hint check is worth doing right
 			// away rather than waiting for videohint.Poll's next
 			// scheduled tick, but this pipeline must never stall
 			// waiting for a slow/absent consumer.
-			select {
-			case c.hintNeededCh <- struct{}{}:
-			default:
-			}
+			c.signalHintNeeded(false)
 		}
-		return label
+		return label, decision
 	}
 
-	return "Other"
+	return "Other", ""
 }

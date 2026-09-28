@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
@@ -114,9 +115,12 @@ func TestAssignSpeakerMic(t *testing.T) {
 		cfg: Config{},
 	}
 
-	label := c.assignSpeaker(SourceMic, []float32{0.1, 0.2})
+	label, decision := c.assignSpeaker(SourceMic, []float32{0.1, 0.2})
 	if label != "You" {
 		t.Errorf("mic speaker = %q, want %q", label, "You")
+	}
+	if decision != "" {
+		t.Errorf("mic decision = %q, want empty (mic never goes through audio clustering)", decision)
 	}
 }
 
@@ -126,7 +130,7 @@ func TestAssignSpeakerMonitorNoEmbedder(t *testing.T) {
 	}
 
 	// Without embedder, all monitor segments get "Other"
-	label := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2})
+	label, _ := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2})
 	if label != "Other" {
 		t.Errorf("monitor speaker = %q, want %q", label, "Other")
 	}
@@ -137,9 +141,12 @@ func TestAssignSpeakerMonitorSkipDiarization(t *testing.T) {
 		cfg: Config{SkipMonitorDiarization: true},
 	}
 
-	label := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2})
+	label, decision := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2})
 	if label != "System Audio" {
 		t.Errorf("monitor speaker with SkipMonitorDiarization = %q, want %q", label, "System Audio")
+	}
+	if decision != "" {
+		t.Errorf("decision = %q, want empty (diarization skipped)", decision)
 	}
 }
 
@@ -148,7 +155,7 @@ func TestAssignSpeakerMicUnaffectedBySkipDiarization(t *testing.T) {
 		cfg: Config{SkipMonitorDiarization: true},
 	}
 
-	label := c.assignSpeaker(SourceMic, []float32{0.1, 0.2})
+	label, _ := c.assignSpeaker(SourceMic, []float32{0.1, 0.2})
 	if label != "You" {
 		t.Errorf("mic speaker with SkipMonitorDiarization = %q, want %q (mic is unaffected)", label, "You")
 	}
@@ -216,9 +223,9 @@ func TestTrackerIntegration(t *testing.T) {
 	emb1 := []float32{1, 0, 0, 0}
 	emb2 := []float32{0, 1, 0, 0}
 
-	label1, _ := tracker.Assign(emb1)
-	label2, _ := tracker.Assign(emb2)
-	label3, _ := tracker.Assign(emb1) // Same as emb1
+	label1, _ := tracker.Assign(emb1, 2*time.Second)
+	label2, _ := tracker.Assign(emb2, 2*time.Second)
+	label3, _ := tracker.Assign(emb1, 2*time.Second) // Same as emb1
 
 	if label1 != "Person 1" {
 		t.Errorf("label1 = %q, want %q", label1, "Person 1")
@@ -647,5 +654,47 @@ func TestLiveStateReset(t *testing.T) {
 	live.reset()
 	if live.partial != "" || live.id != "" || live.speaker != "" || live.startTime != 0 || live.audio != nil {
 		t.Errorf("reset() left non-zero state: %+v", live)
+	}
+}
+
+func TestSignalHintNeeded_DeliversPriorityFlag(t *testing.T) {
+	c := New(Config{})
+
+	c.signalHintNeeded(true)
+	select {
+	case priority := <-c.HintNeeded():
+		if !priority {
+			t.Error("priority = false, want true")
+		}
+	default:
+		t.Fatal("HintNeeded() had nothing buffered after signalHintNeeded(true)")
+	}
+
+	c.signalHintNeeded(false)
+	select {
+	case priority := <-c.HintNeeded():
+		if priority {
+			t.Error("priority = true, want false")
+		}
+	default:
+		t.Fatal("HintNeeded() had nothing buffered after signalHintNeeded(false)")
+	}
+}
+
+func TestSignalHintNeeded_NonBlockingWhenBufferFull(t *testing.T) {
+	c := New(Config{})
+
+	c.signalHintNeeded(false)
+	// The single-slot buffer is now full; a second signal must be
+	// dropped rather than blocking the caller.
+	done := make(chan struct{})
+	go func() {
+		c.signalHintNeeded(true)
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("signalHintNeeded() blocked with a full buffer, want a non-blocking drop")
 	}
 }
