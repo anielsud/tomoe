@@ -206,9 +206,12 @@ func noisyRingFrame(specks int) ([]byte, int, int, RingConfig) {
 
 func TestDetectRing_FindsRingAmongManySpecks(t *testing.T) {
 	pix, width, height, cfg := noisyRingFrame(2000)
-	match, ok := DetectRing(pix, width, height, cfg)
+	match, ok, ambiguous := DetectRing(pix, width, height, cfg)
 	if !ok {
 		t.Fatal("DetectRing() found no match, want the ring")
+	}
+	if ambiguous {
+		t.Fatal("DetectRing() reported ambiguous, want a single clear match")
 	}
 	if match.X != 900 || match.Y != 500 || match.Width != 440 || match.Height != 245 {
 		t.Errorf("match = %+v, want the 440x245 ring at (900,500)", match)
