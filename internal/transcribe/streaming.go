@@ -52,6 +52,12 @@ type StreamingSession interface {
 // online (streaming) Zipformer transducer recognizer.
 type zipformerStreamingEngine struct {
 	recognizer *sherpa.OnlineRecognizer
+	// decodeMu serializes decoding across sessions: meeting mode runs one
+	// session per source (mic and monitor) on separate goroutines, and
+	// sherpa-onnx doesn't document OnlineRecognizer as safe for
+	// concurrent Decode calls, even on different streams. Each decode
+	// step is a few milliseconds, so the cost is negligible.
+	decodeMu sync.Mutex
 }
 
 // StreamingConfig holds paths for the streaming (online) transducer model.
@@ -110,7 +116,7 @@ func (e *zipformerStreamingEngine) NewSession() (StreamingSession, error) {
 	if stream == nil {
 		return nil, fmt.Errorf("failed to create online stream")
 	}
-	return &zipformerStreamingSession{recognizer: e.recognizer, stream: stream}, nil
+	return &zipformerStreamingSession{recognizer: e.recognizer, decodeMu: &e.decodeMu, stream: stream}, nil
 }
 
 func (e *zipformerStreamingEngine) Close() {
@@ -127,6 +133,7 @@ func (e *zipformerStreamingEngine) Close() {
 type zipformerStreamingSession struct {
 	mu         sync.Mutex
 	recognizer *sherpa.OnlineRecognizer
+	decodeMu   *sync.Mutex // the engine's; see zipformerStreamingEngine
 	stream     *sherpa.OnlineStream
 	closed     bool
 }
@@ -140,11 +147,13 @@ func (s *zipformerStreamingSession) Feed(samples []float32) (string, error) {
 	}
 
 	s.stream.AcceptWaveform(sampleRate, samples)
+	s.decodeMu.Lock()
 	for s.recognizer.IsReady(s.stream) {
 		s.recognizer.Decode(s.stream)
 	}
-
 	result := s.recognizer.GetResult(s.stream)
+	s.decodeMu.Unlock()
+
 	if result == nil {
 		return "", nil
 	}
@@ -157,7 +166,9 @@ func (s *zipformerStreamingSession) Reset() {
 	if s.closed {
 		return
 	}
+	s.decodeMu.Lock()
 	s.recognizer.Reset(s.stream)
+	s.decodeMu.Unlock()
 }
 
 func (s *zipformerStreamingSession) Close() {
