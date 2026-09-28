@@ -485,3 +485,59 @@ func TestResample(t *testing.T) {
 		}
 	})
 }
+
+func TestResamplerChunkedMatchesWholeStream(t *testing.T) {
+	for _, rates := range [][2]int{{48000, 16000}, {44100, 16000}, {8000, 16000}} {
+		src, dst := rates[0], rates[1]
+		in := make([]float32, src*2)
+		for i := range in {
+			ti := float64(i) / float64(src)
+			in[i] = float32(0.5*math.Sin(2*math.Pi*440*ti) + 0.2*math.Sin(2*math.Pi*3100*ti))
+		}
+		whole := Resample(in, src, dst)
+
+		r := NewResampler(src, dst)
+		var chunked []float32
+		for off, n := 0, 1; off < len(in); off, n = off+n, n%1500+37 {
+			end := min(off+n, len(in))
+			chunked = append(chunked, r.Process(in[off:end])...)
+		}
+
+		// Only output from the final input sample may be held back (it's
+		// needed to interpolate across the next chunk boundary): one
+		// output sample when downsampling, dst/src when upsampling.
+		held := max(1, (dst+src-1)/src)
+		if len(chunked) < len(whole)-held || len(chunked) > len(whole) {
+			t.Fatalf("%d->%d: chunked output has %d samples, whole-stream %d", src, dst, len(chunked), len(whole))
+		}
+		for i := range chunked {
+			if d := math.Abs(float64(chunked[i] - whole[i])); d > 1e-4 {
+				t.Fatalf("%d->%d: sample %d differs by %g (chunked %v, whole %v)", src, dst, i, d, chunked[i], whole[i])
+			}
+		}
+	}
+}
+
+func TestResamplerDoesNotDriftAcrossCallbacks(t *testing.T) {
+	// One hour of 1024-sample, 48kHz callbacks: per-chunk Resample would
+	// lose a third of a sample per callback (~3.8s over the hour).
+	const chunks = 48000 * 3600 / 1024
+	r := NewResampler(48000, 16000)
+	chunk := make([]float32, 1024)
+	total := 0
+	for i := 0; i < chunks; i++ {
+		total += len(r.Process(chunk))
+	}
+	want := chunks * 1024 / 3
+	if total < want-1 || total > want {
+		t.Errorf("output samples = %d, want %d (±1)", total, want)
+	}
+}
+
+func TestResamplerSameRatePassesThrough(t *testing.T) {
+	in := []float32{0.1, 0.2, 0.3}
+	out := NewResampler(16000, 16000).Process(in)
+	if len(out) != len(in) || out[0] != in[0] || out[2] != in[2] {
+		t.Errorf("Process() = %v, want input unchanged", out)
+	}
+}

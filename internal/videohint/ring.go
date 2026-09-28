@@ -50,8 +50,8 @@ func DetectRing(pix []byte, width, height int, cfg RingConfig) (*RingMatch, bool
 	var best *RingMatch
 	var bestScore float64
 
-	for comp := 1; comp <= numComponents; comp++ {
-		minX, minY, maxX, maxY, count := boundingBox(labels, width, comp)
+	for _, st := range componentStats(labels, width, numComponents) {
+		minX, minY, maxX, maxY, count := st.minX, st.minY, st.maxX, st.maxY, st.count
 		if count == 0 {
 			continue
 		}
@@ -120,31 +120,33 @@ func connectedComponents(mask []bool, width, height int) (labels []int, numCompo
 	return labels, numComponents
 }
 
-// boundingBox computes the bounding box and pixel count of component
-// comp within a width-wide label buffer.
-func boundingBox(labels []int, width, comp int) (minX, minY, maxX, maxY, count int) {
-	minX, minY = 1<<31-1, 1<<31-1
-	maxX, maxY = -1, -1
+// componentBox is one connected component's bounding box and pixel count.
+type componentBox struct {
+	minX, minY, maxX, maxY, count int
+}
+
+// componentStats computes every component's bounding box and pixel count
+// in a single pass over labels (index i holds component i+1). A pass per
+// component would cost O(pixels × components), which on a Retina frame
+// with a few thousand ring-colored specks takes seconds per poll.
+func componentStats(labels []int, width, numComponents int) []componentBox {
+	stats := make([]componentBox, numComponents)
+	for i := range stats {
+		stats[i] = componentBox{minX: 1<<31 - 1, minY: 1<<31 - 1, maxX: -1, maxY: -1}
+	}
 	for idx, l := range labels {
-		if l != comp {
+		if l == 0 {
 			continue
 		}
+		st := &stats[l-1]
 		x, y := idx%width, idx/width
-		if x < minX {
-			minX = x
-		}
-		if x > maxX {
-			maxX = x
-		}
-		if y < minY {
-			minY = y
-		}
-		if y > maxY {
-			maxY = y
-		}
-		count++
+		st.minX = min(st.minX, x)
+		st.maxX = max(st.maxX, x)
+		st.minY = min(st.minY, y)
+		st.maxY = max(st.maxY, y)
+		st.count++
 	}
-	return
+	return stats
 }
 
 func absDiff(a, b uint8) uint8 {
