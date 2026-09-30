@@ -28,6 +28,12 @@ type offlinePipeline struct {
 // speaker embedder and the English streaming engine when asked for.
 // Missing optional models are reported and skipped, not fatal.
 func loadOfflinePipeline(cfg *config.Config, status *models.Status, lang string, withEmbedder, withStreaming bool) (*offlinePipeline, error) {
+	return loadOfflinePipelineThreads(cfg, status, lang, withEmbedder, withStreaming, 0)
+}
+
+// loadOfflinePipelineThreads is loadOfflinePipeline with a CPU thread count
+// for the transcription engine (0 = the engine's default).
+func loadOfflinePipelineThreads(cfg *config.Config, status *models.Status, lang string, withEmbedder, withStreaming bool, threads int) (*offlinePipeline, error) {
 	p := &offlinePipeline{status: status}
 	engines, err := transcribe.NewEngineSetFromConfig(transcribe.Config{
 		EncoderPath:    status.EncoderPath,
@@ -40,6 +46,7 @@ func loadOfflinePipeline(cfg *config.Config, status *models.Status, lang string,
 		MaxActivePaths: cfg.Transcription.MaxActivePaths,
 		HotwordsFile:   cfg.Transcription.HotwordsFile,
 		HotwordsScore:  cfg.Transcription.HotwordsScore,
+		NumThreads:     threads,
 	}, status, &cfg.Multilingual)
 	if err != nil {
 		return nil, fmt.Errorf("creating transcription engine: %w", err)

@@ -121,3 +121,19 @@ func parseClock(s string) (float64, error) {
 	}
 	return float64(total), nil
 }
+
+// Slice returns the turns starting within [from, to) seconds, shifted so
+// from becomes 0 and clipped to end by to, for scoring one stretch of a
+// recording (see `tomoe eval --from/--to`).
+func (r *Reference) Slice(from, to float64) *Reference {
+	out := &Reference{Title: r.Title}
+	for _, t := range r.Turns {
+		if t.Start < from || t.Start >= to {
+			continue
+		}
+		t.Start -= from
+		t.End = min(t.End, to) - from
+		out.Turns = append(out.Turns, t)
+	}
+	return out
+}

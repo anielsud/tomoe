@@ -28,6 +28,7 @@ type DiarizeConfig struct {
 	Threshold             float32 // clustering threshold (used when NumSpeakers=0)
 	MergeThreshold        float64 // cosine similarity threshold for post-merge (0 = disabled)
 	UseGPU                bool    // use CUDA execution provider if available
+	NumThreads            int     // CPU threads per model (0 = 4)
 	Verbose               bool
 }
 
@@ -43,6 +44,9 @@ type DiarizeSegment struct {
 func Diarize(samples []float32, cfg DiarizeConfig) ([]DiarizeSegment, map[int]string, error) {
 	provider := "cpu"
 	numThreads := 4
+	if cfg.NumThreads > 0 {
+		numThreads = cfg.NumThreads
+	}
 	if cfg.UseGPU {
 		provider = "cuda"
 		numThreads = 1

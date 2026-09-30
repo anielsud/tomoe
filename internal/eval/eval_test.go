@@ -242,3 +242,15 @@ func TestScoreQuickExchanges(t *testing.T) {
 		t.Errorf("exchanges = %+v", s)
 	}
 }
+
+func TestReferenceSlice(t *testing.T) {
+	ref := mustParse(t, sampleTranscript, 70)
+	s := ref.Slice(5, 30)
+	want := []Turn{
+		{"Bob Brown", 0, 4, "Hi, shall we start?"},
+		{"Alice Adams", 4, 25, "Yes. Revenue came in 4% above forecast, mostly from renewals."},
+	}
+	if !reflect.DeepEqual(s.Turns, want) {
+		t.Errorf("Slice(5, 30) =\n%+v\nwant\n%+v", s.Turns, want)
+	}
+}

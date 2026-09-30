@@ -5,8 +5,11 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -51,6 +54,15 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.collar, _ = cmd.Flags().GetFloat64("collar")
 		opts.skipDiarization, _ = cmd.Flags().GetBool("skip-diarization")
 		opts.runs, _ = cmd.Flags().GetStringSlice("runs")
+		opts.threads, _ = cmd.Flags().GetInt("threads")
+		opts.noCache, _ = cmd.Flags().GetBool("no-cache")
+		var err error
+		for name, dst := range map[string]*float64{"from": &opts.from, "to": &opts.to} {
+			v, _ := cmd.Flags().GetString(name)
+			if *dst, err = parseSeconds(v); err != nil {
+				return fmt.Errorf("--%s: %w", name, err)
+			}
+		}
 		return runEval(opts)
 	},
 }
@@ -61,6 +73,10 @@ func init() {
 	evalCmd.Flags().Float64("collar", 1.0, "Seconds around each reference speaker change not scored (Teams timestamps are to the second)")
 	evalCmd.Flags().Bool("skip-diarization", false, "Skip the post-meeting diarization passes (much faster)")
 	evalCmd.Flags().StringSlice("runs", []string{"default", "experimental"}, "Pipeline settings to run: default, experimental")
+	evalCmd.Flags().String("from", "", "Score only from this point (e.g. 10m, 90s, 1h5m)")
+	evalCmd.Flags().String("to", "", "Score only up to this point (e.g. 20m)")
+	evalCmd.Flags().Int("threads", 0, "CPU threads per parallel job (default: all cores split between jobs)")
+	evalCmd.Flags().Bool("no-cache", false, "Recompute transcription and diarization instead of reusing earlier results")
 	_ = evalCmd.MarkFlagRequired("ref")
 	rootCmd.AddCommand(evalCmd)
 }
@@ -70,6 +86,9 @@ type evalOptions struct {
 	collar          float64
 	skipDiarization bool
 	runs            []string
+	from, to        float64 // seconds; to 0 = the end
+	threads         int
+	noCache         bool
 }
 
 // evalRun is one pipeline configuration's results.
@@ -107,6 +126,11 @@ type evalReport struct {
 	RefSpeakers int     `json:"ref_speakers"`
 	RefWords    int     `json:"ref_words"`
 	Collar      float64 `json:"collar_seconds"`
+	From        float64 `json:"from_seconds"`
+	To          float64 `json:"to_seconds"`
+	WallSecs    float64 `json:"wall_seconds"`
+	CacheHits   int64   `json:"transcription_cache_hits"`
+	CacheMisses int64   `json:"transcription_cache_misses"`
 
 	DiarizationInitial *eval.SpeakerScore `json:"diarization_initial,omitempty"`
 	DiarizationRefined *eval.SpeakerScore `json:"diarization_refined,omitempty"`
@@ -116,6 +140,7 @@ type evalReport struct {
 }
 
 func runEval(opts evalOptions) error {
+	began := time.Now()
 	cfg, err := config.Load(config.Path())
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -133,17 +158,31 @@ func runEval(opts evalOptions) error {
 	if err != nil {
 		return fmt.Errorf("decoding audio: %w", err)
 	}
-	audioSecs := float64(len(samples)) / 16000
+	fullSecs := float64(len(samples)) / 16000
 
 	f, err := os.Open(opts.ref)
 	if err != nil {
 		return err
 	}
-	ref, err := eval.ParseTeamsTranscript(f, audioSecs)
+	ref, err := eval.ParseTeamsTranscript(f, fullSecs)
 	f.Close()
 	if err != nil {
 		return fmt.Errorf("parsing reference: %w", err)
 	}
+
+	from, to := opts.from, opts.to
+	if to <= 0 || to > fullSecs {
+		to = fullSecs
+	}
+	if from < 0 || from >= to {
+		return fmt.Errorf("--from must be before --to and inside the recording (%s)", formatDuration(fullSecs))
+	}
+	if from > 0 || to < fullSecs {
+		samples = samples[int(from*16000):int(to*16000)]
+		ref = ref.Slice(from, to)
+		fmt.Printf("Scoring %s to %s only\n", formatDuration(from), formatDuration(to))
+	}
+	audioSecs := float64(len(samples)) / 16000
 	var refWords []string
 	for _, t := range ref.Turns {
 		refWords = append(refWords, eval.Words(t.Text)...)
@@ -151,6 +190,7 @@ func runEval(opts evalOptions) error {
 
 	report := &evalReport{
 		Media: filepath.Base(opts.media), Reference: filepath.Base(opts.ref), AudioSecs: audioSecs,
+		From: from, To: to,
 		RefTurns: len(ref.Turns), RefSpeakers: len(ref.Speakers()), RefWords: len(refWords), Collar: opts.collar,
 	}
 	fmt.Printf("Reference: %d turns, %d speakers, %d words over %s\n", report.RefTurns, report.RefSpeakers, report.RefWords, formatDuration(audioSecs))
@@ -159,67 +199,82 @@ func runEval(opts evalOptions) error {
 	if err != nil {
 		return err
 	}
-	wantStreaming := false
-	for _, r := range runs {
-		wantStreaming = wantStreaming || r.TwoPass
+
+	var cache *evalCache
+	if !opts.noCache {
+		textKey := fmt.Sprintf("%s|%s|%s|%d|%s|%v|%v", status.EncoderPath, status.DecoderPath, cfg.Transcription.DecodingMethod,
+			cfg.Transcription.MaxActivePaths, cfg.Transcription.HotwordsFile, cfg.Transcription.HotwordsScore, cfg.Transcription.GPUEnabled)
+		if cache, err = openEvalCache(samples, textKey); err != nil {
+			fmt.Printf("Note: running without a cache: %v\n", err)
+			cache = nil
+		}
 	}
-	pipe, err := loadOfflinePipeline(cfg, status, "en", true, wantStreaming)
-	if err != nil {
+
+	// Every run and the diarization pass are independent, so they run at
+	// once, splitting the CPU between them.
+	jobs := len(runs)
+	if !opts.skipDiarization {
+		jobs++
+	}
+	threads := opts.threads
+	if threads <= 0 {
+		threads = max(2, runtime.NumCPU()/max(1, jobs))
+	}
+	fmt.Printf("Running %d jobs in parallel, %d threads each\n", jobs, threads)
+
+	var wg sync.WaitGroup
+	errs := make(chan error, jobs)
+
+	var diar *cachedDiarization
+	if !opts.skipDiarization {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			d, secs, err := runDiarization(cfg, status, samples, threads, cache)
+			if err != nil {
+				errs <- fmt.Errorf("diarization: %w", err)
+				return
+			}
+			diar, report.DiarizationSecs = d, secs
+		}()
+	}
+	for _, run := range runs {
+		wg.Add(1)
+		go func(run *evalRun) {
+			defer wg.Done()
+			if err := runPipeline(run, cfg, status, samples, threads, cache); err != nil {
+				errs <- fmt.Errorf("%s run: %w", run.Name, err)
+			}
+		}(run)
+	}
+	wg.Wait()
+	close(errs)
+	if err := <-errs; err != nil {
 		return err
 	}
-	defer pipe.Close()
-
-	for _, run := range runs {
-		if run.TwoPass && pipe.streaming == nil {
-			run.TwoPass = false
+	if cache != nil {
+		if err := cache.save(); err != nil {
+			fmt.Printf("Note: couldn't save the transcription cache: %v\n", err)
 		}
-		fmt.Printf("Running %s pipeline (%s)...\n", run.Name, run.Tuning)
-		began := time.Now()
-		res, err := live.ReplayDetailed(pipe.liveConfig(tuningFor(run.Name), run.TwoPass), nil, samples)
-		if err != nil {
-			return fmt.Errorf("%s run: %w", run.Name, err)
-		}
-		run.Seconds = time.Since(began).Seconds()
-		for _, s := range res.Segments {
-			run.live = append(run.live, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: s.Text})
-			if p1, ok := res.Pass1Text[s.ID]; ok {
-				run.pass1 = append(run.pass1, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: p1})
-			}
-		}
-		sortLabeled(run.live)
-		sortLabeled(run.pass1)
-		scoreRun(run, ref, refWords, opts.collar)
-		fmt.Printf("  done in %s\n", formatDuration(run.Seconds))
+		report.CacheHits, report.CacheMisses = cache.hits.Load(), cache.misses.Load()
 	}
 
+	for _, run := range runs {
+		scoreRun(run, ref, refWords, opts.collar)
+	}
 	var initial, refined []eval.Labeled
-	if !opts.skipDiarization {
-		fmt.Println("Running post-meeting diarization (this is the slow part)...")
-		began := time.Now()
-		dcfg := session.DiarizeConfig{
-			SegmentationModelPath: status.SpeakerSegmentationPath,
-			EmbeddingModelPath:    status.SpeakerEmbeddingPath,
-			Threshold:             1.1, // same settings as the post-save diarization (cmd/tomoe/diarize.go)
-			UseGPU:                cfg.Transcription.GPUEnabled,
-		}
-		rawSegs, rawMap, err := session.Diarize(samples, dcfg)
-		if err != nil {
-			return fmt.Errorf("diarization: %w", err)
-		}
-		mergedSegs, mergedMap := session.MergeSimilarSpeakers(append([]session.DiarizeSegment(nil), rawSegs...), copyMap(rawMap), samples, status.SpeakerEmbeddingPath, 0.55, false)
-		report.DiarizationSecs = time.Since(began).Seconds()
-		initial = diarLabeled(rawSegs, rawMap)
-		refined = diarLabeled(mergedSegs, mergedMap)
+	if diar != nil {
+		initial = diarLabeled(diar.Raw, diar.RawMap)
+		refined = diarLabeled(diar.Merged, diar.MergedMap)
 		si := eval.ScoreSpeakers(ref, initial, opts.collar)
 		sr := eval.ScoreSpeakers(ref, refined, opts.collar)
 		report.DiarizationInitial, report.DiarizationRefined = &si, &sr
-
 		for _, run := range runs {
 			segs := make([]session.Segment, len(run.live))
 			for i, l := range run.live {
 				segs[i] = session.Segment{StartTime: l.Start, EndTime: l.End, Speaker: l.Speaker, Text: l.Text, Source: "monitor"}
 			}
-			session.RelabelByDiarization(segs, mergedSegs, mergedMap)
+			session.RelabelByDiarization(segs, diar.Merged, diar.MergedMap)
 			for _, s := range segs {
 				run.final = append(run.final, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: s.Text})
 			}
@@ -228,9 +283,9 @@ func runEval(opts evalOptions) error {
 			xf := eval.ScoreQuickExchanges(ref, run.final, sf.Mapping, 8, 6, 3)
 			run.SpeakersFinal, run.WhoSaidWhatFinal, run.ExchangesFinal = &sf, &wf, &xf
 		}
-		fmt.Printf("  done in %s\n", formatDuration(report.DiarizationSecs))
 	}
 	report.Runs = runs
+	report.WallSecs = time.Since(began).Seconds()
 
 	outDir := opts.out
 	if outDir == "" {
@@ -244,6 +299,74 @@ func runEval(opts evalOptions) error {
 	fmt.Print(text)
 	fmt.Printf("\nWrote %s (report.txt, scores.json, per-pass transcripts, spotcheck.txt)\n", outDir)
 	return nil
+}
+
+// runPipeline runs one configuration through the live pipeline with its own
+// models, serving transcription from cache where it can.
+func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, samples []float32, threads int, cache *evalCache) error {
+	pipe, err := loadOfflinePipelineThreads(cfg, status, "en", true, run.TwoPass, threads)
+	if err != nil {
+		return err
+	}
+	defer pipe.Close()
+	if run.TwoPass && pipe.streaming == nil {
+		run.TwoPass = false
+	}
+	if cache != nil {
+		pipe.engine = cache.wrap(pipe.engine)
+	}
+	fmt.Printf("Running %s pipeline (%s)...\n", run.Name, run.Tuning)
+	began := time.Now()
+	res, err := live.ReplayDetailed(pipe.liveConfig(tuningFor(run.Name), run.TwoPass), nil, samples)
+	if err != nil {
+		return err
+	}
+	run.Seconds = time.Since(began).Seconds()
+	for _, s := range res.Segments {
+		run.live = append(run.live, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: s.Text})
+		if p1, ok := res.Pass1Text[s.ID]; ok {
+			run.pass1 = append(run.pass1, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: p1})
+		}
+	}
+	sortLabeled(run.live)
+	sortLabeled(run.pass1)
+	fmt.Printf("  %s pipeline done in %s\n", run.Name, formatDuration(run.Seconds))
+	return nil
+}
+
+// runDiarization runs the post-meeting diarization pass (initial, then
+// merged), or loads it from the cache.
+func runDiarization(cfg *config.Config, status *models.Status, samples []float32, threads int, cache *evalCache) (*cachedDiarization, float64, error) {
+	const threshold, merge = 1.1, 0.55 // the post-save diarization's settings (cmd/tomoe/diarize.go)
+	key := fmt.Sprintf("%s|%s|%v|%v", status.SpeakerSegmentationPath, status.SpeakerEmbeddingPath, threshold, merge)
+	if cache != nil {
+		if d, ok := cache.loadDiarization(key); ok {
+			fmt.Println("Diarization loaded from cache")
+			return d, 0, nil
+		}
+	}
+	fmt.Println("Running post-meeting diarization...")
+	began := time.Now()
+	raw, rawMap, err := session.Diarize(samples, session.DiarizeConfig{
+		SegmentationModelPath: status.SpeakerSegmentationPath,
+		EmbeddingModelPath:    status.SpeakerEmbeddingPath,
+		Threshold:             threshold,
+		UseGPU:                cfg.Transcription.GPUEnabled,
+		NumThreads:            threads,
+	})
+	if err != nil {
+		return nil, 0, err
+	}
+	merged, mergedMap := session.MergeSimilarSpeakers(append([]session.DiarizeSegment(nil), raw...), copyMap(rawMap), samples, status.SpeakerEmbeddingPath, merge, false)
+	d := &cachedDiarization{Raw: raw, RawMap: rawMap, Merged: merged, MergedMap: mergedMap}
+	secs := time.Since(began).Seconds()
+	fmt.Printf("  diarization done in %s\n", formatDuration(secs))
+	if cache != nil {
+		if err := cache.storeDiarization(key, d); err != nil {
+			fmt.Printf("Note: couldn't cache diarization: %v\n", err)
+		}
+	}
+	return d, secs, nil
 }
 
 // evalRuns turns --runs names into runs.
@@ -355,12 +478,17 @@ func formatEvalReport(r *evalReport) string {
 		}
 		fmt.Fprintln(&b)
 		fmt.Fprintln(&b, "Video-hint names   not scored (no hints in an offline eval yet)")
-		fmt.Fprintf(&b, "Run time           %s", formatDuration(run.Seconds))
+		fmt.Fprintf(&b, "Run time           pipeline %s", formatDuration(run.Seconds))
 		if r.DiarizationSecs > 0 {
-			fmt.Fprintf(&b, " + diarization %s (shared by all runs)", formatDuration(r.DiarizationSecs))
+			fmt.Fprintf(&b, ", diarization %s (in parallel, shared by all runs)", formatDuration(r.DiarizationSecs))
 		}
 		fmt.Fprintln(&b)
 	}
+	fmt.Fprintf(&b, "\nWall time %s", formatDuration(r.WallSecs))
+	if r.CacheHits+r.CacheMisses > 0 {
+		fmt.Fprintf(&b, "; transcription cache: %d reused, %d decoded", r.CacheHits, r.CacheMisses)
+	}
+	fmt.Fprintln(&b)
 	fmt.Fprintln(&b, "\nConfusion: share of scored speech given to the wrong person (lower is better).")
 	fmt.Fprintln(&b, "Purity: how much each detected speaker is one person. Coverage: how much each person stays in one detected speaker.")
 	return b.String()
@@ -467,4 +595,16 @@ func formatSpotcheck(ref *eval.Reference, hyp []eval.Labeled, mapping map[string
 		b.WriteString("\n")
 	}
 	return b.String()
+}
+
+// parseSeconds parses a duration like "10m", "90s" or "1h5m", or plain
+// seconds; "" is 0.
+func parseSeconds(v string) (float64, error) {
+	if v == "" {
+		return 0, nil
+	}
+	if d, err := time.ParseDuration(v); err == nil {
+		return d.Seconds(), nil
+	}
+	return strconv.ParseFloat(v, 64)
 }
