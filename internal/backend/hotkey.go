@@ -248,7 +248,7 @@ func (dhk *dictationManager) startDictation(lang string) {
 	}
 
 	dhk.app.mu.Lock()
-	bundle, release, err := dhk.app.leaseEnginesLocked()
+	bundle, release, err := dhk.app.leaseEnginesLocked("dictation")
 	dhk.app.mu.Unlock()
 	if err != nil {
 		fmt.Printf("Dictation: %v\n", err)

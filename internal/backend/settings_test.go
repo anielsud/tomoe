@@ -106,11 +106,11 @@ func TestValidateSettings_HotwordsWithGreedyAllowed(t *testing.T) {
 func TestLeaseEngines_BlockedWhileReconfiguring(t *testing.T) {
 	a := &App{}
 	a.bundle.engines = nil
-	if _, _, err := a.leaseEnginesLocked(); err == nil {
+	if _, _, err := a.leaseEnginesLocked("test"); err == nil {
 		t.Error("lease granted without engines")
 	}
 	a.reconfiguring = true
-	if _, _, err := a.leaseEnginesLocked(); err != errApplyingSettings {
+	if _, _, err := a.leaseEnginesLocked("test"); err != errApplyingSettings {
 		t.Errorf("lease while reconfiguring: got %v, want errApplyingSettings", err)
 	}
 }

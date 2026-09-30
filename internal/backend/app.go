@@ -517,14 +517,17 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		return fmt.Errorf("session already in progress")
 	}
 
-	bundle, release, err := a.leaseEnginesLocked()
+	bundle, release, err := a.leaseEnginesLocked("recording")
 	if err != nil {
 		return err
 	}
 	started := false
 	defer func() {
 		if !started {
-			release()
+			// a.mu is still held here (StartSession's own deferred
+			// Unlock runs after this), and release takes it: give the
+			// lease back directly instead.
+			a.releaseLeaseLocked("recording")
 		}
 	}()
 
@@ -673,7 +676,9 @@ func (a *App) StopSession() (*session.Session, error) {
 	}
 
 	// Stop coordinator (waits for pipeline flush — typically < 1s)
+	fmt.Printf("session %s: stopping capture\n", sess.ID)
 	coordinator.Stop()
+	fmt.Printf("session %s: capture stopped, queueing save\n", sess.ID)
 
 	// Finalize timestamps
 	sess.EndedAt = time.Now()
@@ -704,6 +709,12 @@ func (a *App) saveWorker() {
 func (a *App) persistSession(req *saveRequest) {
 	sess := req.sess
 	coordinator := req.coordinator
+	// The engine lease covers pass-2 refinement only: once the final
+	// segments are in, the rest of the save (audio encoding, JSON,
+	// diarization in its own process) doesn't touch the engines, and
+	// holding the lease through diarization blocked settings changes for
+	// as long as that took. release is idempotent, so the deferred call
+	// is just a backstop.
 	if req.release != nil {
 		defer req.release()
 	}
@@ -712,8 +723,13 @@ func (a *App) persistSession(req *saveRequest) {
 	// StopSession returns; save only once they have all been applied, so
 	// the saved text is the refined text and no segment is left "pending".
 	if req.segmentsDone != nil {
+		fmt.Printf("session %s: waiting for final segments\n", sess.ID)
 		<-req.segmentsDone
 	}
+	if req.release != nil {
+		req.release()
+	}
+	fmt.Printf("session %s: saving\n", sess.ID)
 
 	var tracks [][]float32
 	if coordinator.IsDualSource() {
@@ -748,7 +764,10 @@ func (a *App) persistSession(req *saveRequest) {
 	// session.json with refined labels. We don't reload here because
 	// the frontend will re-fetch via LoadSession on the session:saved
 	// event below.
-	if a.bundle.modelMgr != nil && a.bundle.modelMgr.Check().DiarizationReady() {
+	a.mu.Lock()
+	modelMgr := a.bundle.modelMgr
+	a.mu.Unlock()
+	if modelMgr != nil && modelMgr.Check().DiarizationReady() {
 		if err := session.RunDiarizeWithRetry(sess.ID, nil); err != nil {
 			fmt.Printf("Warning: diarization failed (session saved without refinement): %v\n", err)
 		}
@@ -844,7 +863,13 @@ func (a *App) GetGPUInfo() *gpu.Info {
 // GetModelStatus returns the model download status.
 func (a *App) GetModelStatus() *models.Status {
 	a.fixSignals()
-	return a.bundle.modelMgr.Check()
+	a.mu.Lock()
+	mgr := a.bundle.modelMgr
+	a.mu.Unlock()
+	if mgr == nil {
+		return &models.Status{}
+	}
+	return mgr.Check()
 }
 
 // IsRecording returns whether a session is currently recording.
@@ -869,10 +894,13 @@ func (a *App) GetAvailableLanguages() []string {
 // GetDefaultLanguage returns the default language code.
 func (a *App) GetDefaultLanguage() string {
 	a.fixSignals()
-	if a.bundle.engines == nil {
+	a.mu.Lock()
+	engines := a.bundle.engines
+	a.mu.Unlock()
+	if engines == nil {
 		return "en"
 	}
-	return a.bundle.engines.DefaultLang()
+	return engines.DefaultLang()
 }
 
 // RetranscribeSession re-transcribes a saved session's audio with a different language.
@@ -883,7 +911,7 @@ func (a *App) RetranscribeSession(id, lang string) error {
 		return fmt.Errorf("session store not initialized")
 	}
 	a.mu.Lock()
-	bundle, release, err := a.leaseEnginesLocked()
+	bundle, release, err := a.leaseEnginesLocked("re-transcription")
 	a.mu.Unlock()
 	if err != nil {
 		return err
@@ -966,7 +994,7 @@ var errApplyingSettings = fmt.Errorf("settings are being applied; try again in a
 // in use until release is called; reloadEngines won't swap the bundle
 // while any lease is out. release is safe to call more than once. Caller
 // must hold a.mu.
-func (a *App) leaseEnginesLocked() (bundle engineBundle, release func(), err error) {
+func (a *App) leaseEnginesLocked(what string) (bundle engineBundle, release func(), err error) {
 	if a.reconfiguring {
 		return engineBundle{}, nil, errApplyingSettings
 	}
@@ -974,12 +1002,20 @@ func (a *App) leaseEnginesLocked() (bundle engineBundle, release func(), err err
 		return engineBundle{}, nil, fmt.Errorf("transcription engine not initialized (models may not be downloaded; see Tools)")
 	}
 	a.engineLeases++
+	fmt.Printf("engines: leased for %s (%d in use)\n", what, a.engineLeases)
 	var once sync.Once
 	return a.bundle, func() {
 		once.Do(func() {
 			a.mu.Lock()
-			a.engineLeases--
+			a.releaseLeaseLocked(what)
 			a.mu.Unlock()
 		})
 	}, nil
+}
+
+// releaseLeaseLocked gives back one engine lease. Caller must hold a.mu;
+// normally reached through the release func from leaseEnginesLocked.
+func (a *App) releaseLeaseLocked(what string) {
+	a.engineLeases--
+	fmt.Printf("engines: released from %s (%d in use)\n", what, a.engineLeases)
 }
