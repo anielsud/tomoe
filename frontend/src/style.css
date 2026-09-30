@@ -1017,3 +1017,12 @@ body {
     width: 100%;
   }
 }
+
+.settings-notice {
+  font-size: 12px;
+  color: var(--speaker-other);
+  border: 1px solid var(--speaker-other);
+  border-radius: 6px;
+  padding: 8px 12px;
+  margin-bottom: 16px;
+}

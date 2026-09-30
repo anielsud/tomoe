@@ -6,6 +6,8 @@ import (
 	"reflect"
 	"slices"
 
+	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
+
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
 )
@@ -117,6 +119,12 @@ func (a *App) ApplySettings(cfg config.Config) (*ApplyResult, error) {
 		result.Applied = append(result.Applied, "Tray menu")
 	}
 	result.Later = plan.later
+	if next.Transcription.HotwordsFile != "" && next.Transcription.DecodingMethod != "modified_beam_search" {
+		result.Warnings = append(result.Warnings, "Hotwords are only used with beam search decoding")
+	}
+	// The toolbar's language picker (and anything else showing config)
+	// reloads on this.
+	wailsRuntime.EventsEmit(a.ctx, "settings:applied", nil)
 	return result, nil
 }
 
@@ -205,9 +213,6 @@ func validateSettings(c *config.Config) error {
 	if t.HotwordsFile != "" {
 		if _, err := os.Stat(t.HotwordsFile); err != nil {
 			return fmt.Errorf("hotwords file %q: %w", t.HotwordsFile, err)
-		}
-		if t.DecodingMethod != "modified_beam_search" {
-			return fmt.Errorf("hotwords only work with the modified_beam_search decoding method")
 		}
 	}
 

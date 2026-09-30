@@ -58,13 +58,24 @@ export default function SettingsPanel() {
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<ApplyResult | null>(null);
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   async function load() {
     try {
       const app = window.go.backend.App;
       const cfg = (await app.GetConfig()) as Config;
       setSaved(clone(cfg));
-      setDraft(clone(cfg));
+      const d = clone(cfg);
+      if (d.Multilingual.DefaultLang !== 'en') {
+        // The default language always runs on the English model, so a
+        // non-English default never worked; pick languages per recording.
+        d.Multilingual.DefaultLang = 'en';
+        if (!(d.Multilingual.Languages ?? []).includes('en')) {
+          d.Multilingual.Languages = ['en', ...(d.Multilingual.Languages ?? [])];
+        }
+        setNotice(`Your default language was "${cfg.Multilingual.DefaultLang}". It's been switched to English here, because the default language always uses the English model; choose other languages per recording from the toolbar or tray. Apply to save.`);
+      }
+      setDraft(d);
       const m = await app.SystemAudioMode();
       setMode(m);
       setInputs(((await app.ListAudioDevices()) as DeviceInfo[]).filter(d => d.DeviceType === 0));
@@ -210,6 +221,7 @@ export default function SettingsPanel() {
         <h2>Settings</h2>
       </div>
       <div className="settings-panel settings-scroll">
+        {notice && <p className="settings-notice">{notice}</p>}
         <Group title="Hotkeys" applies="now">
           <Row label="Dictation" hint="e.g. Super+Shift+S">{text('Hotkey', 'Binding')}</Row>
           <Row label="Meeting recording" hint="e.g. Super+Shift+X">{text('Hotkey', 'MeetingBinding')}</Row>

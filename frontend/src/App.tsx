@@ -58,6 +58,12 @@ function App() {
     return () => cancel();
   }, []);
 
+  // Settings can change the languages on offer (see SettingsPanel).
+  useEffect(() => {
+    if (initializing) return;
+    return EventsOn('settings:applied', () => loadLanguages());
+  }, [initializing]);
+
   useEffect(() => {
     if (initializing) return; // nothing bound below is ready to call yet
 
@@ -147,8 +153,10 @@ function App() {
         const langs = await window.go.backend.App.GetAvailableLanguages();
         if (langs && langs.length > 0) {
           setLanguages(langs);
+          // Keep the user's pick (e.g. BN) across reloads; only fall back
+          // to the default when it's no longer offered.
           const defLang = await window.go.backend.App.GetDefaultLanguage();
-          if (defLang) setSelectedLang(defLang);
+          setSelectedLang(cur => (langs.includes(cur) ? cur : defLang || langs[0]));
           return;
         }
       } catch {

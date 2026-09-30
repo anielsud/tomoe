@@ -89,19 +89,17 @@ func TestValidateSettings_Rejects(t *testing.T) {
 	}
 }
 
-func TestValidateSettings_HotwordsNeedBeamSearch(t *testing.T) {
+func TestValidateSettings_HotwordsWithGreedyAllowed(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hotwords.txt")
 	if err := os.WriteFile(path, []byte("Tomoe\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// An existing config may pair hotwords with greedy search (sherpa-onnx
+	// just doesn't use them); that must not block applying other changes.
 	cfg := config.DefaultConfig()
 	cfg.Transcription.HotwordsFile = path
-	if err := validateSettings(cfg); err == nil || !strings.Contains(err.Error(), "modified_beam_search") {
-		t.Errorf("greedy_search with hotwords: got %v", err)
-	}
-	cfg.Transcription.DecodingMethod = "modified_beam_search"
 	if err := validateSettings(cfg); err != nil {
-		t.Errorf("beam search with hotwords rejected: %v", err)
+		t.Errorf("greedy_search with hotwords rejected: %v", err)
 	}
 }
 
