@@ -75,6 +75,7 @@ tomoe model download --multilingual   # Download base + Bengali models
 tomoe model status                    # Show model info + integrity check
 tomoe session list                    # List all saved sessions
 tomoe session re-transcribe <id>      # Re-process a session's audio (re-identify speakers)
+tomoe session replay <id>             # Compare the pre-port pipeline with your config on a session's audio
 tomoe devices                         # List audio input devices
 tomoe config                          # Print current config
 ```
@@ -122,12 +123,43 @@ silence_timeout = 5.0
 [meeting]
 default_sources = 'both'
 monitor_device = ''       # '' = default monitor source, 'none' = mic only
-speaker_threshold = 0.65
+speaker_threshold = 0.55           # cosine similarity for a confident speaker match
 max_speech_duration = 30.0
 min_silence_duration = 0.5
 auto_save = true
 auto_detect = true
-sticky_speaker_margin = 0.15  # keep a near-miss with the speaker heard <3s ago; 0 = off
+sticky_grace_window = 3.0          # seconds a near-miss can still join the last speaker
+sticky_threshold_margin = 0.15     # how near a near-miss must be; 0 = sticky rule off
+min_assign_duration = 0.7          # segments shorter than this (s) join the last speaker; 0 = off
+short_segment_grace_window = 15.0  # seconds after the last speaker that rule applies
+```
+
+Settings missing from your `config.toml` take the defaults above, so an existing
+config picks up new settings automatically when you upgrade. The `[meeting]`
+speaker settings are reloaded while Tomoe runs; no restart needed.
+
+### Restoring the pre-macOS-port pipeline
+
+The macOS port turned on two-pass transcription and two speaker-clustering rules
+(sticky speaker, short segments), and lowered the default `speaker_threshold`
+from 0.65 to 0.55. To get the previous behavior back exactly:
+
+```toml
+[transcription]
+two_pass = false
+
+[meeting]
+speaker_threshold = 0.65
+sticky_threshold_margin = 0
+min_assign_duration = 0
+```
+
+To see what these settings change on your own recordings, replay a saved session.
+It runs the audio through the pipeline once as it behaved before and once with
+your current config, then writes both transcripts for diffing:
+
+```bash
+tomoe session replay <session-id>
 ```
 
 ## Architecture

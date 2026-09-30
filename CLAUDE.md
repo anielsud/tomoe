@@ -175,6 +175,7 @@ tomoe model download      # Force re-download model
 tomoe model status        # Show model info + integrity check
 tomoe devices             # List audio input devices
 tomoe config              # Print current config
+tomoe session replay <id> # Replay a session's audio: pre-port pipeline vs current config
 ```
 
 ## Coding Conventions
