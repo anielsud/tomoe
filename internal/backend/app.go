@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/sosuke-ai/tomoe-pc/internal/appinit"
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/audiosources"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
@@ -90,6 +91,15 @@ type App struct {
 	// saveQueue.
 	shuttingDown bool
 	stopWG       sync.WaitGroup
+
+	// initDone/initErr (guarded by mu) record runInit's outcome for
+	// InitStatus -- the frontend's fallback for the case where runInit
+	// finishes (the common case resolves in milliseconds: everything's
+	// already downloaded) before it's even mounted and subscribed to
+	// the one-shot init:done/init:failed events, which it would
+	// otherwise miss entirely and stay stuck on the init screen forever.
+	initDone bool
+	initErr  string
 }
 
 // saveRequest is a unit of work for the background save worker.
@@ -110,7 +120,22 @@ func NewApp() *App {
 	}
 }
 
-// Startup is called by Wails when the application starts.
+// InitProgressEvent is "init:progress"'s payload: download progress for
+// one step of first-run setup (see appinit.EnsureInitialized). Total is
+// 0 if not yet known (the response hasn't arrived) or the step doesn't
+// involve a download at all.
+type InitProgressEvent struct {
+	Step       string `json:"step"`
+	Downloaded int64  `json:"downloaded"`
+	Total      int64  `json:"total"`
+}
+
+// Startup is called by Wails when the application starts. Runs first-run
+// setup (see runInit) in the background so the window appears
+// immediately: the frontend shows an init screen driven by
+// init:progress/init:done/init:failed events until it completes, rather
+// than this call blocking Wails' own startup on what can be a ~690MB
+// download.
 func (a *App) Startup(ctx context.Context) {
 	a.ctx = ctx
 
@@ -119,29 +144,81 @@ func (a *App) Startup(ctx context.Context) {
 	a.saveWG.Add(1)
 	go a.saveWorker()
 
-	// Load or create config
-	var cfg *config.Config
-	if config.Exists() {
-		var err error
-		cfg, err = config.Load(config.Path())
-		if err != nil {
-			cfg = config.DefaultConfig()
-		}
-	} else {
-		cfg = config.DefaultConfig()
-	}
-	a.cfg = cfg
-
-	// Initialize session store first — it has no heavy dependencies
+	// Has no heavy/network dependencies, so it's ready immediately
+	// rather than waiting on runInit.
 	a.store = session.NewStore(config.SessionDir())
 
-	// Initialize model manager
-	a.modelMgr = models.NewManager(cfg.Transcription.ModelPath)
-	status := a.modelMgr.Check()
+	go a.runInit(ctx)
+}
+
+// runInit runs the same first-run setup flow the CLI's `tomoe`/`tomoe
+// init` does (see appinit.EnsureInitialized): generate config.toml if
+// one doesn't exist yet, then download any model that isn't already
+// present. Previously this package silently skipped straight to "no
+// engines" if models weren't downloaded, with no way to fix that short
+// of running the CLI -- this makes the GUI self-sufficient.
+func (a *App) runInit(ctx context.Context) {
+	result, err := appinit.EnsureInitialized(func(step string, downloaded, total int64) {
+		wailsRuntime.EventsEmit(a.ctx, "init:progress", InitProgressEvent{Step: step, Downloaded: downloaded, Total: total})
+	})
+	if err != nil {
+		a.mu.Lock()
+		a.initErr = err.Error()
+		a.mu.Unlock()
+		wailsRuntime.EventsEmit(a.ctx, "init:failed", err.Error())
+		return
+	}
+
+	a.mu.Lock()
+	a.cfg = result.Config
+	a.mu.Unlock()
+	a.setupEngines(ctx, result.Config, result.ModelStatus)
+
+	a.mu.Lock()
+	a.initDone = true
+	a.mu.Unlock()
+	wailsRuntime.EventsEmit(a.ctx, "init:done", nil)
+}
+
+// InitStatusView is InitStatus's return value.
+type InitStatusView struct {
+	Done  bool   `json:"done"`
+	Error string `json:"error,omitempty"`
+}
+
+// InitStatus reports runInit's current outcome. The frontend calls this
+// right after subscribing to init:progress/init:done/init:failed, in
+// case runInit already finished (the common case: everything already
+// downloaded, so it resolves in milliseconds) before the frontend even
+// mounted -- those events fire once and don't replay, so a late
+// subscriber would otherwise never learn it's done and stay stuck on
+// the init screen forever.
+func (a *App) InitStatus() InitStatusView {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return InitStatusView{Done: a.initDone, Error: a.initErr}
+}
+
+// setupEngines builds everything that depends on cfg/status: the
+// transcription engine(s), the optional realtime streaming and speaker
+// embedding/clustering pipelines, the meeting auto-detector, tray and
+// hotkeys. Split out of Startup so it can run once runInit's
+// (network-dependent) setup has actually completed.
+//
+// Everything is built into local variables first and only assigned onto
+// the App struct under a.mu right before StartTrayAsync/registerHotkeys
+// -- StartSession and others read a.engines/a.modelMgr/a.embedder/
+// a.tracker under that same lock, and runInit now runs this from its own
+// goroutine rather than Startup's, so (unlike when this all ran inline
+// in Startup, before anything else could call in) these writes are no
+// longer implicitly ordered before a bound method could observe them.
+func (a *App) setupEngines(ctx context.Context, cfg *config.Config, status *models.Status) {
+	modelMgr := models.NewManager(cfg.Transcription.ModelPath)
 
 	// Create transcription engine if models are ready
+	var engines *transcribe.EngineSet
 	if status.Ready() {
-		engines, err := transcribe.NewEngineSetFromConfig(transcribe.Config{
+		built, err := transcribe.NewEngineSetFromConfig(transcribe.Config{
 			EncoderPath:    status.EncoderPath,
 			DecoderPath:    status.DecoderPath,
 			JoinerPath:     status.JoinerPath,
@@ -154,7 +231,7 @@ func (a *App) Startup(ctx context.Context) {
 			HotwordsScore:  cfg.Transcription.HotwordsScore,
 		}, status, &cfg.Multilingual)
 		if err == nil {
-			a.engines = engines
+			engines = built
 		}
 	}
 
@@ -162,31 +239,35 @@ func (a *App) Startup(ctx context.Context) {
 	// model is available (see internal/live's two-pass pipeline). Not
 	// required for anything else to work — sessions just fall back to
 	// single-pass without it.
+	var streamingEngine transcribe.StreamingEngine
 	if status.EnglishStreamingReady && cfg.Transcription.TwoPass {
-		streamingEngine, err := transcribe.NewStreamingEngine(transcribe.StreamingConfig{
+		built, err := transcribe.NewStreamingEngine(transcribe.StreamingConfig{
 			EncoderPath: status.EnglishStreamingEncoderPath,
 			DecoderPath: status.EnglishStreamingDecoderPath,
 			JoinerPath:  status.EnglishStreamingJoinerPath,
 			TokensPath:  status.EnglishStreamingTokensPath,
 		})
 		if err == nil {
-			a.streamingEngine = streamingEngine
+			streamingEngine = built
 		} else {
 			fmt.Printf("Warning: failed to load English streaming model: %v (live transcription will use single-pass mode)\n", err)
 		}
 	}
 
 	// Create speaker embedder if available
+	var embedder *speaker.Embedder
+	var tracker *speaker.Tracker
+	var configWatchStop func()
 	if status.SpeakerEmbeddingReady {
-		embedder, err := speaker.NewEmbedder(status.SpeakerEmbeddingPath)
+		built, err := speaker.NewEmbedder(status.SpeakerEmbeddingPath)
 		if err == nil {
-			a.embedder = embedder
+			embedder = built
 			threshold := speaker.DefaultThreshold
 			if cfg.Meeting.SpeakerThreshold > 0 {
 				threshold = cfg.Meeting.SpeakerThreshold
 			}
-			a.tracker = speaker.NewTracker(threshold)
-			a.tracker.SetTuning(speaker.TuningFromSeconds(
+			tracker = speaker.NewTracker(threshold)
+			tracker.SetTuning(speaker.TuningFromSeconds(
 				cfg.Meeting.SpeakerThreshold,
 				cfg.Meeting.StickyGraceWindow,
 				cfg.Meeting.StickyThresholdMargin,
@@ -196,28 +277,42 @@ func (a *App) Startup(ctx context.Context) {
 
 			// Watch config.toml so clustering tuning can be retuned
 			// live -- no rebuild, no relaunch. See MeetingConfig's doc
-			// comment for why this exists.
-			a.configWatchStop = config.Watch(config.Path(), 2*time.Second, func(newCfg *config.Config) {
-				a.tracker.SetTuning(speaker.TuningFromSeconds(
+			// comment for why this exists. tracker has its own internal
+			// lock (see speaker.Tracker), so this closure needs no
+			// synchronization against a.mu of its own.
+			configWatchStop = config.Watch(config.Path(), 2*time.Second, func(newCfg *config.Config) {
+				tracker.SetTuning(speaker.TuningFromSeconds(
 					newCfg.Meeting.SpeakerThreshold,
 					newCfg.Meeting.StickyGraceWindow,
 					newCfg.Meeting.StickyThresholdMargin,
 					newCfg.Meeting.MinAssignDuration,
 					newCfg.Meeting.ShortSegmentGraceWindow,
 				))
-				fmt.Printf("config: reloaded speaker clustering tuning: %+v\n", a.tracker.Tuning())
+				fmt.Printf("config: reloaded speaker clustering tuning: %+v\n", tracker.Tuning())
 			})
 		}
 	}
 
 	// Start meeting auto-detector if enabled
+	var detector *meeting.Detector
 	if cfg.Meeting.AutoDetect {
-		a.detector = meeting.NewDetector()
-		if err := a.detector.Start(ctx); err != nil {
+		built := meeting.NewDetector()
+		if err := built.Start(ctx); err != nil {
 			fmt.Printf("Warning: meeting auto-detect unavailable: %v\n", err)
-			a.detector = nil
+		} else {
+			detector = built
 		}
 	}
+
+	a.mu.Lock()
+	a.modelMgr = modelMgr
+	a.engines = engines
+	a.streamingEngine = streamingEngine
+	a.embedder = embedder
+	a.tracker = tracker
+	a.configWatchStop = configWatchStop
+	a.detector = detector
+	a.mu.Unlock()
 
 	// Start system tray (after engines are loaded so language menus are correct)
 	StartTrayAsync(a)

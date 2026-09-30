@@ -9,9 +9,22 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
-
-	"github.com/schollz/progressbar/v3"
 )
+
+// ProgressFunc reports progress for one download step (a human-readable
+// label, e.g. "Parakeet TDT 0.6B v3 INT8"): downloaded/total are bytes
+// for that step's transfer so far (total is 0 if the server didn't send
+// Content-Length). Called from whatever goroutine is doing the
+// download; the CLI drives a terminal progress bar from it, the GUI
+// forwards it to the frontend as an event. May be nil.
+type ProgressFunc func(step string, downloaded, total int64)
+
+// reportProgress calls onProgress if it isn't nil.
+func reportProgress(onProgress ProgressFunc, step string, downloaded, total int64) {
+	if onProgress != nil {
+		onProgress(step, downloaded, total)
+	}
+}
 
 // Status describes the state of downloaded models.
 type Status struct {
@@ -178,9 +191,11 @@ func (s *Status) String() string {
 		s.ModelDir, parakeet, vad, speaker, segmentation, diarization, langID, bengali, multilingual, englishStreaming)
 }
 
-// Download downloads and extracts all required models.
-// If force is true, existing models are re-downloaded.
-func (m *Manager) Download(force bool) error {
+// Download downloads and extracts all required models. If force is
+// true, existing models are re-downloaded. onProgress (may be nil) is
+// called for each step actually downloaded; a step already present is
+// skipped without a call.
+func (m *Manager) Download(force bool, onProgress ProgressFunc) error {
 	if err := os.MkdirAll(m.modelDir, 0o755); err != nil {
 		return fmt.Errorf("creating model directory: %w", err)
 	}
@@ -196,7 +211,7 @@ func (m *Manager) Download(force bool) error {
 			_ = os.RemoveAll(parakeetDir)
 		}
 		fmt.Println("Downloading Parakeet TDT 0.6B v3 INT8 model...")
-		if err := m.downloadAndExtractArchive(ParakeetArchiveURL); err != nil {
+		if err := m.downloadAndExtractArchive(ParakeetArchiveURL, "Parakeet TDT 0.6B v3 INT8", onProgress); err != nil {
 			return fmt.Errorf("downloading Parakeet model: %w", err)
 		}
 		fmt.Println("Parakeet TDT model downloaded and extracted.")
@@ -208,7 +223,7 @@ func (m *Manager) Download(force bool) error {
 	if force || !status.VADReady {
 		fmt.Println("Downloading Silero VAD model...")
 		vadPath := filepath.Join(m.modelDir, SileroVADFile)
-		if err := downloadFile(SileroVADURL, vadPath); err != nil {
+		if err := downloadFile(SileroVADURL, vadPath, "Silero VAD", onProgress); err != nil {
 			return fmt.Errorf("downloading Silero VAD: %w", err)
 		}
 		fmt.Println("Silero VAD model downloaded.")
@@ -220,7 +235,7 @@ func (m *Manager) Download(force bool) error {
 	if force || !status.SpeakerEmbeddingReady {
 		fmt.Println("Downloading speaker embedding model...")
 		speakerPath := filepath.Join(m.modelDir, SpeakerEmbeddingFile)
-		if err := downloadFile(SpeakerEmbeddingURL, speakerPath); err != nil {
+		if err := downloadFile(SpeakerEmbeddingURL, speakerPath, "Speaker Embedding", onProgress); err != nil {
 			return fmt.Errorf("downloading speaker embedding model: %w", err)
 		}
 		fmt.Println("Speaker embedding model downloaded.")
@@ -231,7 +246,7 @@ func (m *Manager) Download(force bool) error {
 	// Download Pyannote speaker segmentation model (for diarization)
 	if force || !status.SpeakerSegmentationReady {
 		fmt.Println("Downloading Pyannote speaker segmentation model...")
-		if err := m.downloadAndExtractArchive(PyannoteSegmentationURL); err != nil {
+		if err := m.downloadAndExtractArchive(PyannoteSegmentationURL, "Pyannote Speaker Segmentation", onProgress); err != nil {
 			return fmt.Errorf("downloading Pyannote segmentation model: %w", err)
 		}
 		fmt.Println("Pyannote segmentation model downloaded.")
@@ -244,7 +259,7 @@ func (m *Manager) Download(force bool) error {
 	// the live pipeline already falls back gracefully without it.
 	if force || !status.EnglishStreamingReady {
 		fmt.Println("Downloading English streaming Zipformer model (realtime transcription pass)...")
-		if err := m.downloadAndExtractArchive(EnglishStreamingArchiveURL); err != nil {
+		if err := m.downloadAndExtractArchive(EnglishStreamingArchiveURL, "English Streaming Zipformer", onProgress); err != nil {
 			fmt.Printf("Warning: failed to download English streaming model: %v (live transcription will fall back to non-realtime mode)\n", err)
 		} else {
 			pruneEnglishStreaming(filepath.Join(m.modelDir, EnglishStreamingSubdir))
@@ -265,7 +280,7 @@ func (m *Manager) Download(force bool) error {
 
 // DownloadSpeakerModel downloads the speaker embedding model.
 // If force is true, re-downloads even if already present.
-func (m *Manager) DownloadSpeakerModel(force bool) error {
+func (m *Manager) DownloadSpeakerModel(force bool, onProgress ProgressFunc) error {
 	if err := os.MkdirAll(m.modelDir, 0o755); err != nil {
 		return fmt.Errorf("creating model directory: %w", err)
 	}
@@ -278,7 +293,7 @@ func (m *Manager) DownloadSpeakerModel(force bool) error {
 
 	fmt.Println("Downloading speaker embedding model...")
 	speakerPath := filepath.Join(m.modelDir, SpeakerEmbeddingFile)
-	if err := downloadFile(SpeakerEmbeddingURL, speakerPath); err != nil {
+	if err := downloadFile(SpeakerEmbeddingURL, speakerPath, "Speaker Embedding", onProgress); err != nil {
 		return fmt.Errorf("downloading speaker embedding model: %w", err)
 	}
 	fmt.Println("Speaker embedding model downloaded.")
@@ -288,7 +303,7 @@ func (m *Manager) DownloadSpeakerModel(force bool) error {
 // DownloadMultilingual downloads Bengali model for multilingual support.
 // Whisper tiny (lang-id) is no longer downloaded — language selection is manual.
 // If force is true, re-downloads even if already present.
-func (m *Manager) DownloadMultilingual(force bool) error {
+func (m *Manager) DownloadMultilingual(force bool, onProgress ProgressFunc) error {
 	if err := os.MkdirAll(m.modelDir, 0o755); err != nil {
 		return fmt.Errorf("creating model directory: %w", err)
 	}
@@ -298,7 +313,7 @@ func (m *Manager) DownloadMultilingual(force bool) error {
 	// Download Bengali Zipformer transducer
 	if force || !status.BengaliReady {
 		fmt.Println("Downloading Bengali Zipformer model...")
-		if err := m.downloadAndExtractArchive(BengaliArchiveURL); err != nil {
+		if err := m.downloadAndExtractArchive(BengaliArchiveURL, "Bengali Zipformer", onProgress); err != nil {
 			return fmt.Errorf("downloading Bengali model: %w", err)
 		}
 		fmt.Println("Bengali Zipformer model downloaded and extracted.")
@@ -315,8 +330,9 @@ func (m *Manager) DownloadMultilingual(force bool) error {
 	return nil
 }
 
-// downloadAndExtractArchive downloads a tar.bz2 archive and extracts it to the model directory.
-func (m *Manager) downloadAndExtractArchive(url string) error {
+// downloadAndExtractArchive downloads a tar.bz2 archive and extracts it
+// to the model directory, reporting step's progress via onProgress.
+func (m *Manager) downloadAndExtractArchive(url, step string, onProgress ProgressFunc) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		return fmt.Errorf("HTTP GET: %w", err)
@@ -327,11 +343,23 @@ func (m *Manager) downloadAndExtractArchive(url string) error {
 		return fmt.Errorf("HTTP %d: %s", resp.StatusCode, resp.Status)
 	}
 
-	bar := progressbar.DefaultBytes(resp.ContentLength, "downloading")
-	reader := io.TeeReader(resp.Body, bar)
+	total := resp.ContentLength
+	var downloaded int64
+	reader := io.TeeReader(resp.Body, writerFunc(func(p []byte) (int, error) {
+		downloaded += int64(len(p))
+		reportProgress(onProgress, step, downloaded, total)
+		return len(p), nil
+	}))
 
 	return extractTarBz2(reader, m.modelDir)
 }
+
+// writerFunc adapts a func(p []byte) (int, error) to io.Writer, so
+// download progress can be observed via io.TeeReader/io.MultiWriter
+// without a dedicated counting type.
+type writerFunc func(p []byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
 
 // pruneEnglishStreaming deletes the model weights the streaming archive
 // ships but the realtime pass never loads: its fp32 .onnx files alone are
@@ -402,8 +430,9 @@ func extractTarBz2(r io.Reader, destDir string) error {
 	return nil
 }
 
-// downloadFile downloads a URL to a local file with a progress bar.
-func downloadFile(url, destPath string) error {
+// downloadFile downloads a URL to a local file, reporting step's
+// progress via onProgress.
+func downloadFile(url, destPath, step string, onProgress ProgressFunc) error {
 	resp, err := http.Get(url)
 	if err != nil {
 		return fmt.Errorf("HTTP GET: %w", err)
@@ -424,8 +453,14 @@ func downloadFile(url, destPath string) error {
 	}
 	defer func() { _ = f.Close() }()
 
-	bar := progressbar.DefaultBytes(resp.ContentLength, "downloading")
-	if _, err := io.Copy(io.MultiWriter(f, bar), resp.Body); err != nil {
+	total := resp.ContentLength
+	var downloaded int64
+	progress := writerFunc(func(p []byte) (int, error) {
+		downloaded += int64(len(p))
+		reportProgress(onProgress, step, downloaded, total)
+		return len(p), nil
+	})
+	if _, err := io.Copy(io.MultiWriter(f, progress), resp.Body); err != nil {
 		return fmt.Errorf("writing file: %w", err)
 	}
 
