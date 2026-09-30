@@ -49,7 +49,12 @@ func buildTrayMenu(app *App) {
 	tm.mQuit = systray.AddMenuItem("Quit", "Quit Tomoe")
 
 	go func() {
-		<-tm.mQuit.ClickedCh
+		// systray closes ClickedCh when the item is removed (ResetMenu,
+		// see rebuildTrayMenu): that's not a click, just the end of this
+		// menu.
+		if _, ok := <-tm.mQuit.ClickedCh; !ok {
+			return
+		}
 		if tm.app.recording {
 			_, _ = tm.app.StopSession()
 		}
@@ -68,7 +73,10 @@ func (tm *trayManager) initSingleLang(lang string) {
 	go func() {
 		for {
 			select {
-			case <-tm.mDictation.ClickedCh:
+			case _, ok := <-tm.mDictation.ClickedCh:
+				if !ok {
+					return // item removed by ResetMenu, not clicked
+				}
 				if tm.app.ctx == nil {
 					continue
 				}
@@ -76,7 +84,10 @@ func (tm *trayManager) initSingleLang(lang string) {
 				case tm.app.trayDictCh <- lang:
 				default:
 				}
-			case <-tm.mMeeting.ClickedCh:
+			case _, ok := <-tm.mMeeting.ClickedCh:
+				if !ok {
+					return // item removed by ResetMenu, not clicked
+				}
 				if tm.app.ctx == nil {
 					continue
 				}
@@ -207,8 +218,10 @@ func (tm *trayManager) setMeetingRecording() {
 }
 
 // rebuildTrayMenu replaces the tray menu, for when settings change the
-// languages it offers. The old items' click goroutines are left blocked on
-// channels that no longer receive clicks.
+// languages it offers. ResetMenu closes every old item's ClickedCh, which
+// ends their click goroutines; each one must check for that rather than
+// treat a closed channel as a click (which once toggled a meeting on and
+// off in a tight loop).
 func (a *App) rebuildTrayMenu() {
 	if a.tray == nil {
 		return // tray never started
