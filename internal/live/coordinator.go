@@ -67,9 +67,9 @@ type Stats struct {
 
 // Coordinator manages one or two live transcription pipelines (mic + monitor).
 type Coordinator struct {
-	cfg          Config
-	segmentCh    chan session.Segment
-	activityCh   chan struct{} // signalled when VAD detects ongoing speech
+	cfg        Config
+	segmentCh  chan session.Segment
+	activityCh chan struct{} // signalled when VAD detects ongoing speech
 	// hintNeededCh is signalled when a monitor-source speaker with no
 	// video hint yet is heard. The bool is a priority flag: true means
 	// "bypass videohint.Poll's normal trigger debounce" (used for a
