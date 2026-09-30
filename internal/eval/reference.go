@@ -29,6 +29,9 @@ type Turn struct {
 type Reference struct {
 	Title string
 	Turns []Turn
+	// Warnings are lines that probably didn't parse as intended, for the
+	// person who edited the transcript to check.
+	Warnings []string
 }
 
 // Speakers returns the distinct speakers in first-appearance order.
@@ -45,18 +48,46 @@ func (r *Reference) Speakers() []string {
 }
 
 // turnHeader matches a Teams transcript turn header: the speaker name, two
-// or more spaces, then m:ss or h:mm:ss.
-var turnHeader = regexp.MustCompile(`^(\S.*?)\s{2,}(\d+(?::\d{2}){1,2})\s*$`)
+// or more spaces, then m:ss or h:mm:ss. looseHeader allows a single space,
+// as hand edits often have; it's only trusted for a name some strict header
+// already uses, so a text line like "we meet at 3:00" isn't mistaken for
+// a speaker.
+var (
+	turnHeader  = regexp.MustCompile(`^(\S.*?)\s{2,}(\d+(?::\d{2}){1,2})\s*$`)
+	looseHeader = regexp.MustCompile(`^(\S.*?)\s+(\d+(?::\d{2}){1,2})\s*$`)
+)
 
 // ParseTeamsTranscript parses a Microsoft Teams transcript exported as text:
 // a few header lines (title, host, date, length), then blocks of
 // "Speaker Name  m:ss" followed by the turn's text. mediaEnd (seconds) ends
 // the last turn; pass 0 to end it at its own start plus a rough estimate
 // from its word count.
+//
+// Turns that share a start time are simultaneous speech: a reviewer marks
+// an interjection by splitting the main speaker's turn and giving both
+// parts the same time. See setEnds for how their ends are set.
 func ParseTeamsTranscript(r io.Reader, mediaEnd float64) (*Reference, error) {
-	ref := &Reference{}
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 1024*1024), 16*1024*1024)
+	var lines []string
+	for sc.Scan() {
+		lines = append(lines, strings.TrimRight(sc.Text(), "\r"))
+	}
+	if err := sc.Err(); err != nil {
+		return nil, err
+	}
+	if len(lines) == 0 {
+		return nil, fmt.Errorf("empty transcript")
+	}
+
+	known := map[string]bool{}
+	for _, line := range lines[1:] {
+		if m := turnHeader.FindStringSubmatch(line); m != nil {
+			known[strings.TrimSpace(m[1])] = true
+		}
+	}
+
+	ref := &Reference{Title: strings.TrimSpace(strings.TrimPrefix(lines[0], "\ufeff"))}
 	var cur *Turn
 	var text []string
 	flush := func() {
@@ -66,15 +97,19 @@ func ParseTeamsTranscript(r io.Reader, mediaEnd float64) (*Reference, error) {
 		}
 		cur, text = nil, nil
 	}
-	lineNo := 0
-	for sc.Scan() {
-		lineNo++
-		line := strings.TrimRight(sc.Text(), "\r")
-		if lineNo == 1 {
-			ref.Title = strings.TrimSpace(strings.TrimPrefix(line, "\ufeff"))
-			continue
+	for n, line := range lines[1:] {
+		lineNo := n + 2
+		m := turnHeader.FindStringSubmatch(line)
+		if m == nil {
+			if lm := looseHeader.FindStringSubmatch(line); lm != nil {
+				if known[strings.TrimSpace(lm[1])] {
+					m = lm
+				} else if cur != nil {
+					ref.Warnings = append(ref.Warnings, fmt.Sprintf("line %d: %q looks like a speaker line but %q isn't a known speaker, so it's read as text", lineNo, line, strings.TrimSpace(lm[1])))
+				}
+			}
 		}
-		if m := turnHeader.FindStringSubmatch(line); m != nil {
+		if m != nil {
 			start, err := parseClock(m[2])
 			if err != nil {
 				return nil, fmt.Errorf("line %d: %w", lineNo, err)
@@ -87,25 +122,73 @@ func ParseTeamsTranscript(r io.Reader, mediaEnd float64) (*Reference, error) {
 			text = append(text, strings.TrimSpace(line))
 		}
 	}
-	if err := sc.Err(); err != nil {
-		return nil, err
-	}
 	flush()
 	if len(ref.Turns) == 0 {
 		return nil, fmt.Errorf("no speaker turns found (expected lines like \"Name  1:23\")")
 	}
-	for i := range ref.Turns {
-		switch {
-		case i+1 < len(ref.Turns):
-			ref.Turns[i].End = ref.Turns[i+1].Start
-		case mediaEnd > ref.Turns[i].Start:
-			ref.Turns[i].End = mediaEnd
-		default:
-			// ~2.5 words per second of speech, plus a little slack.
-			ref.Turns[i].End = ref.Turns[i].Start + float64(len(Words(ref.Turns[i].Text)))/2.5 + 1
+	for i := 1; i < len(ref.Turns); i++ {
+		if ref.Turns[i].Start < ref.Turns[i-1].Start {
+			ref.Warnings = append(ref.Warnings, fmt.Sprintf("turn %d (%s at %s) starts before the turn above it", i+1, ref.Turns[i].Speaker, clock(ref.Turns[i].Start)))
 		}
 	}
+	setEnds(ref.Turns, mediaEnd)
 	return ref, nil
+}
+
+// estimatedLength is how long a turn's words take to say: ~2.5 words per
+// second, plus a little slack.
+func estimatedLength(text string) float64 {
+	return float64(len(Words(text)))/2.5 + 1
+}
+
+// setEnds gives each turn an end: the next turn that starts later (or the
+// media end). Turns sharing a start time overlap: the longest one (most
+// words, the main speaker carrying on) runs to that next start, and the
+// others (interjections) end after their own estimated length, so an
+// interjection doesn't cover the rest of the other person's turn.
+func setEnds(turns []Turn, mediaEnd float64) {
+	for i := 0; i < len(turns); {
+		j := i
+		for j < len(turns) && turns[j].Start == turns[i].Start {
+			j++
+		}
+		next := mediaEnd
+		if j < len(turns) {
+			next = turns[j].Start
+		}
+		longest := i
+		for k := i; k < j; k++ {
+			if len(Words(turns[k].Text)) > len(Words(turns[longest].Text)) {
+				longest = k
+			}
+		}
+		for k := i; k < j; k++ {
+			end := next
+			if k != longest {
+				end = min(next, turns[k].Start+estimatedLength(turns[k].Text))
+			}
+			if end <= turns[k].Start { // last turn, with no media end given
+				end = turns[k].Start + estimatedLength(turns[k].Text)
+			}
+			turns[k].End = end
+		}
+		i = j
+	}
+}
+
+// Overlapping reports whether turn i shares its start time with another
+// turn: annotated simultaneous speech.
+func (r *Reference) Overlapping(i int) bool {
+	t := r.Turns[i]
+	return (i > 0 && r.Turns[i-1].Start == t.Start) || (i+1 < len(r.Turns) && r.Turns[i+1].Start == t.Start)
+}
+
+func clock(sec float64) string {
+	s := int(sec)
+	if s >= 3600 {
+		return fmt.Sprintf("%d:%02d:%02d", s/3600, s/60%60, s%60)
+	}
+	return fmt.Sprintf("%d:%02d", s/60, s%60)
 }
 
 // parseClock parses m:ss or h:mm:ss into seconds.

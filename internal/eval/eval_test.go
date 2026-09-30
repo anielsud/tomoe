@@ -296,3 +296,71 @@ func TestWords_TeamsAndParakeetFormattingAgree(t *testing.T) {
 		}
 	}
 }
+
+const reviewedTranscript = `Review
+Host: X
+
+Sathya Narayanan  10:56
+If I recall the first one was about decisions.
+
+Rupali Jain 11:08
+Oh there was the feedback one, yes
+
+Sathya Narayanan 11:08
+when we were originally doing decision scope to session scope is the change that we made and then more words here
+
+Rupali Jain  11:30
+Is this an indication?
+Stanley said we meet at 3:00
+Notaname 11:40
+`
+
+func TestParse_LooseHeadersOverlapsAndWarnings(t *testing.T) {
+	ref := mustParse(t, reviewedTranscript, 60*12)
+	if len(ref.Turns) != 4 {
+		t.Fatalf("turns = %d: %+v", len(ref.Turns), ref.Turns)
+	}
+	// The single-space headers for known speakers are turns, and the two
+	// 11:08 turns overlap: the interjection ends after its own estimated
+	// length, the main speaker runs to the next turn.
+	rup, sat := ref.Turns[1], ref.Turns[2]
+	if rup.Speaker != "Rupali Jain" || sat.Speaker != "Sathya Narayanan" || rup.Start != 668 || sat.Start != 668 {
+		t.Fatalf("overlap turns = %+v, %+v", rup, sat)
+	}
+	if sat.End != 690 || rup.End >= sat.End || rup.End <= rup.Start {
+		t.Errorf("ends: interjection %.1f, main %.1f", rup.End, sat.End)
+	}
+	if !ref.Overlapping(1) || !ref.Overlapping(2) || ref.Overlapping(0) {
+		t.Error("Overlapping() wrong")
+	}
+	// "we meet at 3:00" isn't a known speaker, so it stays text and warns;
+	// so does "Notaname 11:40".
+	if !strings.Contains(ref.Turns[3].Text, "we meet at 3:00") || len(ref.Warnings) != 2 {
+		t.Errorf("last turn %q, warnings %q", ref.Turns[3].Text, ref.Warnings)
+	}
+}
+
+func TestScoreSpeakers_OverlapEitherSpeakerCounts(t *testing.T) {
+	// B interjects over A for 2-4s.
+	ref := &Reference{Turns: []Turn{{"A", 0, 10, "a a a a a a a a a a a a a a a a a a a"}, {"B", 2, 4, "b"}}}
+	ref.Turns[0], ref.Turns[1] = Turn{"B", 2, 4, "b"}, Turn{"A", 2, 10, "a a a a"}
+	ref.Turns = append([]Turn{{"A", 0, 2, "a"}}, ref.Turns...)
+	// Hypothesis says A the whole time: still right during the overlap.
+	s := ScoreSpeakers(ref, []Labeled{{0, 10, "P1", ""}}, 0)
+	if s.Confusion != 0 {
+		t.Errorf("confusion = %.3f, want 0 (either speaker counts during overlap)", s.Confusion)
+	}
+}
+
+func TestScoreAnnotatedOverlaps(t *testing.T) {
+	ref := mustParse(t, reviewedTranscript, 60*12)
+	hyp := []Labeled{
+		{656, 668, "P1", "if i recall the first one was about decisions"},
+		{668, 670, "P2", "oh there was the feedback one yes"},
+		{668, 690, "P1", "when we were originally doing decision scope"},
+	}
+	s := ScoreAnnotatedOverlaps(ref, hyp, map[string]string{"P1": "Sathya Narayanan", "P2": "Rupali Jain"}, 3)
+	if s.Interjections != 1 || s.Found != 1 || s.RightSpeaker != 1 || s.DetectedSeconds <= 0 || s.Seconds <= 0 {
+		t.Errorf("overlaps = %+v", s)
+	}
+}

@@ -111,6 +111,9 @@ type evalRun struct {
 	ExchangesLive  eval.ExchangeScore  `json:"quick_exchanges_live"`
 	ExchangesFinal *eval.ExchangeScore `json:"quick_exchanges_final,omitempty"`
 
+	OverlapsLive  eval.OverlapScore  `json:"annotated_overlaps_live"`
+	OverlapsFinal *eval.OverlapScore `json:"annotated_overlaps_final,omitempty"`
+
 	Seconds float64 `json:"run_seconds"`
 
 	live, final []eval.Labeled
@@ -134,6 +137,9 @@ type evalReport struct {
 
 	DiarizationInitial *eval.SpeakerScore `json:"diarization_initial,omitempty"`
 	DiarizationRefined *eval.SpeakerScore `json:"diarization_refined,omitempty"`
+	OverlapsInitial    *eval.OverlapScore `json:"annotated_overlaps_diarization_initial,omitempty"`
+	OverlapsRefined    *eval.OverlapScore `json:"annotated_overlaps_diarization_refined,omitempty"`
+	RefWarnings        []string           `json:"reference_warnings,omitempty"`
 	DiarizationSecs    float64            `json:"diarization_seconds,omitempty"`
 
 	Runs []*evalRun `json:"runs"`
@@ -169,6 +175,9 @@ func runEval(opts evalOptions) error {
 	if err != nil {
 		return fmt.Errorf("parsing reference: %w", err)
 	}
+	for _, w := range ref.Warnings {
+		fmt.Printf("Reference warning: %s\n", w)
+	}
 
 	from, to := opts.from, opts.to
 	if to <= 0 || to > fullSecs {
@@ -192,6 +201,7 @@ func runEval(opts evalOptions) error {
 		Media: filepath.Base(opts.media), Reference: filepath.Base(opts.ref), AudioSecs: audioSecs,
 		From: from, To: to,
 		RefTurns: len(ref.Turns), RefSpeakers: len(ref.Speakers()), RefWords: len(refWords), Collar: opts.collar,
+		RefWarnings: ref.Warnings,
 	}
 	fmt.Printf("Reference: %d turns, %d speakers, %d words over %s\n", report.RefTurns, report.RefSpeakers, report.RefWords, formatDuration(audioSecs))
 
@@ -269,6 +279,9 @@ func runEval(opts evalOptions) error {
 		si := eval.ScoreSpeakers(ref, initial, opts.collar)
 		sr := eval.ScoreSpeakers(ref, refined, opts.collar)
 		report.DiarizationInitial, report.DiarizationRefined = &si, &sr
+		oi := eval.ScoreAnnotatedOverlaps(ref, initial, si.Mapping, 3)
+		or := eval.ScoreAnnotatedOverlaps(ref, refined, sr.Mapping, 3)
+		report.OverlapsInitial, report.OverlapsRefined = &oi, &or
 		for _, run := range runs {
 			segs := make([]session.Segment, len(run.live))
 			for i, l := range run.live {
@@ -281,7 +294,8 @@ func runEval(opts evalOptions) error {
 			sf := eval.ScoreSpeakers(ref, run.final, opts.collar)
 			wf := eval.SpeakerAttributedErrors(ref, run.final, sf.Mapping)
 			xf := eval.ScoreQuickExchanges(ref, run.final, sf.Mapping, 8, 6, 3)
-			run.SpeakersFinal, run.WhoSaidWhatFinal, run.ExchangesFinal = &sf, &wf, &xf
+			of := eval.ScoreAnnotatedOverlaps(ref, run.final, sf.Mapping, 3)
+			run.SpeakersFinal, run.WhoSaidWhatFinal, run.ExchangesFinal, run.OverlapsFinal = &sf, &wf, &xf, &of
 		}
 	}
 	report.Runs = runs
@@ -402,6 +416,7 @@ func scoreRun(run *evalRun, ref *eval.Reference, refWords []string, collar float
 	run.SpeakersLive = eval.ScoreSpeakers(ref, run.live, collar)
 	run.WhoSaidWhatLive = eval.SpeakerAttributedErrors(ref, run.live, run.SpeakersLive.Mapping)
 	run.ExchangesLive = eval.ScoreQuickExchanges(ref, run.live, run.SpeakersLive.Mapping, 8, 6, 3)
+	run.OverlapsLive = eval.ScoreAnnotatedOverlaps(ref, run.live, run.SpeakersLive.Mapping, 3)
 }
 
 func labeledWords(ls []eval.Labeled) []string {
@@ -448,7 +463,10 @@ func formatEvalReport(r *evalReport) string {
 	fmt.Fprintf(&b, "Eval: %s against %s\n", r.Media, r.Reference)
 	fmt.Fprintf(&b, "Reference: %d turns, %d speakers, %d words, %s. Speaker scores exclude %.1fs around each speaker change.\n",
 		r.RefTurns, r.RefSpeakers, r.RefWords, formatDuration(r.AudioSecs), r.Collar)
-	fmt.Fprintln(&b, "Text scores are disagreement with the Teams transcript (itself automatic), not true accuracy.")
+	fmt.Fprintln(&b, "Text scores are against the reference transcript: disagreement with Teams unless it was reviewed by hand.")
+	for _, w := range r.RefWarnings {
+		fmt.Fprintf(&b, "Reference warning: %s\n", w)
+	}
 	for _, run := range r.Runs {
 		fmt.Fprintf(&b, "\n== %s run: %s ==\n", run.Name, run.Tuning)
 		d := run.Detection
@@ -477,6 +495,18 @@ func formatEvalReport(r *evalReport) string {
 			fmt.Fprintf(&b, "; final right speaker %d", run.ExchangesFinal.RightSpeaker)
 		}
 		fmt.Fprintln(&b)
+		if run.OverlapsLive.Interjections > 0 {
+			o := run.OverlapsLive
+			fmt.Fprintf(&b, "Annotated overlap  %d interjections (%.0fs): transcribed live %d, right speaker live %d", o.Interjections, o.Seconds, o.Found, o.RightSpeaker)
+			if f := run.OverlapsFinal; f != nil {
+				fmt.Fprintf(&b, ", final %d", f.RightSpeaker)
+			}
+			fmt.Fprintln(&b)
+			if r.OverlapsInitial != nil {
+				fmt.Fprintf(&b, "                   two voices detected during them: initial diarization %.0fs, refined %.0fs of %.0fs\n",
+					r.OverlapsInitial.DetectedSeconds, r.OverlapsRefined.DetectedSeconds, o.Seconds)
+			}
+		}
 		fmt.Fprintln(&b, "Video-hint names   not scored (no hints in an offline eval yet)")
 		fmt.Fprintf(&b, "Run time           pipeline %s", formatDuration(run.Seconds))
 		if r.DiarizationSecs > 0 {

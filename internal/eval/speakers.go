@@ -61,25 +61,29 @@ func ScoreSpeakers(ref *Reference, hyp []Labeled, collar float64) SpeakerScore {
 	}
 	n := int(end/frameStep) + 1
 
-	// Reference speaker per frame (-1: none, or inside a collar).
-	refAt := make([]int, n)
-	for i := range refAt {
-		refAt[i] = -1
-	}
+	// Reference speakers per frame: usually one, several during annotated
+	// overlap, none in a collar or outside any turn.
+	refAt := make([][]int, n)
 	for _, t := range ref.Turns {
 		for f := frame(t.Start); f < frame(t.End) && f < n; f++ {
-			refAt[f] = refIdx[t.Speaker]
+			if f >= 0 && !contains(refAt[f], refIdx[t.Speaker]) {
+				refAt[f] = append(refAt[f], refIdx[t.Speaker])
+			}
 		}
 	}
-	for i := 1; i < len(ref.Turns); i++ {
-		if ref.Turns[i].Speaker == ref.Turns[i-1].Speaker {
-			continue
-		}
-		b := ref.Turns[i].Start
+	clearCollar := func(b float64) {
 		for f := frame(b - collar); f < frame(b+collar) && f < n; f++ {
 			if f >= 0 {
-				refAt[f] = -1
+				refAt[f] = nil
 			}
+		}
+	}
+	for i := range ref.Turns {
+		if i > 0 && ref.Turns[i].Speaker != ref.Turns[i-1].Speaker {
+			clearCollar(ref.Turns[i].Start)
+		}
+		if ref.Overlapping(i) {
+			clearCollar(ref.Turns[i].End) // an estimated end
 		}
 	}
 
@@ -111,12 +115,14 @@ func ScoreSpeakers(ref *Reference, hyp []Labeled, collar float64) SpeakerScore {
 		if len(hypAt[f]) >= 2 {
 			score.OverlapSeconds += frameStep
 		}
-		if refAt[f] < 0 || len(hypAt[f]) == 0 {
+		if len(refAt[f]) == 0 || len(hypAt[f]) == 0 {
 			continue
 		}
 		scored++
 		for _, h := range hypAt[f] {
-			co[h][refAt[f]]++
+			for _, r := range refAt[f] {
+				co[h][r]++
+			}
 		}
 	}
 	score.ScoredSeconds = float64(scored) * frameStep
@@ -133,11 +139,11 @@ func ScoreSpeakers(ref *Reference, hyp []Labeled, collar float64) SpeakerScore {
 
 	correct := 0
 	for f := 0; f < n; f++ {
-		if refAt[f] < 0 || len(hypAt[f]) == 0 {
+		if len(refAt[f]) == 0 || len(hypAt[f]) == 0 {
 			continue
 		}
 		for _, h := range hypAt[f] {
-			if assign[h] == refAt[f] {
+			if assign[h] >= 0 && contains(refAt[f], assign[h]) {
 				correct++
 				break
 			}
@@ -271,41 +277,119 @@ func ScoreQuickExchanges(ref *Reference, hyp []Labeled, mapping map[string]strin
 			continue
 		}
 		s.Turns++
-		bestHits, bestSpeaker := 0, ""
-		pool := map[string]int{}
-		for _, h := range hyp {
-			if h.End < t.Start-window || h.Start > t.End+window {
-				continue
-			}
-			hits := 0
-			local := map[string]int{}
-			for _, w := range Words(h.Text) {
-				pool[w]++
-				local[w]++
-			}
-			for _, w := range words {
-				if local[w] > 0 {
-					local[w]--
-					hits++
-				}
-			}
-			if hits > bestHits {
-				bestHits, bestSpeaker = hits, h.Speaker
-			}
-		}
-		found := 0
-		for _, w := range words {
-			if pool[w] > 0 {
-				pool[w]--
-				found++
-			}
-		}
-		if 2*found >= len(words) {
+		found, right := turnCaptured(t, hyp, mapping, window)
+		if found {
 			s.Found++
-			if mapping[bestSpeaker] == t.Speaker {
+			if right {
 				s.RightSpeaker++
 			}
 		}
+	}
+	return s
+}
+
+// turnCaptured reports whether hypothesis text within window seconds of
+// turn t contains at least half its words (found), and whether the
+// hypothesis line matching most of them has t's speaker (right).
+func turnCaptured(t Turn, hyp []Labeled, mapping map[string]string, window float64) (found, right bool) {
+	words := Words(t.Text)
+	if len(words) == 0 {
+		return false, false
+	}
+	bestHits, bestSpeaker := 0, ""
+	pool := map[string]int{}
+	for _, h := range hyp {
+		if h.End < t.Start-window || h.Start > t.End+window {
+			continue
+		}
+		hits := 0
+		local := map[string]int{}
+		for _, w := range Words(h.Text) {
+			pool[w]++
+			local[w]++
+		}
+		for _, w := range words {
+			if local[w] > 0 {
+				local[w]--
+				hits++
+			}
+		}
+		if hits > bestHits {
+			bestHits, bestSpeaker = hits, h.Speaker
+		}
+	}
+	got := 0
+	for _, w := range words {
+		if pool[w] > 0 {
+			pool[w]--
+			got++
+		}
+	}
+	if 2*got < len(words) {
+		return false, false
+	}
+	return true, mapping[bestSpeaker] == t.Speaker
+}
+
+// OverlapScore scores annotated simultaneous speech: reference turns that
+// share a start time (see ParseTeamsTranscript).
+type OverlapScore struct {
+	// Interjections are the shorter turns in each overlapping group: the
+	// voice cutting in while someone else keeps talking.
+	Interjections int `json:"interjections"`
+	// Found and RightSpeaker are how many interjections the pass
+	// transcribed, and gave to the right person (as in ExchangeScore).
+	Found        int `json:"found"`
+	RightSpeaker int `json:"right_speaker"`
+	// Seconds is the annotated overlap time, and DetectedSeconds how much
+	// of it the pass labeled with two or more speakers at once.
+	Seconds         float64 `json:"seconds"`
+	DetectedSeconds float64 `json:"detected_seconds"`
+}
+
+// ScoreAnnotatedOverlaps scores how a pass handled each annotated overlap.
+func ScoreAnnotatedOverlaps(ref *Reference, hyp []Labeled, mapping map[string]string, window float64) OverlapScore {
+	var s OverlapScore
+	for i := 0; i < len(ref.Turns); {
+		j := i
+		for j < len(ref.Turns) && ref.Turns[j].Start == ref.Turns[i].Start {
+			j++
+		}
+		if j-i > 1 {
+			longest := i
+			for k := i; k < j; k++ {
+				if len(Words(ref.Turns[k].Text)) > len(Words(ref.Turns[longest].Text)) {
+					longest = k
+				}
+			}
+			for k := i; k < j; k++ {
+				if k == longest {
+					continue
+				}
+				t := ref.Turns[k]
+				s.Interjections++
+				s.Seconds += t.End - t.Start
+				if found, right := turnCaptured(t, hyp, mapping, window); found {
+					s.Found++
+					if right {
+						s.RightSpeaker++
+					}
+				}
+				for f := frame(t.Start); f < frame(t.End); f++ {
+					at := float64(f) * frameStep
+					speakers := map[string]bool{}
+					for _, h := range hyp {
+						if h.Start <= at && at < h.End {
+							speakers[h.Speaker] = true
+						}
+					}
+					if len(speakers) >= 2 {
+						s.DetectedSeconds += frameStep
+					}
+				}
+			}
+		}
+		i = j
 	}
 	return s
 }
