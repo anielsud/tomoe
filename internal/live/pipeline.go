@@ -71,10 +71,20 @@ func (ls *liveState) reset() {
 	*ls = liveState{}
 }
 
-// processPipeline runs a single source pipeline: reads windows → VAD → transcribe → emit segments.
-func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCapturer, source SourceType) {
-	defer c.wg.Done()
+// sourceState is one source pipeline's state: its VAD, its optional pass-1
+// streaming session, and pass 1's in-progress utterance. Split out of
+// processPipeline so Replay can drive the exact same per-window logic
+// from recorded audio instead of a live capturer.
+type sourceState struct {
+	source     SourceType
+	vad        *sherpa.VoiceActivityDetector
+	streamSess transcribe.StreamingSession
+	live       liveState
+}
 
+// newSourceState creates the VAD and (if configured) pass-1 streaming
+// session for one source. Returns nil if the VAD can't be created.
+func (c *Coordinator) newSourceState(source SourceType) *sourceState {
 	// Create a VAD instance for this source
 	vadConfig := &sherpa.VadModelConfig{
 		SileroVad: sherpa.SileroVadModelConfig{
@@ -92,81 +102,105 @@ func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCaptu
 
 	vad := sherpa.NewVoiceActivityDetector(vadConfig, 60.0)
 	if vad == nil {
-		return
+		return nil
 	}
-	defer sherpa.DeleteVoiceActivityDetector(vad)
 	sigfix.AfterSherpa()
+	st := &sourceState{source: source, vad: vad}
 
 	// Pass 1 (optional): a streaming session for this source, giving
 	// incremental partial text as audio arrives rather than only once a
 	// whole VAD segment completes. Nil (falls back to today's
 	// single-pass, synchronous-decode-on-completion behavior) if the
 	// realtime model isn't configured/available.
-	var streamSess transcribe.StreamingSession
 	if c.cfg.StreamingEngine != nil {
-		var err error
-		streamSess, err = c.cfg.StreamingEngine.NewSession()
+		streamSess, err := c.cfg.StreamingEngine.NewSession()
 		if err != nil {
 			fmt.Printf("live: failed to start streaming session for %s (falling back to non-realtime): %v\n", source, err)
-			streamSess = nil
 		} else {
-			defer streamSess.Close()
+			st.streamSess = streamSess
 		}
 	}
-	var live liveState
+	return st
+}
+
+// close releases the source's VAD and streaming session.
+func (st *sourceState) close() {
+	if st.streamSess != nil {
+		st.streamSess.Close()
+	}
+	sherpa.DeleteVoiceActivityDetector(st.vad)
+}
+
+// processPipeline runs a single source pipeline: reads windows → VAD → transcribe → emit segments.
+func (c *Coordinator) processPipeline(ctx context.Context, sc *audio.StreamCapturer, source SourceType) {
+	defer c.wg.Done()
+
+	st := c.newSourceState(source)
+	if st == nil {
+		return
+	}
+	defer st.close()
 
 	windows := sc.Windows()
 	for {
 		select {
 		case <-ctx.Done():
-			// Flush VAD and process remaining segments
-			vad.Flush()
-			c.drainVAD(vad, source, streamSess, &live)
-			c.finishLive(source, &live)
+			c.finishSource(st)
 			return
 
 		case window, ok := <-windows:
 			if !ok {
 				// Channel closed — capturer stopped
-				vad.Flush()
-				c.drainVAD(vad, source, streamSess, &live)
-				c.finishLive(source, &live)
+				c.finishSource(st)
 				return
 			}
-
-			// Feed window to VAD (must be exactly windowSize)
-			if len(window) == vadWindowSize {
-				vad.AcceptWaveform(window)
-				isSpeech := vad.IsSpeech()
-
-				if streamSess != nil {
-					if isSpeech {
-						// Only accumulate speech, not silence -- keeps
-						// the eventual speaker embedding clean.
-						live.audio = append(live.audio, window...)
-					}
-					text, err := streamSess.Feed(window)
-					if err == nil && text != live.partial {
-						live.partial = text
-						if text != "" {
-							c.emitLivePartial(source, &live, text)
-						}
-					}
-				}
-
-				// Signal activity when VAD detects ongoing speech
-				if isSpeech {
-					select {
-					case c.activityCh <- struct{}{}:
-					default:
-					}
-				}
-			}
-
-			// Process any completed speech segments
-			c.drainVAD(vad, source, streamSess, &live)
+			c.processWindow(st, window)
 		}
 	}
+}
+
+// finishSource flushes the VAD and processes whatever it still holds,
+// once the source has no more audio coming.
+func (c *Coordinator) finishSource(st *sourceState) {
+	st.vad.Flush()
+	c.drainVAD(st.vad, st.source, st.streamSess, &st.live)
+	c.finishLive(st.source, &st.live)
+}
+
+// processWindow feeds one audio window through VAD (and pass 1, if
+// enabled), then handles any speech segments that completed.
+func (c *Coordinator) processWindow(st *sourceState, window []float32) {
+	// Feed window to VAD (must be exactly windowSize)
+	if len(window) == vadWindowSize {
+		st.vad.AcceptWaveform(window)
+		isSpeech := st.vad.IsSpeech()
+
+		if st.streamSess != nil {
+			if isSpeech {
+				// Only accumulate speech, not silence -- keeps
+				// the eventual speaker embedding clean.
+				st.live.audio = append(st.live.audio, window...)
+			}
+			text, err := st.streamSess.Feed(window)
+			if err == nil && text != st.live.partial {
+				st.live.partial = text
+				if text != "" {
+					c.emitLivePartial(st.source, &st.live, text)
+				}
+			}
+		}
+
+		// Signal activity when VAD detects ongoing speech
+		if isSpeech {
+			select {
+			case c.activityCh <- struct{}{}:
+			default:
+			}
+		}
+	}
+
+	// Process any completed speech segments
+	c.drainVAD(st.vad, st.source, st.streamSess, &st.live)
 }
 
 // emitLivePartial publishes pass 1's growing text for the utterance in

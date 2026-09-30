@@ -101,6 +101,11 @@ type Coordinator struct {
 
 	// segIDCounter generates unique segment IDs.
 	segIDCounter atomic.Int64
+
+	// now is time.Now, except under Replay, which substitutes a virtual
+	// clock so recorded audio can run faster than real time with the
+	// same segment timestamps.
+	now func() time.Time
 }
 
 // New creates a new Coordinator with the given configuration.
@@ -116,13 +121,14 @@ func New(cfg Config) *Coordinator {
 		activityCh:      make(chan struct{}, 1),
 		hintNeededCh:    make(chan bool, 1),
 		refineCh:        make(chan refinementJob, bufSize),
+		now:             time.Now,
 	}
 }
 
 // Start begins processing audio from all configured sources.
 func (c *Coordinator) Start(ctx context.Context) error {
 	ctx, c.cancel = context.WithCancel(ctx)
-	c.startTime = time.Now()
+	c.startTime = c.now()
 
 	hasMic := c.cfg.MicCapturer != nil
 	hasMonitor := c.cfg.MonitorCapturer != nil
@@ -245,7 +251,7 @@ func (c *Coordinator) Stats() Stats {
 	return Stats{
 		MicSegments:     int(c.micCount.Load()),
 		MonitorSegments: int(c.monitorCount.Load()),
-		Duration:        time.Since(c.startTime),
+		Duration:        c.now().Sub(c.startTime),
 	}
 }
 
@@ -289,5 +295,5 @@ func (c *Coordinator) nextSegID() string {
 }
 
 func (c *Coordinator) elapsed() float64 {
-	return time.Since(c.startTime).Seconds()
+	return c.now().Sub(c.startTime).Seconds()
 }
