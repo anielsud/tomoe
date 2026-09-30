@@ -73,10 +73,12 @@ export interface Config {
     HotwordsScore: number;
     DecodingMethod: string;
     MaxActivePaths: number;
+    TwoPass: boolean;
   };
   Output: {
     AutoPaste: boolean;
     Clipboard: boolean;
+    SilenceTimeout: number;
   };
   Multilingual: {
     Enabled: boolean;
@@ -84,6 +86,9 @@ export interface Config {
     DefaultLang: string;
   };
   Meeting: {
+    // DefaultSources, MaxSpeechDuration, MinSilenceDuration and AutoSave
+    // exist in config.toml but nothing reads them, so the settings page
+    // doesn't offer them.
     DefaultSources: string;
     MonitorDevice: string;
     SpeakerThreshold: number;
@@ -91,7 +96,52 @@ export interface Config {
     MinSilenceDuration: number;
     AutoSave: boolean;
     AutoDetect: boolean;
+    StickyGraceWindow: number;
+    StickyThresholdMargin: number;
+    MinAssignDuration: number;
+    ShortSegmentGraceWindow: number;
+    VideoHintPollInterval: number;
+    VideoHintTriggerDebounce: number;
   };
+}
+
+// ApplySettings's result (see backend.ApplyResult).
+export interface ApplyResult {
+  applied: string[] | null;
+  later: string[] | null;
+  warnings: string[] | null;
+}
+
+// One dependency on the Tools page (see backend.ToolStatus).
+export interface ToolFix {
+  kind: 'action' | 'command';
+  label: string;
+  command?: string;
+}
+
+export interface ToolStatus {
+  id: string;
+  name: string;
+  group: string;
+  ok: boolean;
+  required: boolean;
+  neededFor: string;
+  detail: string;
+  fix?: ToolFix;
+}
+
+// "tools:progress" / "tools:done" event payloads (see backend.ToolProgressEvent/ToolDoneEvent).
+export interface ToolProgress {
+  id: string;
+  message: string;
+  downloaded: number;
+  total: number;
+}
+
+export interface ToolDone {
+  id: string;
+  error?: string;
+  note?: string;
 }
 
 export interface GPUInfo {

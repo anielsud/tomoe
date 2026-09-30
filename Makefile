@@ -164,7 +164,7 @@ endif
 		echo "Created '$(CODESIGN_IDENTITY)'. If macOS ever prompts for keychain access when codesign uses it, choose \"Always Allow\"."; \
 	fi
 
-install-gui-mac: build-gui dev-cert-mac ## Rebuild the GUI and (re)install /Applications/Tomoe.app + Dock icon (macOS only)
+install-gui-mac: build dev-cert-mac ## Rebuild the GUI and (re)install /Applications/Tomoe.app + Dock icon (macOS only)
 ifneq ($(UNAME),Darwin)
 	$(error install-gui-mac is macOS-only)
 endif
@@ -172,6 +172,12 @@ endif
 	mkdir -p $(APP_BUNDLE)/Contents/MacOS
 	mkdir -p $(APP_BUNDLE)/Contents/Resources
 	cp $(GUI_BINARY) $(APP_BUNDLE)/Contents/MacOS/$(GUI_BINARY)
+	# The CLI rides along: after each saved session the GUI runs speaker
+	# diarization as a `tomoe diarize-session` subprocess, looked up next to
+	# its own executable (see session.FindDiarizeWorker). Without it there,
+	# a Dock-launched app has no way to find one on PATH, and diarization
+	# is silently skipped.
+	cp $(BINARY) $(APP_BUNDLE)/Contents/MacOS/$(BINARY)
 	sed 's/__VERSION__/$(VERSION)/g' packaging/macos/Info.plist.template > $(APP_BUNDLE)/Contents/Info.plist
 	codesign --sign "$(CODESIGN_IDENTITY)" --force --deep $(APP_BUNDLE)
 	rm -rf "$(APPLICATIONS_DIR)/$(APP_NAME).app"

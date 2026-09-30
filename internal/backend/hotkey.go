@@ -19,6 +19,7 @@ import (
 type hotkeyManager struct {
 	app      *App
 	listener hotkey.Listener
+	stop     <-chan struct{} // closed to end listen (see rebindHotkeys)
 }
 
 // dictationManager manages the dictation hotkey in GUI mode.
@@ -26,10 +27,24 @@ type dictationManager struct {
 	app      *App
 	listener hotkey.Listener
 	clip     clipboard.Writer
+	stop     <-chan struct{} // closed to end listen (see rebindHotkeys)
 }
 
-// registerHotkeys registers both the meeting and dictation hotkeys.
+// registerHotkeys registers both the meeting and dictation hotkeys and
+// starts their listen loops, recording in a.unregisterHotkeys how to undo
+// all of it (see rebindHotkeys).
 func (a *App) registerHotkeys() error {
+	stop := make(chan struct{})
+	var listeners []hotkey.Listener
+	a.mu.Lock()
+	a.unregisterHotkeys = func() {
+		close(stop)
+		for _, l := range listeners {
+			_ = l.Unregister()
+		}
+	}
+	a.mu.Unlock()
+
 	// Register meeting hotkey
 	meetingBinding := a.cfg.Hotkey.MeetingBinding
 	if meetingBinding == "" {
@@ -44,10 +59,12 @@ func (a *App) registerHotkeys() error {
 	if err := meetingListener.Register(); err != nil {
 		return fmt.Errorf("registering meeting hotkey: %w", err)
 	}
+	listeners = append(listeners, meetingListener)
 
 	mhk := &hotkeyManager{
 		app:      a,
 		listener: meetingListener,
+		stop:     stop,
 	}
 	go mhk.listen()
 
@@ -67,11 +84,13 @@ func (a *App) registerHotkeys() error {
 		fmt.Printf("Warning: could not register dictation hotkey: %v\n", err)
 		return nil
 	}
+	listeners = append(listeners, dictListener)
 
 	dhk := &dictationManager{
 		app:      a,
 		listener: dictListener,
 		clip:     clipboard.NewWriter(),
+		stop:     stop,
 	}
 	go dhk.listen()
 
@@ -90,6 +109,8 @@ func (hk *hotkeyManager) listen() {
 
 	for {
 		select {
+		case <-hk.stop:
+			return
 		case _, ok := <-hk.listener.Keydown():
 			if !ok {
 				return
@@ -183,6 +204,8 @@ func (dhk *dictationManager) listen() {
 	defaultLang := dhk.app.defaultLang()
 	for {
 		select {
+		case <-dhk.stop:
+			return
 		case _, ok := <-dhk.listener.Keydown():
 			if !ok {
 				return
@@ -224,14 +247,23 @@ func (dhk *dictationManager) startDictation(lang string) {
 		return
 	}
 
+	dhk.app.mu.Lock()
+	bundle, release, err := dhk.app.leaseEnginesLocked("dictation")
+	dhk.app.mu.Unlock()
+	if err != nil {
+		fmt.Printf("Dictation: %v\n", err)
+		micCapturer.Close()
+		return
+	}
+
 	var vadPath string
-	if dhk.app.modelMgr != nil {
-		status := dhk.app.modelMgr.Check()
+	if bundle.modelMgr != nil {
+		status := bundle.modelMgr.Check()
 		vadPath = status.VADPath
 	}
 
 	cfg := live.Config{
-		Engine:            dhk.app.engines.Get(lang),
+		Engine:            bundle.engines.Get(lang),
 		MicCapturer:       audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, 128),
 		VADPath:           vadPath,
 		SegmentBufferSize: 32,
@@ -243,6 +275,7 @@ func (dhk *dictationManager) startDictation(lang string) {
 		fmt.Printf("Dictation: failed to start coordinator: %v\n", err)
 		cfg.MicCapturer.Close()
 		cancel()
+		release()
 		return
 	}
 
@@ -253,6 +286,7 @@ func (dhk *dictationManager) startDictation(lang string) {
 	dhk.app.dictating = true
 	dhk.app.dictCoordinator = coordinator
 	dhk.app.dictCancel = cancel
+	dhk.app.dictRelease = release
 	dhk.app.mu.Unlock()
 
 	if dhk.app.tray != nil {
@@ -289,6 +323,8 @@ func (dhk *dictationManager) stopDictation() {
 	dhk.app.mu.Lock()
 	coordinator := dhk.app.dictCoordinator
 	cancel := dhk.app.dictCancel
+	release := dhk.app.dictRelease
+	dhk.app.dictRelease = nil
 	dhk.app.dictating = false
 	dhk.app.dictCoordinator = nil
 	dhk.app.dictCancel = nil
@@ -300,10 +336,28 @@ func (dhk *dictationManager) stopDictation() {
 	if cancel != nil {
 		cancel()
 	}
+	if release != nil {
+		release() // only now: Stop waits for the last decode
+	}
 
 	if dhk.app.tray != nil {
 		dhk.app.tray.setIdle()
 	}
 	wailsRuntime.EventsEmit(dhk.app.ctx, "dictation:stopped", nil)
 	fmt.Println("Dictation stopped.")
+}
+
+// rebindHotkeys unregisters the current hotkeys and registers them again
+// from a.cfg. Used when settings change the bindings, the default
+// language or the meeting detector, all of which the listen loops capture
+// when they start.
+func (a *App) rebindHotkeys() error {
+	a.mu.Lock()
+	unregister := a.unregisterHotkeys
+	a.unregisterHotkeys = nil
+	a.mu.Unlock()
+	if unregister != nil {
+		unregister()
+	}
+	return a.registerHotkeys()
 }

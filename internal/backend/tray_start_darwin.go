@@ -41,3 +41,9 @@ func StopTray() {
 		runOnMainThread(trayEnd)
 	}
 }
+
+// onTrayThread runs fn where AppKit's status-item APIs expect it: the main
+// thread (see StartTrayAsync).
+func onTrayThread(fn func()) {
+	runOnMainThread(fn)
+}

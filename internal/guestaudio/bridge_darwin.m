@@ -16,9 +16,22 @@
 //      out-parameter-to-tuple bridging convention silently discarding
 //      every real buffer, which has no equivalent failure mode when
 //      calling the real C ABI directly, as cgo does.
+
+// This file relies on ARC: objects assigned to __block variables inside
+// completion handlers (targetWindow, targetDisplay, startErr) must be
+// retained past the handler, and CFBridgingRetain/Release assume it. It
+// was once compiled without ARC by mistake, which freed the SCWindow as
+// soon as the SCShareableContent handler returned and crashed the next
+// line intermittently (see tap_darwin.go's CFLAGS). Fail the build rather
+// than let that happen again.
+#if !__has_feature(objc_arc)
+#error "guestaudio/bridge_darwin.m must be compiled with -fobjc-arc"
+#endif
+
 #import <AppKit/AppKit.h>
 #import <CoreMedia/CoreMedia.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <objc/runtime.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -107,6 +120,12 @@ static void guestaudio_ensure_app_context(void) {
         [NSApplication sharedApplication];
       });
     }
+    // Note: the crashes described below were most likely the missing
+    // -fobjc-arc (see the #error guard at the top of this file), which
+    // freed the SCWindow looked up right after this -- a use-after-free
+    // whose timing matches every symptom described here. The delay is
+    // kept until that's confirmed in use; it's paid once per process.
+    //
     // [NSApplication sharedApplication] kicks off this process's first
     // window-server/XPC connection but doesn't block until it's ready --
     // confirmed via lldb: the very next thing this function's caller
@@ -146,6 +165,12 @@ static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handl
   output.goHandle = go_handle;
 
   SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:output];
+  // SCStream holds its delegate and stream outputs weakly, so nothing
+  // else keeps `output` alive once this function returns. Tie it to the
+  // stream's own lifetime; otherwise ARC frees it and callbacks stop after
+  // the first buffer (seen live: 20ms of guest audio per session).
+  static char kOutputKey;
+  objc_setAssociatedObject(stream, &kOutputKey, output, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
   NSError *addErr = nil;
   BOOL ok = [stream addStreamOutput:output
@@ -170,10 +195,10 @@ static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handl
     return NULL;
   }
 
-  // `stream` retains `output` for as long as it's a registered stream
-  // output (SCStream's own documented behavior) -- CFBridgingRetain here
-  // hands the *stream* reference to Go/C as a manually-managed pointer;
-  // Go must call guestaudio_stop_tap exactly once to balance it.
+  // `output` lives as long as `stream` (associated object above).
+  // CFBridgingRetain hands the stream reference to Go/C as a
+  // manually-managed pointer; Go must call guestaudio_stop_tap exactly
+  // once to balance it.
   return (void *)CFBridgingRetain(stream);
 }
 

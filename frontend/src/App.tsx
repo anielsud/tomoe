@@ -10,12 +10,13 @@ import VideoHintActivity from './components/VideoHintActivity'
 import VideoHintReview from './components/VideoHintReview'
 import DiagnosticsPane from './components/DiagnosticsPane'
 import InitScreen from './components/InitScreen'
+import ToolsPanel from './components/ToolsPanel'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import { useTranscript } from './hooks/useTranscript'
 import { useSession } from './hooks/useSession'
 import { DeviceInfo, Session, AudioSourceView } from './types'
 
-type View = 'live' | 'sessions' | 'settings' | 'videohints' | 'diagnostics';
+type View = 'live' | 'sessions' | 'settings' | 'tools' | 'videohints' | 'diagnostics';
 
 function App() {
   // True from launch until the backend's first-run setup finishes (see
@@ -56,6 +57,12 @@ function App() {
       .catch(() => {});
     return () => cancel();
   }, []);
+
+  // Settings can change the languages on offer (see SettingsPanel).
+  useEffect(() => {
+    if (initializing) return;
+    return EventsOn('settings:applied', () => loadLanguages());
+  }, [initializing]);
 
   useEffect(() => {
     if (initializing) return; // nothing bound below is ready to call yet
@@ -146,8 +153,10 @@ function App() {
         const langs = await window.go.backend.App.GetAvailableLanguages();
         if (langs && langs.length > 0) {
           setLanguages(langs);
+          // Keep the user's pick (e.g. BN) across reloads; only fall back
+          // to the default when it's no longer offered.
           const defLang = await window.go.backend.App.GetDefaultLanguage();
-          if (defLang) setSelectedLang(defLang);
+          setSelectedLang(cur => (langs.includes(cur) ? cur : defLang || langs[0]));
           return;
         }
       } catch {
@@ -249,6 +258,13 @@ function App() {
         </button>
         <button
           className="btn-icon"
+          title="Tools (dependencies, models, permissions)"
+          onClick={() => setView(view === 'tools' ? 'live' : 'tools')}
+        >
+          &#x1F9F0;
+        </button>
+        <button
+          className="btn-icon"
           title="Settings"
           onClick={() => setView(view === 'settings' ? 'live' : 'settings')}
         >
@@ -269,6 +285,10 @@ function App() {
 
       {view === 'settings' && (
         <SettingsPanel />
+      )}
+
+      {view === 'tools' && (
+        <ToolsPanel />
       )}
 
       {view === 'videohints' && (

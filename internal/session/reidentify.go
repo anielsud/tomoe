@@ -14,6 +14,8 @@ import (
 
 	"github.com/sosuke-ai/tomoe-pc/internal/sigfix"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
+
+	"github.com/sosuke-ai/tomoe-pc/internal/toolpath"
 )
 
 const pcmSampleRate = 16000
@@ -408,11 +410,12 @@ func extractMonitorAudio(audioPath string, sess *Session) ([]float32, error) {
 
 // DecodeToFloat32 decodes an audio file (MP3, WAV, etc.) to 16kHz mono float32 PCM using ffmpeg.
 func DecodeToFloat32(path string) ([]float32, error) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return nil, fmt.Errorf("ffmpeg not found: install ffmpeg")
+	ffmpeg, err := toolpath.FFmpeg()
+	if err != nil {
+		return nil, err
 	}
 
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.Command(ffmpeg,
 		"-i", path,
 		"-ar", fmt.Sprintf("%d", pcmSampleRate),
 		"-ac", "1",

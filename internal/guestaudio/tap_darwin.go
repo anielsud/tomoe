@@ -9,6 +9,7 @@
 package guestaudio
 
 /*
+#cgo CFLAGS: -fobjc-arc
 #cgo LDFLAGS: -framework AppKit -framework ScreenCaptureKit -framework CoreMedia -framework CoreFoundation
 #include <stdlib.h>
 #include "bridge.h"

@@ -29,6 +29,10 @@ interface Window {
         GetConfig(): Promise<any>;
         GetGPUInfo(): Promise<any>;
         GetModelStatus(): Promise<any>;
+        ApplySettings(cfg: any): Promise<any>;
+        GetTools(): Promise<any[]>;
+        FixTool(id: string): Promise<void>;
+        CopyToClipboard(text: string): Promise<void>;
         GetVideoHintActivity(): Promise<any[]>;
         ListPendingVideoHints(): Promise<any[]>;
         GetVideoHintImage(id: string): Promise<string>;
