@@ -6,6 +6,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/sosuke-ai/tomoe-pc/internal/toolpath"
 )
 
 // supportedExtensions lists audio formats supported for transcription.
@@ -26,8 +28,9 @@ func IsSupportedFormat(path string) bool {
 // convertToWAV converts a non-WAV audio file to 16kHz mono WAV using ffmpeg.
 // Returns the path to the temporary WAV file (caller must remove it).
 func convertToWAV(srcPath string) (string, error) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return "", fmt.Errorf("ffmpeg not found: install ffmpeg to transcribe non-WAV files")
+	ffmpeg, err := toolpath.FFmpeg()
+	if err != nil {
+		return "", fmt.Errorf("transcribing non-WAV files needs ffmpeg: %w", err)
 	}
 
 	tmpFile, err := os.CreateTemp("", "tomoe-*.wav")
@@ -37,7 +40,7 @@ func convertToWAV(srcPath string) (string, error) {
 	tmpPath := tmpFile.Name()
 	_ = tmpFile.Close()
 
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.Command(ffmpeg,
 		"-i", srcPath,
 		"-ar", "16000",
 		"-ac", "1",

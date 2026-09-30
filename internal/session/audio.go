@@ -9,6 +9,8 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+
+	"github.com/sosuke-ai/tomoe-pc/internal/toolpath"
 )
 
 // SaveAudioMP3 converts float32 PCM samples to an MP3 file via ffmpeg.
@@ -38,7 +40,11 @@ func SaveAudioMP3(samples []float32, sampleRate int, path string) error {
 	_ = tmpWAV.Close()
 
 	// Convert to MP3 via ffmpeg
-	cmd := exec.Command("ffmpeg", "-y",
+	ffmpeg, err := toolpath.FFmpeg()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(ffmpeg, "-y",
 		"-i", tmpPath,
 		"-codec:a", "libmp3lame",
 		"-qscale:a", "6",
@@ -115,7 +121,11 @@ func SaveAudioM4A(tracks [][]float32, sampleRate int, path string) error {
 	}
 	args = append(args, path)
 
-	cmd := exec.Command("ffmpeg", args...)
+	ffmpeg, err := toolpath.FFmpeg()
+	if err != nil {
+		return err
+	}
+	cmd := exec.Command(ffmpeg, args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		return fmt.Errorf("ffmpeg M4A encoding: %w: %s", err, string(output))
 	}
@@ -133,13 +143,15 @@ func cleanupTempFiles(paths []string) {
 
 // DecodeTrackToFloat32 extracts a single audio track from a multi-track file
 // and decodes it to 16kHz mono float32 PCM using ffmpeg.
-// track is 0-indexed (0=mic, 1=monitor for dual-source sessions).
+// track is 0-indexed. A dual-source session's M4A holds 0=mixed, 1=mic,
+// 2=monitor; a single-source one holds just track 0 (see SaveAudioM4A).
 func DecodeTrackToFloat32(path string, track int) ([]float32, error) {
-	if _, err := exec.LookPath("ffmpeg"); err != nil {
-		return nil, fmt.Errorf("ffmpeg not found: install ffmpeg")
+	ffmpeg, err := toolpath.FFmpeg()
+	if err != nil {
+		return nil, err
 	}
 
-	cmd := exec.Command("ffmpeg",
+	cmd := exec.Command(ffmpeg,
 		"-i", path,
 		"-map", fmt.Sprintf("0:a:%d", track),
 		"-ar", fmt.Sprintf("%d", pcmSampleRate),
