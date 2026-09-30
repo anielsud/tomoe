@@ -6,7 +6,7 @@ import (
 )
 
 func TestTrackerPeekDoesNotChangeClusters(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -38,7 +38,7 @@ func TestTrackerPeekDoesNotChangeClusters(t *testing.T) {
 }
 
 func TestTrackerPeekRespectsStickyThresholdMarginDisabled(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	tuning := tracker.Tuning()
 	tuning.StickyThresholdMargin = 0
 	tracker.SetTuning(tuning)

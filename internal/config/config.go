@@ -128,7 +128,9 @@ func DefaultConfig() *Config {
 			DecodingMethod: "greedy_search",
 			HotwordsScore:  1.5,
 			MaxActivePaths: 4,
-			TwoPass:        true,
+			// Off, as on main: two-pass is opt-in until it has been
+			// tuned on real recordings (see `tomoe session replay`).
+			TwoPass: false,
 		},
 		Output: OutputConfig{
 			AutoPaste:      true,
@@ -142,15 +144,20 @@ func DefaultConfig() *Config {
 		},
 		Meeting: MeetingConfig{
 			DefaultSources:     "both",
-			SpeakerThreshold:   0.55,
+			SpeakerThreshold:   0.65,
 			MaxSpeechDuration:  30.0,
 			MinSilenceDuration: 0.5,
 			AutoSave:           true,
 			AutoDetect:         true,
 
+			// The sticky-speaker and short-segment rules are off (margin
+			// and duration 0), matching main's clustering, until they're
+			// proven on real recordings. The windows only matter once a
+			// rule is turned on; speaker.ExperimentalTuning has the values
+			// tuned from live meetings.
 			StickyGraceWindow:       3.0,
-			StickyThresholdMargin:   0.15,
-			MinAssignDuration:       0.7,
+			StickyThresholdMargin:   0,
+			MinAssignDuration:       0,
 			ShortSegmentGraceWindow: 15.0,
 
 			VideoHintPollInterval:    5.0,

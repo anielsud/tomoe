@@ -787,7 +787,7 @@ body {
   margin-left: auto;
 }
 
-.settings-group-header .btn {
+.settings-group-header .btn:first-of-type {
   margin-left: auto;
 }
 

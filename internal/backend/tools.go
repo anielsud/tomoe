@@ -162,6 +162,11 @@ func (a *App) downloadModels(id string) (string, error) {
 	if err := mgr.Download(false, progress); err != nil {
 		return "", err
 	}
+	if cfg.Transcription.TwoPass {
+		if err := mgr.DownloadEnglishStreaming(false, progress); err != nil {
+			return "", err
+		}
+	}
 	if wantsBengali(cfg) {
 		if err := mgr.DownloadMultilingual(false, progress); err != nil {
 			return "", err
@@ -291,8 +296,14 @@ func modelStatuses(cfg *config.Config) []ToolStatus {
 		parakeet.Detail = "Incomplete download"
 	}
 	streaming := entry("model-streaming", "English streaming Zipformer", "Live text while people speak (two-pass)", false, s.EnglishStreamingReady)
-	if !cfg.Transcription.TwoPass && s.EnglishStreamingReady {
-		streaming.Detail = "Downloaded (two-pass is off in Settings)"
+	if !cfg.Transcription.TwoPass {
+		// Only two-pass uses it, and that's off: not missing, just unused.
+		streaming.OK, streaming.Fix = true, nil
+		if s.EnglishStreamingReady {
+			streaming.Detail = "Downloaded (two-pass is off in Settings)"
+		} else {
+			streaming.Detail = "Not needed while two-pass is off (turning it on in Settings will ask for it)"
+		}
 	}
 	list := []ToolStatus{
 		parakeet,

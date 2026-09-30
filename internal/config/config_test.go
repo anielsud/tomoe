@@ -40,8 +40,8 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.Meeting.DefaultSources != "both" {
 		t.Errorf("Meeting.DefaultSources = %q, want %q", cfg.Meeting.DefaultSources, "both")
 	}
-	if cfg.Meeting.SpeakerThreshold != 0.55 {
-		t.Errorf("Meeting.SpeakerThreshold = %v, want 0.55", cfg.Meeting.SpeakerThreshold)
+	if cfg.Meeting.SpeakerThreshold != 0.65 {
+		t.Errorf("Meeting.SpeakerThreshold = %v, want 0.65", cfg.Meeting.SpeakerThreshold)
 	}
 	if !cfg.Meeting.AutoSave {
 		t.Error("Meeting.AutoSave = false, want true")
@@ -224,8 +224,8 @@ clipboard = true
 	if cfg.Meeting.DefaultSources != "both" {
 		t.Errorf("Meeting.DefaultSources = %q, want %q (default)", cfg.Meeting.DefaultSources, "both")
 	}
-	if cfg.Meeting.SpeakerThreshold != 0.55 {
-		t.Errorf("Meeting.SpeakerThreshold = %v, want 0.55 (default)", cfg.Meeting.SpeakerThreshold)
+	if cfg.Meeting.SpeakerThreshold != 0.65 {
+		t.Errorf("Meeting.SpeakerThreshold = %v, want 0.65 (default)", cfg.Meeting.SpeakerThreshold)
 	}
 	if !cfg.Meeting.AutoDetect {
 		t.Error("Meeting.AutoDetect = false, want true (default)")
@@ -371,8 +371,9 @@ func TestExistsWhenFilePresent(t *testing.T) {
 	}
 }
 
-func TestTwoPassAndStickyMarginDefaultOnForExistingConfigs(t *testing.T) {
-	// Configs written before these options existed keep today's behavior.
+func TestNewPipelineOptionsDefaultOffForExistingConfigs(t *testing.T) {
+	// A config written before two-pass and the clustering rules existed
+	// keeps main's behavior: every new option defaults to off.
 	path := filepath.Join(t.TempDir(), "config.toml")
 	old := "[transcription]\ngpu_enabled = true\n\n[meeting]\nspeaker_threshold = 0.65\n"
 	if err := os.WriteFile(path, []byte(old), 0o644); err != nil {
@@ -382,17 +383,20 @@ func TestTwoPassAndStickyMarginDefaultOnForExistingConfigs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if !cfg.Transcription.TwoPass {
-		t.Error("Transcription.TwoPass = false, want true (default)")
+	if cfg.Transcription.TwoPass {
+		t.Error("Transcription.TwoPass = true, want false (default)")
 	}
-	if cfg.Meeting.StickyThresholdMargin != 0.15 {
-		t.Errorf("Meeting.StickyThresholdMargin = %v, want 0.15 (default)", cfg.Meeting.StickyThresholdMargin)
+	if cfg.Meeting.StickyThresholdMargin != 0 {
+		t.Errorf("Meeting.StickyThresholdMargin = %v, want 0 (rule off by default)", cfg.Meeting.StickyThresholdMargin)
+	}
+	if cfg.Meeting.MinAssignDuration != 0 {
+		t.Errorf("Meeting.MinAssignDuration = %v, want 0 (rule off by default)", cfg.Meeting.MinAssignDuration)
 	}
 }
 
-func TestTwoPassAndStickyMarginOptOut(t *testing.T) {
+func TestNewPipelineOptionsOptIn(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.toml")
-	cfgText := "[transcription]\ntwo_pass = false\n\n[meeting]\nsticky_threshold_margin = 0.0\n"
+	cfgText := "[transcription]\ntwo_pass = true\n\n[meeting]\nsticky_threshold_margin = 0.15\nmin_assign_duration = 0.7\n"
 	if err := os.WriteFile(path, []byte(cfgText), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -400,11 +404,11 @@ func TestTwoPassAndStickyMarginOptOut(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Load() error: %v", err)
 	}
-	if cfg.Transcription.TwoPass {
-		t.Error("Transcription.TwoPass = true, want false")
+	if !cfg.Transcription.TwoPass {
+		t.Error("Transcription.TwoPass = false, want true")
 	}
-	if cfg.Meeting.StickyThresholdMargin != 0 {
-		t.Errorf("Meeting.StickyThresholdMargin = %v, want 0", cfg.Meeting.StickyThresholdMargin)
+	if cfg.Meeting.StickyThresholdMargin != 0.15 || cfg.Meeting.MinAssignDuration != 0.7 {
+		t.Errorf("rules = margin %v, duration %v; want 0.15, 0.7", cfg.Meeting.StickyThresholdMargin, cfg.Meeting.MinAssignDuration)
 	}
 }
 

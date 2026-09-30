@@ -23,9 +23,9 @@ func TestPlanApply(t *testing.T) {
 		change func(*config.Config)
 		check  func(applyPlan) bool
 	}{
-		{"clustering tuning only retunes", func(c *config.Config) { c.Meeting.SpeakerThreshold = 0.65 },
+		{"clustering tuning only retunes", func(c *config.Config) { c.Meeting.SpeakerThreshold = 0.6 },
 			func(p applyPlan) bool { return p.retune && !p.reloadEngines && !p.rebindHotkeys }},
-		{"two-pass reloads engines", func(c *config.Config) { c.Transcription.TwoPass = false },
+		{"two-pass reloads engines", func(c *config.Config) { c.Transcription.TwoPass = true },
 			func(p applyPlan) bool { return p.reloadEngines && !p.rebuildTray }},
 		{"GPU reloads engines", func(c *config.Config) { c.Transcription.GPUEnabled = true },
 			func(p applyPlan) bool { return p.reloadEngines }},

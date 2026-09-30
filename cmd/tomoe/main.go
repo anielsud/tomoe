@@ -370,11 +370,19 @@ var modelDownloadCmd = &cobra.Command{
 			return err
 		}
 
-		// Download multilingual models if enabled in config or explicitly requested
-		if !multilingual && config.Exists() {
-			cfg, err := config.Load(config.Path())
-			if err == nil && cfg.Multilingual.Enabled {
-				multilingual = true
+		// Download multilingual models if enabled in config or explicitly
+		// requested, and the streaming model if two-pass is on or
+		// --streaming asks for it.
+		streaming, _ := cmd.Flags().GetBool("streaming")
+		if config.Exists() {
+			if cfg, err := config.Load(config.Path()); err == nil {
+				multilingual = multilingual || cfg.Multilingual.Enabled
+				streaming = streaming || cfg.Transcription.TwoPass
+			}
+		}
+		if streaming {
+			if err := mgr.DownloadEnglishStreaming(force, cliDownloadProgress()); err != nil {
+				return err
 			}
 		}
 
@@ -392,6 +400,7 @@ var modelDownloadCmd = &cobra.Command{
 func init() {
 	modelDownloadCmd.Flags().Bool("force", false, "Force re-download even if models exist")
 	modelDownloadCmd.Flags().Bool("multilingual", false, "Download language identification and Bengali models (auto-detected from config)")
+	modelDownloadCmd.Flags().Bool("streaming", false, "Download the English streaming model two-pass uses (auto-detected from config)")
 }
 
 var modelStatusCmd = &cobra.Command{

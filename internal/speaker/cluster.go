@@ -21,18 +21,22 @@ const (
 	DecisionNewSpeaker   AssignDecision = "new-speaker"
 )
 
-// DefaultThreshold is the default cosine similarity threshold for
-// same-speaker assignment. Lowered from an original 0.65 to 0.55 after
-// live diagnostic logging against a real multi-participant call: across
-// ~20 real assignments, NOT ONE ever reached 0.65 (every continuation
-// relied on the sticky/short-segment fallbacks below), while
-// likely-same-person returns clustered around 0.59-0.68 and
-// likely-different-people clustered around 0.20-0.50 -- a real,
-// separable gap, just centered lower than the old threshold assumed.
-// 0.55 sits in that gap: comfortably above the "different person"
-// range, low enough to catch same-person returns on their own merits
-// instead of needing sticky/short-segment to rescue every one of them.
-const DefaultThreshold = 0.55
+// DefaultThreshold is the cosine similarity a fresh embedding needs
+// against an existing centroid for a confident match. 0.65, as on main:
+// defaults stay as they were until the alternatives are proven on real
+// recordings.
+//
+// ExperimentalThreshold (0.55) came from live diagnostic logging against a
+// real multi-participant call: across ~20 real assignments, none reached
+// 0.65 (every continuation relied on the sticky/short-segment fallbacks
+// below), while likely-same-person returns clustered around 0.59-0.68 and
+// likely-different-people around 0.20-0.50. 0.55 sits in that gap, so
+// same-person returns match on their own merits. One call's worth of data,
+// so it's opt-in (see ExperimentalTuning) rather than the default.
+const (
+	DefaultThreshold      = 0.65
+	ExperimentalThreshold = 0.55
+)
 
 // Tuning holds every clustering knob found to need real-world
 // retuning rather than a fixed-forever constant -- exposed as a
@@ -80,10 +84,26 @@ type Tuning struct {
 	ShortSegmentGraceWindow time.Duration
 }
 
-// DefaultTuning returns the tuning this package ships with.
+// DefaultTuning returns the tuning this package ships with: main's
+// clustering, with the sticky-speaker and short-segment rules off (a zero
+// margin and duration disable them). The windows are kept at
+// ExperimentalTuning's values so turning a rule on only needs its margin
+// or duration.
 func DefaultTuning() Tuning {
+	t := ExperimentalTuning()
+	t.Threshold = DefaultThreshold
+	t.StickyThresholdMargin = 0
+	t.MinAssignDuration = 0
+	return t
+}
+
+// ExperimentalTuning returns the tuning worked out from live meetings on
+// macOS: a lower threshold plus the sticky-speaker and short-segment rules.
+// Opt-in via config until it's proven on more recordings (see `tomoe
+// session replay`).
+func ExperimentalTuning() Tuning {
 	return Tuning{
-		Threshold:               DefaultThreshold,
+		Threshold:               ExperimentalThreshold,
 		StickyGraceWindow:       3 * time.Second,
 		StickyThresholdMargin:   0.15,
 		MinAssignDuration:       700 * time.Millisecond,
