@@ -61,6 +61,7 @@ func runDiarizeSession(sessID string, forceCPU bool) error {
 		Threshold:             1.1,
 		MergeThreshold:        0.55,
 		UseGPU:                useGPU,
+		SplitOnSpeakerChange:  cfg.Meeting.SplitOnSpeakerChange,
 	})
 	if err != nil {
 		return fmt.Errorf("diarization: %w", err)

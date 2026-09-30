@@ -114,10 +114,18 @@ type evalRun struct {
 	OverlapsLive  eval.OverlapScore  `json:"annotated_overlaps_live"`
 	OverlapsFinal *eval.OverlapScore `json:"annotated_overlaps_final,omitempty"`
 
+	// The final pass with lines split where diarization changes speaker
+	// mid-line (split_on_speaker_change).
+	SpeakersSplit    *eval.SpeakerScore  `json:"speakers_final_split,omitempty"`
+	WhoSaidWhatSplit *eval.ErrorCounts   `json:"who_said_what_final_split,omitempty"`
+	ExchangesSplit   *eval.ExchangeScore `json:"quick_exchanges_final_split,omitempty"`
+	OverlapsSplit    *eval.OverlapScore  `json:"annotated_overlaps_final_split,omitempty"`
+
 	Seconds float64 `json:"run_seconds"`
 
-	live, final []eval.Labeled
-	pass1       []eval.Labeled
+	segs               []session.Segment // the run's final segments, with word timings
+	live, final, split []eval.Labeled
+	pass1              []eval.Labeled
 }
 
 // evalReport is scores.json.
@@ -283,14 +291,16 @@ func runEval(opts evalOptions) error {
 		or := eval.ScoreAnnotatedOverlaps(ref, refined, sr.Mapping, 3)
 		report.OverlapsInitial, report.OverlapsRefined = &oi, &or
 		for _, run := range runs {
-			segs := make([]session.Segment, len(run.live))
-			for i, l := range run.live {
-				segs[i] = session.Segment{StartTime: l.Start, EndTime: l.End, Speaker: l.Speaker, Text: l.Text, Source: "monitor"}
-			}
+			segs := append([]session.Segment(nil), run.segs...)
 			session.RelabelByDiarization(segs, diar.Merged, diar.MergedMap)
-			for _, s := range segs {
-				run.final = append(run.final, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: s.Text})
-			}
+			run.final = segmentsLabeled(segs)
+			split, _ := session.SplitByDiarization(append([]session.Segment(nil), run.segs...), diar.Merged, diar.MergedMap)
+			run.split = segmentsLabeled(split)
+			ss := eval.ScoreSpeakers(ref, run.split, opts.collar)
+			ws := eval.SpeakerAttributedErrors(ref, run.split, ss.Mapping)
+			xs := eval.ScoreQuickExchanges(ref, run.split, ss.Mapping, 8, 6, 3)
+			ovs := eval.ScoreAnnotatedOverlaps(ref, run.split, ss.Mapping, 3)
+			run.SpeakersSplit, run.WhoSaidWhatSplit, run.ExchangesSplit, run.OverlapsSplit = &ss, &ws, &xs, &ovs
 			sf := eval.ScoreSpeakers(ref, run.final, opts.collar)
 			wf := eval.SpeakerAttributedErrors(ref, run.final, sf.Mapping)
 			xf := eval.ScoreQuickExchanges(ref, run.final, sf.Mapping, 8, 6, 3)
@@ -336,6 +346,8 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 		return err
 	}
 	run.Seconds = time.Since(began).Seconds()
+	run.segs = res.Segments
+	sort.SliceStable(run.segs, func(i, j int) bool { return run.segs[i].StartTime < run.segs[j].StartTime })
 	for _, s := range res.Segments {
 		run.live = append(run.live, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: s.Text})
 		if p1, ok := res.Pass1Text[s.ID]; ok {
@@ -419,6 +431,15 @@ func scoreRun(run *evalRun, ref *eval.Reference, refWords []string, collar float
 	run.OverlapsLive = eval.ScoreAnnotatedOverlaps(ref, run.live, run.SpeakersLive.Mapping, 3)
 }
 
+func segmentsLabeled(segs []session.Segment) []eval.Labeled {
+	out := make([]eval.Labeled, 0, len(segs))
+	for _, s := range segs {
+		out = append(out, eval.Labeled{Start: s.StartTime, End: s.EndTime, Speaker: s.Speaker, Text: s.Text})
+	}
+	sortLabeled(out)
+	return out
+}
+
 func labeledWords(ls []eval.Labeled) []string {
 	var w []string
 	for _, l := range ls {
@@ -484,9 +505,15 @@ func formatEvalReport(r *evalReport) string {
 			b.WriteString(speakerLine("refined diarization", r.DiarizationRefined))
 		}
 		b.WriteString(speakerLine("final transcript labels", run.SpeakersFinal))
+		if run.SpeakersSplit != nil {
+			b.WriteString(speakerLine("final, split at changes", run.SpeakersSplit))
+		}
 		fmt.Fprintf(&b, "Who said what      live %s", pct(run.WhoSaidWhatLive.Rate()))
 		if run.WhoSaidWhatFinal != nil {
 			fmt.Fprintf(&b, "   final %s", pct(run.WhoSaidWhatFinal.Rate()))
+		}
+		if run.WhoSaidWhatSplit != nil {
+			fmt.Fprintf(&b, "   split %s", pct(run.WhoSaidWhatSplit.Rate()))
 		}
 		fmt.Fprintln(&b, "   (word errors, a right word with the wrong speaker counts as wrong)")
 		x := run.ExchangesLive
@@ -494,12 +521,18 @@ func formatEvalReport(r *evalReport) string {
 		if run.ExchangesFinal != nil {
 			fmt.Fprintf(&b, "; final right speaker %d", run.ExchangesFinal.RightSpeaker)
 		}
+		if run.ExchangesSplit != nil {
+			fmt.Fprintf(&b, "; split right speaker %d", run.ExchangesSplit.RightSpeaker)
+		}
 		fmt.Fprintln(&b)
 		if run.OverlapsLive.Interjections > 0 {
 			o := run.OverlapsLive
 			fmt.Fprintf(&b, "Annotated overlap  %d interjections (%.0fs): transcribed live %d, right speaker live %d", o.Interjections, o.Seconds, o.Found, o.RightSpeaker)
 			if f := run.OverlapsFinal; f != nil {
 				fmt.Fprintf(&b, ", final %d", f.RightSpeaker)
+			}
+			if sp := run.OverlapsSplit; sp != nil {
+				fmt.Fprintf(&b, ", split %d", sp.RightSpeaker)
 			}
 			fmt.Fprintln(&b)
 			if r.OverlapsInitial != nil {
@@ -562,7 +595,7 @@ func writeEvalOutputs(dir string, r *evalReport, ref *eval.Reference, initial, r
 		}
 	}
 	for _, run := range r.Runs {
-		files := map[string][]eval.Labeled{"live": run.live, "final": run.final, "pass1": run.pass1}
+		files := map[string][]eval.Labeled{"live": run.live, "final": run.final, "split": run.split, "pass1": run.pass1}
 		for kind, ls := range files {
 			if len(ls) == 0 {
 				continue
@@ -580,6 +613,11 @@ func writeEvalOutputs(dir string, r *evalReport, ref *eval.Reference, initial, r
 		}
 		if err := write(run.Name+"-spotcheck.txt", formatSpotcheck(ref, labels, mapping)); err != nil {
 			return err
+		}
+		if run.SpeakersSplit != nil {
+			if err := write(run.Name+"-spotcheck-split.txt", formatSpotcheck(ref, run.split, run.SpeakersSplit.Mapping)); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

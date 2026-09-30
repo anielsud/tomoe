@@ -29,7 +29,11 @@ type DiarizeConfig struct {
 	MergeThreshold        float64 // cosine similarity threshold for post-merge (0 = disabled)
 	UseGPU                bool    // use CUDA execution provider if available
 	NumThreads            int     // CPU threads per model (0 = 4)
-	Verbose               bool
+	// SplitOnSpeakerChange splits a transcript line wherever diarization
+	// changes speaker mid-line (using the line's word timings), instead of
+	// giving the whole line one speaker. See SplitByDiarization.
+	SplitOnSpeakerChange bool
+	Verbose              bool
 }
 
 // DiarizeSegment represents a speaker-labeled segment from diarization.
@@ -281,6 +285,11 @@ func ReidentifyByDiarization(sess *Session, cfg DiarizeConfig) (int, error) {
 		return 0, nil
 	}
 
+	if cfg.SplitOnSpeakerChange {
+		var count int
+		sess.Segments, count = SplitByDiarization(sess.Segments, diarSegments, speakerMap)
+		return count, nil
+	}
 	return relabelByDiarization(sess.Segments, diarSegments, speakerMap, cfg.Verbose), nil
 }
 
@@ -313,7 +322,28 @@ var hintLabel = regexp.MustCompile(`^Person \d+ \((.+)\)$`)
 // different names, the one with the most speaking time wins (on a tie,
 // the longer name, so a full name beats a truncated read of it).
 func relabelByDiarization(segs []Segment, diar []DiarizeSegment, speakerMap map[int]string, verbose bool) int {
-	assigned := make([]int, len(segs))
+	assigned, labels := diarizationLabels(segs, diar, speakerMap)
+	count := 0
+	for i := range segs {
+		label, ok := labels[assigned[i]]
+		if assigned[i] < 0 || !ok {
+			continue
+		}
+		segs[i].Speaker = label
+		count++
+		if verbose {
+			fmt.Printf("  transcript seg %d [%.1fs-%.1fs] → %s\n", i, segs[i].StartTime, segs[i].EndTime, label)
+		}
+	}
+	return count
+}
+
+// diarizationLabels returns, for each segment, the diarization speaker it
+// overlaps most (-1 if none, or not diarizable), and each diarization
+// speaker's label: its "Person N", plus the video-hint name its segments
+// were live-labeled with for the most time, if any.
+func diarizationLabels(segs []Segment, diar []DiarizeSegment, speakerMap map[int]string) (assigned []int, labels map[int]string) {
+	assigned = make([]int, len(segs))
 	nameTime := make(map[int]map[string]float64)
 	for i, seg := range segs {
 		assigned[i] = -1
@@ -340,27 +370,14 @@ func relabelByDiarization(segs []Segment, diar []DiarizeSegment, speakerMap map[
 		}
 	}
 
-	labels := make(map[int]string, len(speakerMap))
+	labels = make(map[int]string, len(speakerMap))
 	for spk, label := range speakerMap {
 		if name := topName(nameTime[spk]); name != "" {
 			label = fmt.Sprintf("%s (%s)", label, name)
 		}
 		labels[spk] = label
 	}
-
-	count := 0
-	for i := range segs {
-		label, ok := labels[assigned[i]]
-		if assigned[i] < 0 || !ok {
-			continue
-		}
-		segs[i].Speaker = label
-		count++
-		if verbose {
-			fmt.Printf("  transcript seg %d [%.1fs-%.1fs] → %s\n", i, segs[i].StartTime, segs[i].EndTime, label)
-		}
-	}
-	return count
+	return assigned, labels
 }
 
 // topName returns the name with the most speaking time (ties: the longer

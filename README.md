@@ -132,6 +132,7 @@ sticky_grace_window = 3.0          # seconds a near-miss can still join the last
 sticky_threshold_margin = 0        # how near a near-miss must be; 0 = sticky rule off (experimental)
 min_assign_duration = 0            # segments shorter than this (s) join the last speaker; 0 = off (experimental)
 short_segment_grace_window = 15.0  # seconds after the last speaker that rule applies
+split_on_speaker_change = false    # after a meeting, split lines where the speaker changes mid-line (experimental)
 ```
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`
@@ -152,6 +153,7 @@ two_pass = true          # also downloads the English streaming model (~310MB)
 speaker_threshold = 0.55
 sticky_threshold_margin = 0.15
 min_assign_duration = 0.7
+split_on_speaker_change = true
 ```
 
 To see what they change on your own recordings, replay a saved session. It runs

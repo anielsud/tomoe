@@ -406,6 +406,7 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 		Source:    string(source),
 		Language:  result.Language,
 		Decision:  string(decision),
+		Words:     session.WordsFromTokens(result.Tokens, result.Timestamps, startTime, endTime),
 	}
 	select {
 	case c.segmentCh <- seg:
@@ -483,11 +484,13 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 
 	text := job.pass1Text
 	lang := "en"
+	var words []session.Word
 	if err == nil && result != nil && strings.TrimSpace(result.Text) != "" {
 		text = strings.TrimSpace(result.Text)
 		if result.Language != "" {
 			lang = result.Language
 		}
+		words = session.WordsFromTokens(result.Tokens, result.Timestamps, job.startTime, job.endTime)
 	}
 	if text == "" {
 		return session.Segment{}, false
@@ -506,6 +509,7 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 		Source:    string(job.source),
 		Language:  lang,
 		Decision:  string(decision),
+		Words:     words,
 	}, true
 }
 

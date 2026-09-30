@@ -178,6 +178,9 @@ func planApply(old, next *config.Config) applyPlan {
 	if old.Output != next.Output {
 		p.later = append(p.later, "Dictation output")
 	}
+	if old.Meeting.SplitOnSpeakerChange != next.Meeting.SplitOnSpeakerChange {
+		p.later = append(p.later, "Line splitting after the meeting")
+	}
 	if old.Meeting.VideoHintPollInterval != next.Meeting.VideoHintPollInterval ||
 		old.Meeting.VideoHintTriggerDebounce != next.Meeting.VideoHintTriggerDebounce {
 		p.later = append(p.later, "Video hint timing")
