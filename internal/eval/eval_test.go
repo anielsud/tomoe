@@ -66,7 +66,7 @@ func TestWords(t *testing.T) {
 	cases := map[string][]string{
 		"Hello, World!":           {"hello", "world"},
 		"It's 81% of 2.5 million": {"it's", "81", "percent", "of", "2.5", "million"},
-		"Q3 retro/Q4 dev-agent":   {"q3", "retro", "q4", "dev", "agent"},
+		"Q3 retro/Q4 dev-agent":   {"q", "3", "retro", "q", "4", "dev", "agent"},
 		"1,000 users. Then more":  {"1000", "users", "then", "more"},
 		"end.next":                {"end", "next"},
 	}
@@ -252,5 +252,47 @@ func TestReferenceSlice(t *testing.T) {
 	}
 	if !reflect.DeepEqual(s.Turns, want) {
 		t.Errorf("Slice(5, 30) =\n%+v\nwant\n%+v", s.Turns, want)
+	}
+}
+
+func TestWords_SpokenNumbersFillersAndOK(t *testing.T) {
+	cases := map[string]string{
+		"we shipped thirty three features":          "we shipped 33 features",
+		"Um, we hit eighty one percent":             "we hit 81 percent",
+		"over a hundred and thirty capabilities":    "over 130 capabilities",
+		"Q three retro, Q four":                     "q 3 retro q 4",
+		"twenty twenty six was two point five x":    "2026 was 2.5 x",
+		"the fifteenth and 15th":                    "the 15 and 15",
+		"three point two million, two thousand ten": "3.2 million 2010",
+		"a lot of work, uh, OK":                     "a lot of work okay",
+		"one two three":                             "1 2 3",
+		"first of all, a second":                    "first of all a second",
+		"six hundred sixty six customers":           "666 customers",
+		"nineteen ninety":                           "1990",
+	}
+	for in, want := range cases {
+		if got := strings.Join(Words(in), " "); got != want {
+			t.Errorf("Words(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+func TestWords_TeamsAndParakeetFormattingAgree(t *testing.T) {
+	// The same sentence as each system writes it: they must normalize to
+	// the same words, so formatting alone scores no errors.
+	pairs := [][2]string{
+		{"We shipped 33 features this past quarter. We hit 81% of our commits.",
+			"Um I don't know, we shipped thirty three features this past quarter. Um we hit eighty one percent of our commits."},
+		{"Q3 retro Q4 for experience optimization.", "Q three, retro, Q four, for experience optimization."},
+		{"exactly 666 customers", "exactly six hundred sixty six customers"},
+	}
+	for _, p := range pairs {
+		ref, hyp := Words(p[0]), Words(p[1])
+		// The hypothesis has extra words ("i don't know") in the first
+		// pair; only those may count.
+		e := Align(ref, hyp)
+		if e.Substitutions != 0 || e.Deletions != 0 {
+			t.Errorf("%q vs %q: %+v\nref %q\nhyp %q", p[0], p[1], e, ref, hyp)
+		}
 	}
 }
