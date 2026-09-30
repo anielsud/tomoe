@@ -145,7 +145,7 @@ func TestTrackerMultipleSpeakers(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 
 	tracker.Assign([]float32{1, 0, 0}, 2*time.Second) // Person 1
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 2, most recently assigned
@@ -166,7 +166,7 @@ func TestTrackerSetHintForRecent(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent_KeepsFullNameOverLaterTruncation(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 1
 
 	if ok := tracker.SetHintForRecent("Nazanin Ramezani", time.Minute); !ok {
@@ -187,7 +187,7 @@ func TestTrackerSetHintForRecent_KeepsFullNameOverLaterTruncation(t *testing.T) 
 }
 
 func TestTrackerSetHintForRecent_UpgradesTruncatedNameToFuller(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 1
 
 	tracker.SetHintForRecent("Nazanin Rame…", time.Minute)
@@ -203,7 +203,7 @@ func TestTrackerSetHintForRecent_UpgradesTruncatedNameToFuller(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent_UnrelatedNameOverwrites(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 1
 
 	tracker.SetHintForRecent("Nazanin Ramezani", time.Minute)
@@ -219,7 +219,7 @@ func TestTrackerSetHintForRecent_UnrelatedNameOverwrites(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent_TooOld(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	tracker.Assign([]float32{1, 0, 0}, 2*time.Second)
 
 	if ok := tracker.SetHintForRecent("Someone", -time.Second); ok {
@@ -228,7 +228,7 @@ func TestTrackerSetHintForRecent_TooOld(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent_NoSpeakersYet(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	if ok := tracker.SetHintForRecent("Someone", time.Minute); ok {
 		t.Error("SetHintForRecent() before any Assign = true, want false")
 	}
@@ -255,7 +255,7 @@ func (c *fakeClock) now() time.Time          { return c.t }
 func (c *fakeClock) advance(d time.Duration) { c.t = c.t.Add(d) }
 
 func TestTrackerStickySpeaker_AcceptsNearMissFromRecentSpeaker(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -280,7 +280,7 @@ func TestTrackerStickySpeaker_AcceptsNearMissFromRecentSpeaker(t *testing.T) {
 }
 
 func TestTrackerStickySpeaker_DoesNotApplyPastGraceWindow(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -295,7 +295,7 @@ func TestTrackerStickySpeaker_DoesNotApplyPastGraceWindow(t *testing.T) {
 }
 
 func TestTrackerStickySpeaker_DoesNotApplyToADifferentBestMatch(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -313,7 +313,7 @@ func TestTrackerStickySpeaker_DoesNotApplyToADifferentBestMatch(t *testing.T) {
 }
 
 func TestTrackerStickySpeaker_DoesNotPolluteCentroid(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -333,7 +333,7 @@ func TestTrackerStickySpeaker_DoesNotPolluteCentroid(t *testing.T) {
 }
 
 func TestTrackerShortSegment_DefaultsToLastSpeakerEvenOnPoorMatch(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -355,7 +355,7 @@ func TestTrackerShortSegment_DefaultsToLastSpeakerEvenOnPoorMatch(t *testing.T) 
 }
 
 func TestTrackerShortSegment_DoesNotApplyPastGraceWindow(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -369,7 +369,7 @@ func TestTrackerShortSegment_DoesNotApplyPastGraceWindow(t *testing.T) {
 }
 
 func TestTrackerShortSegment_NoPriorAssignmentStillCreatesNewSpeaker(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 
 	// The very first segment ever seen: there's no "last speaker" to
 	// default to, so a short/noisy embedding must still found a real
@@ -384,7 +384,7 @@ func TestTrackerShortSegment_NoPriorAssignmentStillCreatesNewSpeaker(t *testing.
 }
 
 func TestTrackerShortSegment_DoesNotPolluteCentroid(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -404,7 +404,7 @@ func TestTrackerShortSegment_DoesNotPolluteCentroid(t *testing.T) {
 }
 
 func TestTrackerShortSegment_PrefersABetterMatchingOtherSpeaker(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -432,7 +432,7 @@ func TestTrackerShortSegment_PrefersABetterMatchingOtherSpeaker(t *testing.T) {
 }
 
 func TestTrackerShortSegment_StillDefaultsToLastSpeakerWithoutABetterMatch(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -453,7 +453,7 @@ func TestTrackerShortSegment_StillDefaultsToLastSpeakerWithoutABetterMatch(t *te
 }
 
 func TestTrackerShortSegment_AtMinDurationBehavesAsNormal(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -462,14 +462,14 @@ func TestTrackerShortSegment_AtMinDurationBehavesAsNormal(t *testing.T) {
 	// Exactly at minAssignDuration (not below it) — the fallback must
 	// NOT apply; a poor match at this duration is a real new speaker.
 	clock.advance(time.Second)
-	label, _ := tracker.Assign([]float32{0, 0, 1, 0}, DefaultTuning().MinAssignDuration)
+	label, _ := tracker.Assign([]float32{0, 0, 1, 0}, ExperimentalTuning().MinAssignDuration)
 	if label != "Person 2" {
 		t.Errorf("poor match exactly at minAssignDuration label = %q, want %q (new speaker)", label, "Person 2")
 	}
 }
 
 func TestTrackerSetHintForRecent_MergesClustersOnMatchingHint(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -504,7 +504,7 @@ func TestTrackerSetHintForRecent_MergesClustersOnMatchingHint(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent_MergeKeepsMoreCompleteName(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -525,7 +525,7 @@ func TestTrackerSetHintForRecent_MergeKeepsMoreCompleteName(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent_DoesNotMergeUnrelatedNames(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -544,7 +544,7 @@ func TestTrackerSetHintForRecent_DoesNotMergeUnrelatedNames(t *testing.T) {
 }
 
 func TestTrackerSetHintForRecent_DoesNotMergeOnAmbiguousShortFragment(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -565,7 +565,7 @@ func TestTrackerSetHintForRecent_DoesNotMergeOnAmbiguousShortFragment(t *testing
 }
 
 func TestTrackerSetHintForRecent_MergeDoesNotRenumberUnrelatedClusters(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -635,7 +635,7 @@ func TestIsTruncationOf(t *testing.T) {
 
 func TestTrackerStickySpeaker_DisabledByZeroMargin(t *testing.T) {
 	for _, margin := range []float64{0, -0.1} {
-		tracker := NewTracker(0.8)
+		tracker := newRulesTracker(0.8)
 		tuning := tracker.Tuning()
 		tuning.StickyThresholdMargin = margin
 		tracker.SetTuning(tuning)
@@ -653,7 +653,7 @@ func TestTrackerStickySpeaker_DisabledByZeroMargin(t *testing.T) {
 
 func TestTrackerShortSegment_DisabledByZeroMinAssignDuration(t *testing.T) {
 	for _, minDur := range []time.Duration{0, -time.Second} {
-		tracker := NewTracker(0.8)
+		tracker := newRulesTracker(0.8)
 		tuning := tracker.Tuning()
 		tuning.MinAssignDuration = minDur
 		tracker.SetTuning(tuning)
@@ -672,7 +672,7 @@ func TestTrackerShortSegment_DisabledByZeroMinAssignDuration(t *testing.T) {
 }
 
 func TestTrackerStickySpeaker_CustomMargin(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	tuning := tracker.Tuning()
 	tuning.StickyThresholdMargin = 0.05 // tighter than the ~0.10 miss below
 	tracker.SetTuning(tuning)
@@ -688,7 +688,7 @@ func TestTrackerStickySpeaker_CustomMargin(t *testing.T) {
 }
 
 func TestTracker_LastDecision(t *testing.T) {
-	tracker := NewTracker(0.8)
+	tracker := newRulesTracker(0.8)
 	clock := &fakeClock{t: time.Now()}
 	tracker.nowFn = clock.now
 
@@ -705,5 +705,35 @@ func TestTracker_LastDecision(t *testing.T) {
 	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second)
 	if got := tracker.LastDecision(); got != DecisionConfident {
 		t.Errorf("LastDecision() = %q, want %q", got, DecisionConfident)
+	}
+}
+
+// newRulesTracker is NewTracker with the sticky-speaker and short-segment
+// rules turned on at ExperimentalTuning's values: they're off by default
+// (see DefaultTuning), and these tests exercise them.
+func newRulesTracker(threshold float64) *Tracker {
+	t := NewTracker(threshold)
+	tuning := t.Tuning()
+	exp := ExperimentalTuning()
+	tuning.StickyThresholdMargin = exp.StickyThresholdMargin
+	tuning.MinAssignDuration = exp.MinAssignDuration
+	t.SetTuning(tuning)
+	return t
+}
+
+func TestDefaultTuning_MatchesMain(t *testing.T) {
+	d := DefaultTuning()
+	if d.Threshold != 0.65 || d.StickyThresholdMargin != 0 || d.MinAssignDuration != 0 {
+		t.Errorf("DefaultTuning = %+v, want main's clustering: threshold 0.65, sticky and short-segment rules off", d)
+	}
+	// With both rules off, a near-miss and a short segment are new
+	// speakers, exactly as on main.
+	tr := NewTracker(0)
+	clock := &fakeClock{t: time.Now()}
+	tr.nowFn = clock.now
+	tr.Assign([]float32{1, 0, 0, 0}, 2*time.Second)
+	clock.advance(500 * time.Millisecond)
+	if label, _ := tr.Assign([]float32{0.6, 0.8, 0, 0}, 100*time.Millisecond); label != "Person 2" {
+		t.Errorf("short near-miss with default tuning = %q, want Person 2", label)
 	}
 }

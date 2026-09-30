@@ -163,16 +163,17 @@ export default function SettingsPanel() {
     set('Multilingual', 'Languages', LANGUAGES.map(l => l.code).filter(c => next.includes(c)));
   }
 
-  // The speaker settings as they were before the macOS port (see the README's
-  // "Restoring the pre-macOS-port pipeline").
-  function usePrePortSpeakers() {
+  // The pipeline presets (see the README's "Trying the experimental
+  // pipeline"): the defaults, which match how Tomoe has always behaved, and
+  // the experimental two-pass + clustering rules tuned on live meetings.
+  function usePreset(experimental: boolean) {
     setDraft(d => {
       if (!d) return d;
       const next = clone(d);
-      next.Transcription.TwoPass = false;
-      next.Meeting.SpeakerThreshold = 0.65;
-      next.Meeting.StickyThresholdMargin = 0;
-      next.Meeting.MinAssignDuration = 0;
+      next.Transcription.TwoPass = experimental;
+      next.Meeting.SpeakerThreshold = experimental ? 0.55 : 0.65;
+      next.Meeting.StickyThresholdMargin = experimental ? 0.15 : 0;
+      next.Meeting.MinAssignDuration = experimental ? 0.7 : 0;
       return next;
     });
     setResult(null);
@@ -289,7 +290,12 @@ export default function SettingsPanel() {
         <Group
           title="Meeting speakers"
           applies="now"
-          action={<button className="btn btn-secondary btn-sm" onClick={usePrePortSpeakers} title="Two-pass off, threshold 0.65, sticky and short-segment rules off">Use pre-port behavior</button>}
+          action={
+            <>
+              <button className="btn btn-secondary btn-sm" onClick={() => usePreset(false)} title="Two-pass off, threshold 0.65, sticky and short-segment rules off">Defaults</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => usePreset(true)} title="Two-pass on, threshold 0.55, sticky and short-segment rules on">Try experimental</button>
+            </>
+          }
         >
           {!mac && <Row label="Auto-detect meetings" hint="Start recording when a call starts">{toggle('Meeting', 'AutoDetect')}</Row>}
           <Row label="Speaker match threshold" hint="Higher splits voices into more speakers (0–1)">{num('Meeting', 'SpeakerThreshold', 0.01)}</Row>

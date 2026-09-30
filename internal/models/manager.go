@@ -254,27 +254,31 @@ func (m *Manager) Download(force bool, onProgress ProgressFunc) error {
 		fmt.Println("Pyannote segmentation model already present, skipping.")
 	}
 
-	// Download English streaming Zipformer (realtime pass). Not required
-	// for Ready() below — a failure here is logged but non-fatal, since
-	// the live pipeline already falls back gracefully without it.
-	if force || !status.EnglishStreamingReady {
-		fmt.Println("Downloading English streaming Zipformer model (realtime transcription pass)...")
-		if err := m.downloadAndExtractArchive(EnglishStreamingArchiveURL, "English Streaming Zipformer", onProgress); err != nil {
-			fmt.Printf("Warning: failed to download English streaming model: %v (live transcription will fall back to non-realtime mode)\n", err)
-		} else {
-			pruneEnglishStreaming(filepath.Join(m.modelDir, EnglishStreamingSubdir))
-			fmt.Println("English streaming Zipformer model downloaded and extracted.")
-		}
-	} else {
-		fmt.Println("English streaming Zipformer model already present, skipping.")
-	}
-
 	// Verify
 	final := m.Check()
 	if !final.Ready() {
 		return fmt.Errorf("model verification failed after download")
 	}
 
+	return nil
+}
+
+// DownloadEnglishStreaming downloads the English streaming Zipformer used
+// by two-pass transcription's realtime pass. It isn't part of Download:
+// two-pass is off by default, so callers fetch it only when it's enabled
+// (see config.TranscriptionConfig.TwoPass). If force is true, it's
+// re-downloaded even if present.
+func (m *Manager) DownloadEnglishStreaming(force bool, onProgress ProgressFunc) error {
+	if !force && m.Check().EnglishStreamingReady {
+		fmt.Println("English streaming Zipformer model already present, skipping.")
+		return nil
+	}
+	fmt.Println("Downloading English streaming Zipformer model (realtime transcription pass)...")
+	if err := m.downloadAndExtractArchive(EnglishStreamingArchiveURL, "English Streaming Zipformer", onProgress); err != nil {
+		return fmt.Errorf("downloading English streaming model: %w", err)
+	}
+	pruneEnglishStreaming(filepath.Join(m.modelDir, EnglishStreamingSubdir))
+	fmt.Println("English streaming Zipformer model downloaded and extracted.")
 	return nil
 }
 

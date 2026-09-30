@@ -30,7 +30,7 @@ var sessionReplayCmd = &cobra.Command{
 twice and compares the results:
 
   main     single-pass, no sticky-speaker or short-segment rules
-           (how the pipeline behaved before the macOS port)
+           (the defaults, and how the pipeline has always behaved)
   current  your config.toml as it is now
 
 Both runs use your speaker_threshold unless --main-threshold is given, so

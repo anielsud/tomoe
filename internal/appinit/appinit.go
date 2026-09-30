@@ -62,6 +62,13 @@ func EnsureInitialized(onProgress models.ProgressFunc) (*Result, error) {
 	if err := mgr.Download(false, onProgress); err != nil {
 		return nil, fmt.Errorf("downloading models: %w", err)
 	}
+	// Only two-pass uses the streaming model, and it's off by default.
+	// Not fatal: sessions fall back to single-pass without it.
+	if cfg.Transcription.TwoPass {
+		if err := mgr.DownloadEnglishStreaming(false, onProgress); err != nil {
+			fmt.Printf("Warning: %v (live transcription will use single-pass mode)\n", err)
+		}
+	}
 
 	return &Result{Config: cfg, GPU: gpuInfo, ModelStatus: mgr.Check()}, nil
 }

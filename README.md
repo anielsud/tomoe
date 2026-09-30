@@ -75,7 +75,7 @@ tomoe model download --multilingual   # Download base + Bengali models
 tomoe model status                    # Show model info + integrity check
 tomoe session list                    # List all saved sessions
 tomoe session re-transcribe <id>      # Re-process a session's audio (re-identify speakers)
-tomoe session replay <id>             # Compare the pre-port pipeline with your config on a session's audio
+tomoe session replay <id>             # Compare the default pipeline with your config on a session's audio
 tomoe devices                         # List audio input devices
 tomoe config                          # Print current config
 ```
@@ -108,7 +108,7 @@ decoding_method = 'greedy_search'  # or 'modified_beam_search' for hotwords
 hotwords_file = ''                 # path to hotwords.txt (one word/phrase per line)
 hotwords_score = 1.5               # boost score for hotwords
 max_active_paths = 4               # beam width for modified_beam_search
-two_pass = true                    # English meetings: live streaming text, refined per utterance
+two_pass = false                   # English meetings: live streaming text, refined per utterance (experimental)
 
 [multilingual]
 enabled = false
@@ -123,40 +123,40 @@ silence_timeout = 5.0
 [meeting]
 default_sources = 'both'
 monitor_device = ''       # '' = default monitor source, 'none' = mic only
-speaker_threshold = 0.55           # cosine similarity for a confident speaker match
+speaker_threshold = 0.65           # cosine similarity for a confident speaker match
 max_speech_duration = 30.0
 min_silence_duration = 0.5
 auto_save = true
 auto_detect = true
 sticky_grace_window = 3.0          # seconds a near-miss can still join the last speaker
-sticky_threshold_margin = 0.15     # how near a near-miss must be; 0 = sticky rule off
-min_assign_duration = 0.7          # segments shorter than this (s) join the last speaker; 0 = off
+sticky_threshold_margin = 0        # how near a near-miss must be; 0 = sticky rule off (experimental)
+min_assign_duration = 0            # segments shorter than this (s) join the last speaker; 0 = off (experimental)
 short_segment_grace_window = 15.0  # seconds after the last speaker that rule applies
 ```
 
-Settings missing from your `config.toml` take the defaults above, so an existing
-config picks up new settings automatically when you upgrade. The `[meeting]`
-speaker settings are reloaded while Tomoe runs; no restart needed.
+Settings missing from your `config.toml` take the defaults above. The `[meeting]`
+speaker settings are reloaded while Tomoe runs; no restart needed. Everything can
+also be changed from the GUI's Settings page.
 
-### Restoring the pre-macOS-port pipeline
+### Trying the experimental pipeline
 
-The macOS port turned on two-pass transcription and two speaker-clustering rules
-(sticky speaker, short segments), and lowered the default `speaker_threshold`
-from 0.65 to 0.55. To get the previous behavior back exactly:
+Two-pass transcription and two speaker-clustering rules (sticky speaker, short
+segments) came out of the macOS port. They're off by default, so the pipeline
+behaves as it always has, until they're proven on real recordings. To try them:
 
 ```toml
 [transcription]
-two_pass = false
+two_pass = true          # also downloads the English streaming model (~310MB)
 
 [meeting]
-speaker_threshold = 0.65
-sticky_threshold_margin = 0
-min_assign_duration = 0
+speaker_threshold = 0.55
+sticky_threshold_margin = 0.15
+min_assign_duration = 0.7
 ```
 
-To see what these settings change on your own recordings, replay a saved session.
-It runs the audio through the pipeline once as it behaved before and once with
-your current config, then writes both transcripts for diffing:
+To see what they change on your own recordings, replay a saved session. It runs
+the audio through the pipeline once with the defaults and once with your current
+config, then writes both transcripts for diffing:
 
 ```bash
 tomoe session replay <session-id>
