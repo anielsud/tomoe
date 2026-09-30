@@ -14,3 +14,9 @@ func StartTrayAsync(app *App) {
 // separate external-loop teardown step to run (that's a darwin-only
 // concern — see tray_start_darwin.go).
 func StopTray() {}
+
+// onTrayThread runs fn directly: AppIndicator3 has no main-thread
+// requirement (see StartTrayAsync).
+func onTrayThread(fn func()) {
+	fn()
+}

@@ -34,19 +34,30 @@ type App struct {
 	ctx context.Context
 	cfg *config.Config
 
-	engines     *transcribe.EngineSet
-	embedder    *speaker.Embedder
+	// bundle holds the transcription/streaming engines, speaker
+	// embedder and model manager (see engineBundle). Guarded by mu:
+	// reloadEngines swaps it when settings change.
+	bundle      engineBundle
 	tracker     *speaker.Tracker
 	coordinator *live.Coordinator
 	store       *session.Store
-	modelMgr    *models.Manager
 	detector    *meeting.Detector
-	// streamingEngine powers live transcription's realtime ("pass 1")
-	// pass; nil if the English streaming model isn't downloaded, in
-	// which case sessions fall back to today's single-pass behavior.
-	// English-only today, so only wired into live.Config when the
-	// selected session language is "en" — see StartSession.
-	streamingEngine transcribe.StreamingEngine
+	// unregisterHotkeys stops the hotkey listen loops and releases their
+	// bindings (see registerHotkeys). Guarded by mu.
+	unregisterHotkeys func()
+
+	// engineLeases counts decoding jobs using the current bundle (see
+	// leaseEnginesLocked), and reconfiguring is set while ApplySettings
+	// swaps it; together they keep a bundle from being closed while
+	// anything still decodes with it. Both guarded by mu.
+	engineLeases  int
+	reconfiguring bool
+	// sessionRelease ends the current recording's engine lease; it moves
+	// to the session's saveRequest on stop, since pass-2 refinement keeps
+	// decoding until the save has its last segment.
+	sessionRelease func()
+	// dictRelease ends the current dictation's engine lease.
+	dictRelease func()
 
 	mu              sync.Mutex
 	recording       bool // meeting recording in progress
@@ -107,6 +118,7 @@ type saveRequest struct {
 	sess         *session.Session
 	coordinator  *live.Coordinator
 	segmentsDone <-chan struct{} // see App.segmentsDone
+	release      func()          // ends the session's engine lease; see App.sessionRelease
 }
 
 const saveQueueDepth = 16
@@ -207,16 +219,70 @@ func (a *App) InitStatus() InitStatusView {
 //
 // Everything is built into local variables first and only assigned onto
 // the App struct under a.mu right before StartTrayAsync/registerHotkeys
-// -- StartSession and others read a.engines/a.modelMgr/a.embedder/
-// a.tracker under that same lock, and runInit now runs this from its own
-// goroutine rather than Startup's, so (unlike when this all ran inline
+// -- StartSession and others read a.bundle and a.tracker under that
+// same lock, and runInit now runs this from its own goroutine rather
+// than Startup's, so (unlike when this all ran inline
 // in Startup, before anything else could call in) these writes are no
 // longer implicitly ordered before a bound method could observe them.
 func (a *App) setupEngines(ctx context.Context, cfg *config.Config, status *models.Status) {
-	modelMgr := models.NewManager(cfg.Transcription.ModelPath)
+	bundle := buildEngines(cfg, status)
+
+	// The tracker doesn't depend on any model, so it's created even
+	// without the speaker embedding model (Assign is simply never called
+	// then) and survives engine reloads with its tuning intact.
+	tracker := speaker.NewTracker(speaker.DefaultThreshold)
+	tracker.SetTuning(tuningFromConfig(cfg))
+
+	// Watch config.toml so clustering tuning can be retuned live -- no
+	// rebuild, no relaunch. See MeetingConfig's doc comment for why this
+	// exists. tracker has its own internal lock (see speaker.Tracker), so
+	// this closure needs no synchronization against a.mu of its own.
+	configWatchStop := config.Watch(config.Path(), 2*time.Second, func(newCfg *config.Config) {
+		tracker.SetTuning(tuningFromConfig(newCfg))
+		fmt.Printf("config: reloaded speaker clustering tuning: %+v\n", tracker.Tuning())
+	})
+
+	detector := startDetector(ctx, cfg)
+
+	a.mu.Lock()
+	a.bundle = bundle
+	a.tracker = tracker
+	a.configWatchStop = configWatchStop
+	a.detector = detector
+	a.mu.Unlock()
+
+	// Start system tray (after engines are loaded so language menus are correct)
+	StartTrayAsync(a)
+
+	// Register meeting hotkey
+	if err := a.registerHotkeys(); err != nil {
+		// Non-fatal — hotkey may not be available in all environments
+		fmt.Printf("Warning: could not register meeting hotkey: %v\n", err)
+	}
+}
+
+// engineBundle is everything built from the config and the downloaded
+// models that sessions decode with. Rebuilt as a unit when a settings
+// change needs it (see reloadEngines).
+type engineBundle struct {
+	modelMgr *models.Manager
+	engines  *transcribe.EngineSet
+	// streamingEngine powers live transcription's realtime ("pass 1")
+	// pass; nil if the English streaming model isn't downloaded or
+	// two_pass is off, in which case sessions fall back to single-pass.
+	// English-only today, so only wired into live.Config when the
+	// selected session language is "en" — see StartSession.
+	streamingEngine transcribe.StreamingEngine
+	embedder        *speaker.Embedder
+}
+
+// buildEngines builds an engineBundle for cfg. Anything whose models
+// aren't downloaded (or fail to load) is left nil; callers already treat
+// each piece as optional except engines, which StartSession requires.
+func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
+	b := engineBundle{modelMgr: models.NewManager(cfg.Transcription.ModelPath)}
 
 	// Create transcription engine if models are ready
-	var engines *transcribe.EngineSet
 	if status.Ready() {
 		built, err := transcribe.NewEngineSetFromConfig(transcribe.Config{
 			EncoderPath:    status.EncoderPath,
@@ -231,7 +297,9 @@ func (a *App) setupEngines(ctx context.Context, cfg *config.Config, status *mode
 			HotwordsScore:  cfg.Transcription.HotwordsScore,
 		}, status, &cfg.Multilingual)
 		if err == nil {
-			engines = built
+			b.engines = built
+		} else {
+			fmt.Printf("Warning: failed to create transcription engine: %v\n", err)
 		}
 	}
 
@@ -239,7 +307,6 @@ func (a *App) setupEngines(ctx context.Context, cfg *config.Config, status *mode
 	// model is available (see internal/live's two-pass pipeline). Not
 	// required for anything else to work — sessions just fall back to
 	// single-pass without it.
-	var streamingEngine transcribe.StreamingEngine
 	if status.EnglishStreamingReady && cfg.Transcription.TwoPass {
 		built, err := transcribe.NewStreamingEngine(transcribe.StreamingConfig{
 			EncoderPath: status.EnglishStreamingEncoderPath,
@@ -248,80 +315,61 @@ func (a *App) setupEngines(ctx context.Context, cfg *config.Config, status *mode
 			TokensPath:  status.EnglishStreamingTokensPath,
 		})
 		if err == nil {
-			streamingEngine = built
+			b.streamingEngine = built
 		} else {
 			fmt.Printf("Warning: failed to load English streaming model: %v (live transcription will use single-pass mode)\n", err)
 		}
 	}
 
 	// Create speaker embedder if available
-	var embedder *speaker.Embedder
-	var tracker *speaker.Tracker
-	var configWatchStop func()
 	if status.SpeakerEmbeddingReady {
 		built, err := speaker.NewEmbedder(status.SpeakerEmbeddingPath)
 		if err == nil {
-			embedder = built
-			threshold := speaker.DefaultThreshold
-			if cfg.Meeting.SpeakerThreshold > 0 {
-				threshold = cfg.Meeting.SpeakerThreshold
-			}
-			tracker = speaker.NewTracker(threshold)
-			tracker.SetTuning(speaker.TuningFromSeconds(
-				cfg.Meeting.SpeakerThreshold,
-				cfg.Meeting.StickyGraceWindow,
-				cfg.Meeting.StickyThresholdMargin,
-				cfg.Meeting.MinAssignDuration,
-				cfg.Meeting.ShortSegmentGraceWindow,
-			))
-
-			// Watch config.toml so clustering tuning can be retuned
-			// live -- no rebuild, no relaunch. See MeetingConfig's doc
-			// comment for why this exists. tracker has its own internal
-			// lock (see speaker.Tracker), so this closure needs no
-			// synchronization against a.mu of its own.
-			configWatchStop = config.Watch(config.Path(), 2*time.Second, func(newCfg *config.Config) {
-				tracker.SetTuning(speaker.TuningFromSeconds(
-					newCfg.Meeting.SpeakerThreshold,
-					newCfg.Meeting.StickyGraceWindow,
-					newCfg.Meeting.StickyThresholdMargin,
-					newCfg.Meeting.MinAssignDuration,
-					newCfg.Meeting.ShortSegmentGraceWindow,
-				))
-				fmt.Printf("config: reloaded speaker clustering tuning: %+v\n", tracker.Tuning())
-			})
-		}
-	}
-
-	// Start meeting auto-detector if enabled
-	var detector *meeting.Detector
-	if cfg.Meeting.AutoDetect {
-		built := meeting.NewDetector()
-		if err := built.Start(ctx); err != nil {
-			fmt.Printf("Warning: meeting auto-detect unavailable: %v\n", err)
+			b.embedder = built
 		} else {
-			detector = built
+			fmt.Printf("Warning: failed to load speaker embedding model: %v\n", err)
 		}
 	}
+	return b
+}
 
-	a.mu.Lock()
-	a.modelMgr = modelMgr
-	a.engines = engines
-	a.streamingEngine = streamingEngine
-	a.embedder = embedder
-	a.tracker = tracker
-	a.configWatchStop = configWatchStop
-	a.detector = detector
-	a.mu.Unlock()
-
-	// Start system tray (after engines are loaded so language menus are correct)
-	StartTrayAsync(a)
-
-	// Register meeting hotkey
-	if err := a.registerHotkeys(); err != nil {
-		// Non-fatal — hotkey may not be available in all environments
-		fmt.Printf("Warning: could not register meeting hotkey: %v\n", err)
+// close releases everything in the bundle. Only safe once nothing can
+// still be decoding with it (see reloadEngines and Shutdown).
+func (b engineBundle) close() {
+	if b.engines != nil {
+		b.engines.Close()
 	}
+	if b.streamingEngine != nil {
+		b.streamingEngine.Close()
+	}
+	if b.embedder != nil {
+		b.embedder.Close()
+	}
+}
+
+// tuningFromConfig is the speaker clustering tuning cfg asks for.
+func tuningFromConfig(cfg *config.Config) speaker.Tuning {
+	return speaker.TuningFromSeconds(
+		cfg.Meeting.SpeakerThreshold,
+		cfg.Meeting.StickyGraceWindow,
+		cfg.Meeting.StickyThresholdMargin,
+		cfg.Meeting.MinAssignDuration,
+		cfg.Meeting.ShortSegmentGraceWindow,
+	)
+}
+
+// startDetector starts the meeting auto-detector if cfg enables it, or
+// returns nil (also when it's unavailable on this system).
+func startDetector(ctx context.Context, cfg *config.Config) *meeting.Detector {
+	if !cfg.Meeting.AutoDetect {
+		return nil
+	}
+	d := meeting.NewDetector()
+	if err := d.Start(ctx); err != nil {
+		fmt.Printf("Warning: meeting auto-detect unavailable: %v\n", err)
+		return nil
+	}
+	return d
 }
 
 // Shutdown is called by Wails when the application is closing.
@@ -367,15 +415,11 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.saveQueue = nil
 	}
 
-	if a.engines != nil {
-		a.engines.Close()
-	}
-	if a.embedder != nil {
-		a.embedder.Close()
-	}
-	if a.streamingEngine != nil {
-		a.streamingEngine.Close()
-	}
+	a.mu.Lock()
+	bundle := a.bundle
+	a.bundle = engineBundle{}
+	a.mu.Unlock()
+	bundle.close()
 }
 
 // BeforeClose is called before the window closes. Returns true to prevent closing.
@@ -473,19 +517,26 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		return fmt.Errorf("session already in progress")
 	}
 
-	if a.engines == nil {
-		return fmt.Errorf("transcription engine not initialized (models may not be downloaded)")
+	bundle, release, err := a.leaseEnginesLocked()
+	if err != nil {
+		return err
 	}
+	started := false
+	defer func() {
+		if !started {
+			release()
+		}
+	}()
 
 	if lang == "" {
-		lang = a.engines.DefaultLang()
+		lang = bundle.engines.DefaultLang()
 	}
 
-	status := a.modelMgr.Check()
+	status := bundle.modelMgr.Check()
 
 	cfg := live.Config{
-		Engine:            a.engines.Get(lang),
-		Embedder:          a.embedder,
+		Engine:            bundle.engines.Get(lang),
+		Embedder:          bundle.embedder,
 		Tracker:           a.tracker,
 		VADPath:           status.VADPath,
 		SegmentBufferSize: 64,
@@ -493,7 +544,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	// Realtime pass is English-only (see internal/transcribe's
 	// StreamingEngine); other languages keep today's single-pass path.
 	if lang == "en" {
-		cfg.StreamingEngine = a.streamingEngine
+		cfg.StreamingEngine = bundle.streamingEngine
 	}
 
 	// Set up mic capturer
@@ -565,6 +616,8 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 
 	a.coordinator = coordinator
 	a.recording = true
+	started = true
+	a.sessionRelease = release
 
 	// Screen-based speaker-label hints (macOS only; no-op on Linux —
 	// see internal/videohint). Its own context, not the app-lifetime
@@ -606,6 +659,8 @@ func (a *App) StopSession() (*session.Session, error) {
 	sess := a.currentSess
 	videoHintCancel := a.videoHintCancel
 	segmentsDone := a.segmentsDone
+	release := a.sessionRelease
+	a.sessionRelease = nil
 	a.recording = false
 	a.currentSess = nil
 	a.coordinator = nil
@@ -629,7 +684,7 @@ func (a *App) StopSession() (*session.Session, error) {
 
 	// Hand off to the serial save worker so the next StartSession can
 	// proceed immediately while encoding + diarization run in the background.
-	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator, segmentsDone: segmentsDone}
+	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator, segmentsDone: segmentsDone, release: release}
 
 	return sess, nil
 }
@@ -649,6 +704,9 @@ func (a *App) saveWorker() {
 func (a *App) persistSession(req *saveRequest) {
 	sess := req.sess
 	coordinator := req.coordinator
+	if req.release != nil {
+		defer req.release()
+	}
 
 	// Pass-2 refinements still queued at stop keep arriving after
 	// StopSession returns; save only once they have all been applied, so
@@ -690,7 +748,7 @@ func (a *App) persistSession(req *saveRequest) {
 	// session.json with refined labels. We don't reload here because
 	// the frontend will re-fetch via LoadSession on the session:saved
 	// event below.
-	if a.modelMgr != nil && a.modelMgr.Check().DiarizationReady() {
+	if a.bundle.modelMgr != nil && a.bundle.modelMgr.Check().DiarizationReady() {
 		if err := session.RunDiarizeWithRetry(sess.ID, nil); err != nil {
 			fmt.Printf("Warning: diarization failed (session saved without refinement): %v\n", err)
 		}
@@ -786,7 +844,7 @@ func (a *App) GetGPUInfo() *gpu.Info {
 // GetModelStatus returns the model download status.
 func (a *App) GetModelStatus() *models.Status {
 	a.fixSignals()
-	return a.modelMgr.Check()
+	return a.bundle.modelMgr.Check()
 }
 
 // IsRecording returns whether a session is currently recording.
@@ -811,10 +869,10 @@ func (a *App) GetAvailableLanguages() []string {
 // GetDefaultLanguage returns the default language code.
 func (a *App) GetDefaultLanguage() string {
 	a.fixSignals()
-	if a.engines == nil {
+	if a.bundle.engines == nil {
 		return "en"
 	}
-	return a.engines.DefaultLang()
+	return a.bundle.engines.DefaultLang()
 }
 
 // RetranscribeSession re-transcribes a saved session's audio with a different language.
@@ -824,9 +882,18 @@ func (a *App) RetranscribeSession(id, lang string) error {
 	if a.store == nil {
 		return fmt.Errorf("session store not initialized")
 	}
-	if a.engines == nil {
-		return fmt.Errorf("transcription engine not initialized")
+	a.mu.Lock()
+	bundle, release, err := a.leaseEnginesLocked()
+	a.mu.Unlock()
+	if err != nil {
+		return err
 	}
+	leased := false
+	defer func() {
+		if !leased {
+			release()
+		}
+	}()
 
 	sess, err := a.store.Load(id)
 	if err != nil {
@@ -836,9 +903,11 @@ func (a *App) RetranscribeSession(id, lang string) error {
 		return fmt.Errorf("session has no saved audio")
 	}
 
-	engine := a.engines.Get(lang)
+	engine := bundle.engines.Get(lang)
 
+	leased = true
 	go func() {
+		defer release()
 		// Decode audio to PCM float32
 		samples, err := session.DecodeToFloat32(sess.AudioPath)
 		if err != nil {
@@ -887,4 +956,30 @@ type bytesWriter struct {
 func (w *bytesWriter) Write(p []byte) (n int, err error) {
 	*w.buf = append(*w.buf, p...)
 	return len(p), nil
+}
+
+// errApplyingSettings is returned while ApplySettings reloads the engines.
+var errApplyingSettings = fmt.Errorf("settings are being applied; try again in a moment")
+
+// leaseEnginesLocked returns the current engine bundle for one decoding
+// job (a recording, dictation, save or re-transcription) and counts it as
+// in use until release is called; reloadEngines won't swap the bundle
+// while any lease is out. release is safe to call more than once. Caller
+// must hold a.mu.
+func (a *App) leaseEnginesLocked() (bundle engineBundle, release func(), err error) {
+	if a.reconfiguring {
+		return engineBundle{}, nil, errApplyingSettings
+	}
+	if a.bundle.engines == nil {
+		return engineBundle{}, nil, fmt.Errorf("transcription engine not initialized (models may not be downloaded; see Tools)")
+	}
+	a.engineLeases++
+	var once sync.Once
+	return a.bundle, func() {
+		once.Do(func() {
+			a.mu.Lock()
+			a.engineLeases--
+			a.mu.Unlock()
+		})
+	}, nil
 }

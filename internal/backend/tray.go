@@ -27,7 +27,12 @@ func onTrayReady(app *App) {
 	systray.SetTitle("Tomoe")
 	systray.SetTooltip("Tomoe — Ready")
 	systray.SetIcon(trayIcon)
+	buildTrayMenu(app)
+}
 
+// buildTrayMenu creates the tray's menu items from the app's current
+// language settings. Runs on the tray's thread (see onTrayThread).
+func buildTrayMenu(app *App) {
 	tm := &trayManager{app: app}
 	app.tray = tm
 
@@ -199,4 +204,17 @@ func (tm *trayManager) setMeetingRecording() {
 	if tm.mDictation != nil {
 		tm.mDictation.Hide()
 	}
+}
+
+// rebuildTrayMenu replaces the tray menu, for when settings change the
+// languages it offers. The old items' click goroutines are left blocked on
+// channels that no longer receive clicks.
+func (a *App) rebuildTrayMenu() {
+	if a.tray == nil {
+		return // tray never started
+	}
+	onTrayThread(func() {
+		systray.ResetMenu()
+		buildTrayMenu(a)
+	})
 }
