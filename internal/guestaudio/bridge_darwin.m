@@ -31,6 +31,7 @@
 #import <AppKit/AppKit.h>
 #import <CoreMedia/CoreMedia.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
+#import <objc/runtime.h>
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
@@ -164,6 +165,12 @@ static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handl
   output.goHandle = go_handle;
 
   SCStream *stream = [[SCStream alloc] initWithFilter:filter configuration:config delegate:output];
+  // SCStream holds its delegate and stream outputs weakly, so nothing
+  // else keeps `output` alive once this function returns. Tie it to the
+  // stream's own lifetime; otherwise ARC frees it and callbacks stop after
+  // the first buffer (seen live: 20ms of guest audio per session).
+  static char kOutputKey;
+  objc_setAssociatedObject(stream, &kOutputKey, output, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
 
   NSError *addErr = nil;
   BOOL ok = [stream addStreamOutput:output
@@ -188,10 +195,10 @@ static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handl
     return NULL;
   }
 
-  // `stream` retains `output` for as long as it's a registered stream
-  // output (SCStream's own documented behavior) -- CFBridgingRetain here
-  // hands the *stream* reference to Go/C as a manually-managed pointer;
-  // Go must call guestaudio_stop_tap exactly once to balance it.
+  // `output` lives as long as `stream` (associated object above).
+  // CFBridgingRetain hands the stream reference to Go/C as a
+  // manually-managed pointer; Go must call guestaudio_stop_tap exactly
+  // once to balance it.
   return (void *)CFBridgingRetain(stream);
 }
 
