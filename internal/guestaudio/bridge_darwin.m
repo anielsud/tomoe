@@ -16,6 +16,18 @@
 //      out-parameter-to-tuple bridging convention silently discarding
 //      every real buffer, which has no equivalent failure mode when
 //      calling the real C ABI directly, as cgo does.
+
+// This file relies on ARC: objects assigned to __block variables inside
+// completion handlers (targetWindow, targetDisplay, startErr) must be
+// retained past the handler, and CFBridgingRetain/Release assume it. It
+// was once compiled without ARC by mistake, which freed the SCWindow as
+// soon as the SCShareableContent handler returned and crashed the next
+// line intermittently (see tap_darwin.go's CFLAGS). Fail the build rather
+// than let that happen again.
+#if !__has_feature(objc_arc)
+#error "guestaudio/bridge_darwin.m must be compiled with -fobjc-arc"
+#endif
+
 #import <AppKit/AppKit.h>
 #import <CoreMedia/CoreMedia.h>
 #import <ScreenCaptureKit/ScreenCaptureKit.h>
@@ -107,6 +119,12 @@ static void guestaudio_ensure_app_context(void) {
         [NSApplication sharedApplication];
       });
     }
+    // Note: the crashes described below were most likely the missing
+    // -fobjc-arc (see the #error guard at the top of this file), which
+    // freed the SCWindow looked up right after this -- a use-after-free
+    // whose timing matches every symptom described here. The delay is
+    // kept until that's confirmed in use; it's paid once per process.
+    //
     // [NSApplication sharedApplication] kicks off this process's first
     // window-server/XPC connection but doesn't block until it's ready --
     // confirmed via lldb: the very next thing this function's caller
