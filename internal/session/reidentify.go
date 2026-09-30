@@ -285,6 +285,13 @@ func ReidentifyByDiarization(sess *Session, cfg DiarizeConfig) (int, error) {
 // which live transcription uses for a whole-system audio tap (macOS's
 // "Everything" source) precisely because per-speaker clustering isn't
 // meaningful there.
+// RelabelByDiarization gives each diarizable segment the label of the
+// diarization speaker it overlaps most (see relabelByDiarization), for
+// callers that already have diarization output, such as `tomoe eval`.
+func RelabelByDiarization(segs []Segment, diar []DiarizeSegment, speakerMap map[int]string) int {
+	return relabelByDiarization(segs, diar, speakerMap, false)
+}
+
 func diarizable(seg Segment) bool {
 	return seg.Source != "mic" && seg.Speaker != "You" && seg.Speaker != "System Audio"
 }
