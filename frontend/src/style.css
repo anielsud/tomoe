@@ -752,3 +752,268 @@ body {
   padding: 1px 5px;
   border-radius: 3px;
 }
+
+/* Settings: editable form with an Apply footer */
+.settings-view {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.settings-scroll {
+  flex: 1;
+  overflow: auto;
+}
+
+.settings-group {
+  margin-bottom: 20px;
+}
+
+.settings-group-header,
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 4px;
+}
+
+.settings-group-header h3,
+.tool-group-header h3 {
+  margin: 0;
+}
+
+.tool-group-header .btn {
+  margin-left: auto;
+}
+
+.settings-group-header .btn {
+  margin-left: auto;
+}
+
+.applies-tag {
+  font-size: 11px;
+  padding: 2px 8px;
+  border-radius: 10px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.applies-now {
+  border-color: var(--speaker-you);
+  color: var(--speaker-you);
+}
+
+.applies-reload {
+  border-color: var(--speaker-other);
+  color: var(--speaker-other);
+}
+
+.setting-row-edit {
+  gap: 16px;
+}
+
+.setting-label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.setting-hint {
+  font-size: 11px;
+  color: var(--text-dim);
+}
+
+.setting-control {
+  flex-shrink: 0;
+  display: flex;
+  justify-content: flex-end;
+}
+
+.setting-input {
+  background: var(--bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  width: 260px;
+  max-width: 100%;
+}
+
+.setting-input:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+
+.setting-input-num {
+  width: 100px;
+}
+
+.setting-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--text) !important;
+  cursor: pointer;
+}
+
+.setting-checks {
+  display: flex;
+  gap: 14px;
+}
+
+.settings-footer {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-top: 1px solid var(--border);
+  background: var(--surface);
+}
+
+.settings-footer-status {
+  flex: 1;
+  font-size: 12px;
+  min-width: 0;
+}
+
+/* Tools: dependency checklist */
+.tools-summary {
+  font-size: 13px;
+  margin-bottom: 16px;
+  color: var(--speaker-you);
+}
+
+.tools-summary-warn {
+  color: var(--speaker-other);
+}
+
+.tools-summary-bad {
+  color: var(--primary);
+}
+
+.tool-group {
+  margin-bottom: 20px;
+}
+
+.tool-row {
+  display: flex;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.tool-status {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.tool-ok {
+  background: rgba(78, 201, 176, 0.15);
+  color: var(--speaker-you);
+}
+
+.tool-missing {
+  background: rgba(206, 145, 120, 0.15);
+  color: var(--speaker-other);
+}
+
+.tool-missing-required {
+  background: rgba(233, 69, 96, 0.15);
+  color: var(--primary);
+}
+
+.tool-body {
+  flex: 1;
+  min-width: 0;
+}
+
+.tool-name {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.tool-badge {
+  margin-left: 8px;
+  font-size: 10px;
+  font-weight: 500;
+  padding: 1px 6px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+
+.tool-needed {
+  font-size: 12px;
+  color: var(--text-dim);
+  margin-top: 2px;
+}
+
+.tool-detail {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-top: 2px;
+  word-break: break-all;
+}
+
+.tool-fix {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  flex-wrap: wrap;
+}
+
+.tool-command {
+  font-family: ui-monospace, Menlo, monospace;
+  font-size: 11px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 4px 8px;
+  word-break: break-all;
+}
+
+.tool-progress {
+  margin: 8px 0;
+}
+
+.tool-progress-text {
+  font-size: 11px;
+  color: var(--text-dim);
+  margin-bottom: 4px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tool-result {
+  font-size: 12px;
+  margin-top: 6px;
+  color: var(--speaker-you);
+}
+
+.tool-result-error {
+  color: var(--primary);
+}
+
+@media (max-width: 600px) {
+  .setting-control {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .setting-input {
+    width: 100%;
+  }
+}

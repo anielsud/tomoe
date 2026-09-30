@@ -10,12 +10,13 @@ import VideoHintActivity from './components/VideoHintActivity'
 import VideoHintReview from './components/VideoHintReview'
 import DiagnosticsPane from './components/DiagnosticsPane'
 import InitScreen from './components/InitScreen'
+import ToolsPanel from './components/ToolsPanel'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import { useTranscript } from './hooks/useTranscript'
 import { useSession } from './hooks/useSession'
 import { DeviceInfo, Session, AudioSourceView } from './types'
 
-type View = 'live' | 'sessions' | 'settings' | 'videohints' | 'diagnostics';
+type View = 'live' | 'sessions' | 'settings' | 'tools' | 'videohints' | 'diagnostics';
 
 function App() {
   // True from launch until the backend's first-run setup finishes (see
@@ -249,6 +250,13 @@ function App() {
         </button>
         <button
           className="btn-icon"
+          title="Tools (dependencies, models, permissions)"
+          onClick={() => setView(view === 'tools' ? 'live' : 'tools')}
+        >
+          &#x1F9F0;
+        </button>
+        <button
+          className="btn-icon"
           title="Settings"
           onClick={() => setView(view === 'settings' ? 'live' : 'settings')}
         >
@@ -269,6 +277,10 @@ function App() {
 
       {view === 'settings' && (
         <SettingsPanel />
+      )}
+
+      {view === 'tools' && (
+        <ToolsPanel />
       )}
 
       {view === 'videohints' && (
