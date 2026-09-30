@@ -74,7 +74,8 @@ type Tuning struct {
 	// wider than StickyGraceWindow: a short interjection can trail the
 	// last confidently-assigned speech by more than a few seconds and
 	// still obviously belong to the same person (observed gaps up to
-	// ~12s in a real transcript).
+	// ~12s in a real transcript). A zero MinAssignDuration disables
+	// this rule entirely.
 	MinAssignDuration       time.Duration
 	ShortSegmentGraceWindow time.Duration
 }
@@ -180,15 +181,25 @@ func (t *Tracker) SetTuning(tuning Tuning) {
 		tuning.StickyGraceWindow = def.StickyGraceWindow
 	}
 	tuning.StickyThresholdMargin = max(tuning.StickyThresholdMargin, 0)
-	if tuning.MinAssignDuration <= 0 {
-		tuning.MinAssignDuration = def.MinAssignDuration
-	}
+	// Zero (or negative) disables the short-segment rule, the same way a
+	// zero StickyThresholdMargin disables the sticky one: no duration is
+	// below zero, so Assign never takes that branch.
+	tuning.MinAssignDuration = max(tuning.MinAssignDuration, 0)
 	if tuning.ShortSegmentGraceWindow <= 0 {
 		tuning.ShortSegmentGraceWindow = def.ShortSegmentGraceWindow
 	}
 
 	t.mu.Lock()
 	t.tuning = tuning
+	t.mu.Unlock()
+}
+
+// SetClock replaces the clock the sticky-speaker and short-segment
+// grace windows are measured against (time.Now by default). For replaying
+// recorded audio faster than real time; see live.Replay.
+func (t *Tracker) SetClock(now func() time.Time) {
+	t.mu.Lock()
+	t.nowFn = now
 	t.mu.Unlock()
 }
 

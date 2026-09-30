@@ -651,6 +651,26 @@ func TestTrackerStickySpeaker_DisabledByZeroMargin(t *testing.T) {
 	}
 }
 
+func TestTrackerShortSegment_DisabledByZeroMinAssignDuration(t *testing.T) {
+	for _, minDur := range []time.Duration{0, -time.Second} {
+		tracker := NewTracker(0.8)
+		tuning := tracker.Tuning()
+		tuning.MinAssignDuration = minDur
+		tracker.SetTuning(tuning)
+		clock := &fakeClock{t: time.Now()}
+		tracker.nowFn = clock.now
+
+		tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1
+		clock.advance(time.Second)
+		// A very short, poorly matching segment: the rule would give it
+		// to Person 1, so with it off it must become a new speaker.
+		label, _ := tracker.Assign([]float32{0, 0, 1, 0}, 100*time.Millisecond)
+		if label != "Person 2" {
+			t.Errorf("minAssignDuration %v: short-segment label = %q, want %q (rule off)", minDur, label, "Person 2")
+		}
+	}
+}
+
 func TestTrackerStickySpeaker_CustomMargin(t *testing.T) {
 	tracker := NewTracker(0.8)
 	tuning := tracker.Tuning()
