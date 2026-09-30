@@ -11,6 +11,7 @@ interface Window {
   go: {
     backend: {
       App: {
+        InitStatus(): Promise<{ done: boolean; error?: string }>;
         ListAudioDevices(): Promise<any[]>;
         ListMonitorSources(): Promise<any[]>;
         SystemAudioMode(): Promise<string>;

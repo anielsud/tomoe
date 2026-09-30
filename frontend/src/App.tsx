@@ -9,6 +9,8 @@ import ExportDialog from './components/ExportDialog'
 import VideoHintActivity from './components/VideoHintActivity'
 import VideoHintReview from './components/VideoHintReview'
 import DiagnosticsPane from './components/DiagnosticsPane'
+import InitScreen from './components/InitScreen'
+import { EventsOn } from '../wailsjs/runtime/runtime'
 import { useTranscript } from './hooks/useTranscript'
 import { useSession } from './hooks/useSession'
 import { DeviceInfo, Session, AudioSourceView } from './types'
@@ -16,6 +18,12 @@ import { DeviceInfo, Session, AudioSourceView } from './types'
 type View = 'live' | 'sessions' | 'settings' | 'videohints' | 'diagnostics';
 
 function App() {
+  // True from launch until the backend's first-run setup finishes (see
+  // backend.App.runInit) -- generating config.toml and downloading any
+  // model that isn't already present. Gates the whole app behind
+  // InitScreen so nothing here can call a bound method (ListAudioDevices,
+  // StartSession, ...) before the engines they depend on actually exist.
+  const [initializing, setInitializing] = useState(true);
   const [view, setView] = useState<View>('live');
   const [micDevice, setMicDevice] = useState('default');
   const [monitorDevice, setMonitorDevice] = useState('');
@@ -29,7 +37,29 @@ function App() {
   const { segments, clear: clearTranscript } = useTranscript();
   const { isRecording, startTime, reset: resetSession } = useSession();
 
+  // Fires once the backend's runInit completes (see InitScreen);
+  // init:failed is handled by InitScreen itself, which stays up showing
+  // the error rather than letting the app past it in a broken state.
+  //
+  // init:done fires once and never replays, so subscribing alone isn't
+  // enough: on the common launch (everything already downloaded),
+  // runInit can finish in milliseconds, before this component has even
+  // mounted -- missing the event entirely and getting stuck here
+  // forever. Subscribing first, then asking InitStatus() for whatever
+  // already happened, covers both orders: an event this effect is still
+  // around to catch, or one it missed because runInit had already
+  // finished.
   useEffect(() => {
+    const cancel = EventsOn('init:done', () => setInitializing(false));
+    window.go?.backend?.App?.InitStatus()
+      .then(s => { if (s.done) setInitializing(false); })
+      .catch(() => {});
+    return () => cancel();
+  }, []);
+
+  useEffect(() => {
+    if (initializing) return; // nothing bound below is ready to call yet
+
     loadDevices();
     loadLanguages();
 
@@ -48,7 +78,7 @@ function App() {
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [isRecording, micDevice, monitorDevice]);
+  }, [initializing, isRecording, micDevice, monitorDevice]);
 
   // Keep the macOS audio-source picker current while it's actually
   // being looked at: refreshing during an active recording would just
@@ -155,6 +185,10 @@ function App() {
       console.error('Failed to stop session:', e);
       return null;
     }
+  }
+
+  if (initializing) {
+    return <InitScreen />;
   }
 
   return (

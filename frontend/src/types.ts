@@ -102,6 +102,16 @@ export interface GPUInfo {
   CUDAVersion: string;
 }
 
+// "init:progress" event payload (see backend.InitProgressEvent) — one
+// step of first-run setup (see appinit.EnsureInitialized): generating
+// config.toml, then downloading whichever models aren't already
+// present. total is 0 until the response with Content-Length arrives.
+export interface InitProgress {
+  step: string;
+  downloaded: number;
+  total: number;
+}
+
 export interface ModelStatus {
   ParakeetReady: boolean;
   VADReady: boolean;

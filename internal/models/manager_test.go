@@ -164,8 +164,20 @@ func TestDownloadFile(t *testing.T) {
 	destDir := t.TempDir()
 	destPath := filepath.Join(destDir, "model.onnx")
 
-	if err := downloadFile(server.URL, destPath); err != nil {
+	var gotProgress []int64
+	if err := downloadFile(server.URL, destPath, "Test Model", func(step string, downloaded, total int64) {
+		if step != "Test Model" {
+			t.Errorf("progress step = %q, want %q", step, "Test Model")
+		}
+		if total != int64(len(content)) {
+			t.Errorf("progress total = %d, want %d", total, len(content))
+		}
+		gotProgress = append(gotProgress, downloaded)
+	}); err != nil {
 		t.Fatalf("downloadFile() error: %v", err)
+	}
+	if len(gotProgress) == 0 || gotProgress[len(gotProgress)-1] != int64(len(content)) {
+		t.Errorf("final progress = %v, want it to end at %d", gotProgress, len(content))
 	}
 
 	data, err := os.ReadFile(destPath)
@@ -186,7 +198,7 @@ func TestDownloadFileHTTPError(t *testing.T) {
 	destDir := t.TempDir()
 	destPath := filepath.Join(destDir, "model.onnx")
 
-	err := downloadFile(server.URL, destPath)
+	err := downloadFile(server.URL, destPath, "Test Model", nil)
 	if err == nil {
 		t.Error("downloadFile() should return error for 404")
 	}
@@ -216,7 +228,7 @@ func TestDownloadSkipsExistingModels(t *testing.T) {
 	createFakeModelFiles(t, dir)
 
 	// Download with force=false should skip
-	err := m.Download(false)
+	err := m.Download(false, nil)
 	if err != nil {
 		t.Fatalf("Download() error: %v", err)
 	}

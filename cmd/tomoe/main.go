@@ -8,6 +8,9 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/schollz/progressbar/v3"
+
+	"github.com/sosuke-ai/tomoe-pc/internal/appinit"
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/daemon"
@@ -21,6 +24,22 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
 	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
+
+// cliDownloadProgress returns a models.ProgressFunc that drives one
+// terminal progress bar per download step -- a new step name (the
+// previous one having finished) starts a fresh bar, since Content-Length
+// (and so each step's total) is only known once its own request starts.
+func cliDownloadProgress() models.ProgressFunc {
+	var bar *progressbar.ProgressBar
+	var curStep string
+	return func(step string, downloaded, total int64) {
+		if step != curStep {
+			curStep = step
+			bar = progressbar.DefaultBytes(total, step)
+		}
+		_ = bar.Set64(downloaded)
+	}
+}
 
 func main() {
 	// Re-exec with LD_LIBRARY_PATH if GPU libraries are installed.
@@ -61,29 +80,21 @@ var startCmd = &cobra.Command{
 }
 
 func runStart(cmd *cobra.Command, args []string) error {
-	if !config.Exists() {
-		fmt.Println("First run detected, running auto-init...")
-		if err := runInit(cmd, args); err != nil {
-			return err
-		}
-	}
-
 	// Check if already running
 	if daemon.IsRunning() {
 		return fmt.Errorf("daemon already running (PID %d)", daemon.ReadPID())
 	}
 
-	// Load config
-	cfg, err := config.Load(config.Path())
+	// Same init flow tomoe-gui runs on every launch: generates
+	// config.toml on a true first run, and downloads any model that
+	// isn't already present (a no-op check for everything else).
+	result, err := appinit.EnsureInitialized(cliDownloadProgress())
 	if err != nil {
-		return fmt.Errorf("loading config: %w", err)
+		return fmt.Errorf("initializing: %w", err)
 	}
-
-	// Check models
-	mgr := models.NewManager(cfg.Transcription.ModelPath)
-	status := mgr.Check()
+	cfg, status := result.Config, result.ModelStatus
 	if !status.Ready() {
-		return fmt.Errorf("models not downloaded (run 'tomoe init' or 'tomoe model download')")
+		return fmt.Errorf("model download did not complete (run 'tomoe model download' to retry)")
 	}
 
 	// Create transcription engines (multilingual if configured)
@@ -218,13 +229,22 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println("=== Tomoe Auto-Init ===")
 	fmt.Println()
 
-	// Detect GPU
-	fmt.Println("Detecting GPU...")
-	gpuInfo := gpu.Detect()
-	fmt.Println(gpuInfo)
+	configExisted := config.Exists()
+
+	// Same init flow tomoe-gui runs on every launch (see appinit):
+	// generates config.toml only if one doesn't exist yet -- re-running
+	// `tomoe init` must not silently reset an already-customized config
+	// back to defaults -- and downloads any model that isn't already
+	// present.
+	result, err := appinit.EnsureInitialized(cliDownloadProgress())
+	if err != nil {
+		return err
+	}
+
+	fmt.Println("GPU:")
+	fmt.Println(result.GPU)
 	fmt.Println()
 
-	// Detect display server
 	displayServer := os.Getenv("XDG_SESSION_TYPE")
 	if displayServer == "" {
 		displayServer = "unknown"
@@ -232,27 +252,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Printf("Display server: %s\n", displayServer)
 	fmt.Println()
 
-	// Generate config
-	cfg := config.DefaultConfig()
-	cfg.Transcription.GPUEnabled = gpuInfo.Available && gpuInfo.Sufficient
-
-	cfgPath := config.Path()
-	if err := config.Save(cfg, cfgPath); err != nil {
-		return fmt.Errorf("saving config: %w", err)
-	}
-	fmt.Printf("Config written to: %s\n", cfgPath)
-	fmt.Println()
-
-	// Download models
-	mgr := models.NewManager(cfg.Transcription.ModelPath)
-	if err := mgr.Download(false); err != nil {
-		return fmt.Errorf("downloading models: %w", err)
+	if configExisted {
+		fmt.Printf("Config already present, left unchanged: %s\n", config.Path())
+	} else {
+		fmt.Printf("Config written to: %s\n", config.Path())
 	}
 	fmt.Println()
 
-	// Summary
-	modelStatus := mgr.Check()
-	fmt.Println(modelStatus)
+	fmt.Println(result.ModelStatus)
 	fmt.Println()
 
 	fmt.Println("=== Init complete ===")
@@ -359,7 +366,7 @@ var modelDownloadCmd = &cobra.Command{
 		multilingual, _ := cmd.Flags().GetBool("multilingual")
 		mgr := models.NewManager(config.ModelDir())
 
-		if err := mgr.Download(force); err != nil {
+		if err := mgr.Download(force, cliDownloadProgress()); err != nil {
 			return err
 		}
 
@@ -373,7 +380,7 @@ var modelDownloadCmd = &cobra.Command{
 
 		if multilingual {
 			fmt.Println("\nDownloading multilingual models...")
-			if err := mgr.DownloadMultilingual(force); err != nil {
+			if err := mgr.DownloadMultilingual(force, cliDownloadProgress()); err != nil {
 				return err
 			}
 		}
