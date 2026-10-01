@@ -16,7 +16,6 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
-	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
 )
 
 // sessionReplayCmd re-runs a saved session's recorded audio through the live
@@ -87,35 +86,6 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 		lang = "en"
 	}
 
-	engines, err := transcribe.NewEngineSetFromConfig(transcribe.Config{
-		EncoderPath:    status.EncoderPath,
-		DecoderPath:    status.DecoderPath,
-		JoinerPath:     status.JoinerPath,
-		TokensPath:     status.TokensPath,
-		VADPath:        status.VADPath,
-		UseGPU:         cfg.Transcription.GPUEnabled,
-		DecodingMethod: cfg.Transcription.DecodingMethod,
-		MaxActivePaths: cfg.Transcription.MaxActivePaths,
-		HotwordsFile:   cfg.Transcription.HotwordsFile,
-		HotwordsScore:  cfg.Transcription.HotwordsScore,
-	}, status, &cfg.Multilingual)
-	if err != nil {
-		return fmt.Errorf("creating transcription engine: %w", err)
-	}
-	defer engines.Close()
-	engine := engines.Get(lang)
-	if engine == nil {
-		return fmt.Errorf("no transcription engine for language %q", lang)
-	}
-
-	var embedder *speaker.Embedder
-	if monitor != nil && status.SpeakerEmbeddingReady {
-		if embedder, err = speaker.NewEmbedder(status.SpeakerEmbeddingPath); err != nil {
-			return fmt.Errorf("loading speaker embedding model: %w", err)
-		}
-		defer embedder.Close()
-	}
-
 	current := speaker.TuningFromSeconds(
 		cfg.Meeting.SpeakerThreshold,
 		cfg.Meeting.StickyGraceWindow,
@@ -134,37 +104,18 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 		{name: "current", twoPass: cfg.Transcription.TwoPass && lang == "en", tuning: current},
 	}
 
-	var streaming transcribe.StreamingEngine
-	if runs[1].twoPass {
-		if !status.EnglishStreamingReady {
-			fmt.Println("Note: English streaming model not downloaded; the current run is single-pass.")
-			runs[1].twoPass = false
-		} else {
-			streaming, err = transcribe.NewStreamingEngine(transcribe.StreamingConfig{
-				EncoderPath: status.EnglishStreamingEncoderPath,
-				DecoderPath: status.EnglishStreamingDecoderPath,
-				JoinerPath:  status.EnglishStreamingJoinerPath,
-				TokensPath:  status.EnglishStreamingTokensPath,
-			})
-			if err != nil {
-				return fmt.Errorf("loading English streaming model: %w", err)
-			}
-			defer streaming.Close()
-		}
+	pipe, err := loadOfflinePipeline(cfg, status, lang, monitor != nil, runs[1].twoPass)
+	if err != nil {
+		return err
+	}
+	defer pipe.Close()
+	if pipe.streaming == nil {
+		runs[1].twoPass = false
 	}
 
 	fmt.Printf("Replaying %q (%s of audio)...\n", sess.Title, formatDuration(float64(max(len(mic), len(monitor)))/16000))
 	for _, run := range runs {
-		lc := live.Config{Engine: engine, VADPath: status.VADPath}
-		if embedder != nil {
-			tracker := speaker.NewTracker(run.tuning.Threshold)
-			tracker.SetTuning(run.tuning)
-			lc.Embedder, lc.Tracker = embedder, tracker
-		}
-		if run.twoPass {
-			lc.StreamingEngine = streaming
-		}
-		if run.segments, err = live.Replay(lc, mic, monitor); err != nil {
+		if run.segments, err = live.Replay(pipe.liveConfig(run.tuning, run.twoPass), mic, monitor); err != nil {
 			return fmt.Errorf("%s run: %w", run.name, err)
 		}
 		sort.SliceStable(run.segments, func(i, j int) bool { return run.segments[i].StartTime < run.segments[j].StartTime })

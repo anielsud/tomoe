@@ -32,6 +32,27 @@ const replayWindowDuration = time.Duration(vadWindowSize) * time.Second / vadSam
 // cfg.Tracker is set, it's switched to the virtual clock and back to
 // time.Now when Replay returns.
 func Replay(cfg Config, mic, monitor []float32) ([]session.Segment, error) {
+	r, err := ReplayDetailed(cfg, mic, monitor)
+	if err != nil {
+		return nil, err
+	}
+	return r.Segments, nil
+}
+
+// ReplayResult is ReplayDetailed's output.
+type ReplayResult struct {
+	// Segments are the final segments in creation order (see Replay).
+	Segments []session.Segment
+	// Pass1Text is each segment's pass-1 text as it stood when the
+	// utterance ended, by segment ID. Only set with a StreamingEngine, and
+	// only for segments pass 1 produced text for.
+	Pass1Text map[string]string
+}
+
+// ReplayDetailed is Replay that also reports pass 1's text per segment, for
+// scoring the streaming pass separately from the final one (see `tomoe
+// eval`).
+func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 	if mic == nil && monitor == nil {
 		return nil, fmt.Errorf("no audio to replay")
 	}
@@ -67,11 +88,15 @@ func Replay(cfg Config, mic, monitor []float32) ([]session.Segment, error) {
 
 	var order []string
 	final := make(map[string]session.Segment)
+	pass1 := make(map[string]string)
 	record := func(seg session.Segment) {
 		if _, seen := final[seg.ID]; !seen {
 			order = append(order, seg.ID)
 		}
 		final[seg.ID] = seg
+		if seg.Status == "pending" {
+			pass1[seg.ID] = seg.Text
+		}
 	}
 	// collect empties the output channels before running any queued
 	// refinement, so a segment's pass-1 "pending" version (sent before its
@@ -121,5 +146,5 @@ func Replay(cfg Config, mic, monitor []float32) ([]session.Segment, error) {
 	for _, id := range order {
 		segs = append(segs, final[id])
 	}
-	return segs, nil
+	return &ReplayResult{Segments: segs, Pass1Text: pass1}, nil
 }

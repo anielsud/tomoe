@@ -88,6 +88,13 @@ type MeetingConfig struct {
 	MinAssignDuration       float64 `toml:"min_assign_duration"`
 	ShortSegmentGraceWindow float64 `toml:"short_segment_grace_window"`
 
+	// SplitOnSpeakerChange makes the post-meeting diarization pass split a
+	// transcript line wherever the speaker changes mid-line (a quick
+	// "Right." from someone else), instead of giving the whole line one
+	// speaker. Off by default like main until proven on real recordings
+	// (`tomoe eval` scores both).
+	SplitOnSpeakerChange bool `toml:"split_on_speaker_change"`
+
 	// VideoHintPollInterval/VideoHintTriggerDebounce mirror
 	// videohint.Poll's interval/trigger-debounce parameters (seconds).
 	VideoHintPollInterval    float64 `toml:"video_hint_poll_interval"`

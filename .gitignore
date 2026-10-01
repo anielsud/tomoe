@@ -48,3 +48,6 @@ go.work.sum
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Real meeting recordings and transcripts for evals: private, never committed
+/testdata/private/

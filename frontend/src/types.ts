@@ -102,6 +102,7 @@ export interface Config {
     ShortSegmentGraceWindow: number;
     VideoHintPollInterval: number;
     VideoHintTriggerDebounce: number;
+    SplitOnSpeakerChange: boolean;
   };
 }
 

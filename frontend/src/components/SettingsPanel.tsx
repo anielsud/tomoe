@@ -174,6 +174,7 @@ export default function SettingsPanel() {
       next.Meeting.SpeakerThreshold = experimental ? 0.55 : 0.65;
       next.Meeting.StickyThresholdMargin = experimental ? 0.15 : 0;
       next.Meeting.MinAssignDuration = experimental ? 0.7 : 0;
+      next.Meeting.SplitOnSpeakerChange = experimental;
       return next;
     });
     setResult(null);
@@ -292,8 +293,8 @@ export default function SettingsPanel() {
           applies="now"
           action={
             <>
-              <button className="btn btn-secondary btn-sm" onClick={() => usePreset(false)} title="Two-pass off, threshold 0.65, sticky and short-segment rules off">Defaults</button>
-              <button className="btn btn-secondary btn-sm" onClick={() => usePreset(true)} title="Two-pass on, threshold 0.55, sticky and short-segment rules on">Try experimental</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => usePreset(false)} title="Two-pass off, threshold 0.65, sticky and short-segment rules off, no line splitting">Defaults</button>
+              <button className="btn btn-secondary btn-sm" onClick={() => usePreset(true)} title="Two-pass on, threshold 0.55, sticky and short-segment rules on, lines split at speaker changes">Try experimental</button>
             </>
           }
         >
@@ -303,6 +304,10 @@ export default function SettingsPanel() {
           <Row label="Sticky-speaker window (seconds)">{num('Meeting', 'StickyGraceWindow', 0.5)}</Row>
           <Row label="Short-segment length (seconds)" hint="Shorter replies join the last speaker; 0 = off">{num('Meeting', 'MinAssignDuration', 0.1)}</Row>
           <Row label="Short-segment window (seconds)">{num('Meeting', 'ShortSegmentGraceWindow', 1)}</Row>
+        </Group>
+
+        <Group title="After the meeting" applies="next">
+          <Row label="Split lines at speaker changes" hint="When the post-meeting pass hears a different voice mid-line, give it its own line (experimental)">{toggle('Meeting', 'SplitOnSpeakerChange')}</Row>
         </Group>
 
         {mac && (

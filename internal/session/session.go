@@ -45,6 +45,19 @@ type Segment struct {
 	// docs/macos-video-hints.md) -- never read back to change
 	// behavior, and safe for older sessions on disk to simply lack it.
 	Decision string `json:"decision,omitempty"`
+	// Words are the text's words with their timings (session seconds),
+	// from the recognizer's token timestamps. Used to split a line where
+	// diarization says the speaker changed (see SplitByDiarization).
+	// Absent for pass-1 text and for sessions recorded before it existed.
+	Words []Word `json:"words,omitempty"`
+}
+
+// Word is one transcribed word and when it was said. Short JSON keys, since
+// a long meeting has thousands.
+type Word struct {
+	Text  string  `json:"t"`
+	Start float64 `json:"s"`
+	End   float64 `json:"e"`
 }
 
 // statusRank orders Segment.Status values by how settled the text is:
