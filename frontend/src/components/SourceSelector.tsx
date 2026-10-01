@@ -59,7 +59,7 @@ export default function SourceSelector({
           value={monitorDevice}
           onChange={(e) => onMonitorChange(e.target.value)}
           disabled={disabled}
-          title="System Audio — 'Meeting app (automatic)' (the default) captures the meeting app (Teams, Zoom, Webex...) once it makes sound, and the whole system until then, so notification sounds stay out of the transcript"
+          title="System Audio — 'Meeting app (automatic)' (the default) captures the meeting (Teams, Zoom, Webex..., or Meet in a browser) once it makes sound, and the whole system until then, so notification sounds stay out of the transcript"
         >
           {/* "none", not "": the backend treats "" as "use the default source". */}
           <option value="none">No System Audio</option>

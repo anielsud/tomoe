@@ -146,9 +146,12 @@ platform-agnostic second-audio-source entry point. On macOS,
   every 3 s the session checks again and moves capture to the app
   (`audio.SwitchCapturer`, keeping the audio already buffered), so
   notification sounds and music stay out of the transcript once the call
-  is going. The source picker shows what it's capturing. Browser-based
-  meetings (Meet in Chrome) aren't recognized, so they stay on the whole
-  system.
+  is going. The source picker shows what it's capturing. Browser
+  meetings count too: a browser making sound whose window title names a
+  meeting (`meeting.PlatformFromTitle`, shared with Linux's detection:
+  "Meet - abc-defg-hij", or Teams/Zoom/Webex on the web) is captured via
+  that window. The meeting's tab must be the one showing, and a
+  browser's audio is the whole browser's, other tabs included.
 - `"everything"` — the whole system's audio via
   `guestaudio.NewSystemCapturer()`. Speakers are separated like any
   other source: in a meeting the system's audio is mostly the call, and

@@ -11,6 +11,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/audiosources"
 	"github.com/sosuke-ai/tomoe-pc/internal/guestaudio"
+	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
 	"github.com/sosuke-ai/tomoe-pc/internal/teamsvideo"
 )
 
@@ -106,20 +107,83 @@ func appCapturer(pid int32) (audio.Capturer, error) {
 // matched against an audio source's name and bundle ID.
 var meetingApps = []string{"teams", "zoom", "webex", "facetime", "discord", "slack"}
 
-// activeMeetingApp is the meeting app producing audio right now, if any.
-func activeMeetingApp() (audiosources.Source, bool) {
+// browsers maps a browser's audio source (matched against name and
+// bundle ID, most specific first: Edge and Brave are Chromium too) to the
+// app that owns its windows.
+var browsers = []struct{ match, owner string }{
+	{"edge", "Microsoft Edge"},
+	{"brave", "Brave Browser"},
+	{"thebrowser", "Arc"},
+	{"chrome", "Google Chrome"},
+	{"chromium", "Chromium"},
+	{"firefox", "Firefox"},
+	{"safari", "Safari"},
+	{"webkit", "Safari"},
+}
+
+// meetingSource is a meeting found making sound: a native app (pid), or a
+// browser window showing a meeting (window).
+type meetingSource struct {
+	label  string
+	pid    int32
+	window teamsvideo.WindowID
+}
+
+func (m meetingSource) capturer() (audio.Capturer, error) {
+	if m.window != 0 {
+		return guestaudio.NewWindowCapturer(uint32(m.window)), nil
+	}
+	return appCapturer(m.pid)
+}
+
+// activeMeetingApp is the meeting making sound right now, if any: a
+// meeting app, or a browser making sound with a window whose title names
+// a meeting (Meet, or Teams/Zoom/Webex on the web; the tab has to be the
+// one showing). A browser's audio is the whole browser's, other tabs
+// included.
+func activeMeetingApp() (meetingSource, bool) {
 	sources, err := audiosources.ListActive()
 	if err != nil {
-		return audiosources.Source{}, false
+		return meetingSource{}, false
 	}
 	for _, app := range meetingApps {
 		for _, s := range sources {
 			if strings.Contains(strings.ToLower(s.Name+" "+s.BundleID), app) {
-				return s, true
+				return meetingSource{label: s.Name, pid: int32(s.PID)}, true
 			}
 		}
 	}
-	return audiosources.Source{}, false
+	for _, s := range sources {
+		owner := browserOwner(s)
+		if owner == "" {
+			continue
+		}
+		windows, err := teamsvideo.ListWindows()
+		if err != nil {
+			return meetingSource{}, false
+		}
+		for _, w := range windows {
+			if w.Owner != owner {
+				continue
+			}
+			if p := meeting.PlatformFromTitle(w.Title); p != meeting.PlatformUnknown {
+				return meetingSource{label: fmt.Sprintf("%s in %s", p, owner), window: w.ID}, true
+			}
+		}
+	}
+	return meetingSource{}, false
+}
+
+// browserOwner is the app owning the windows of browser audio source s,
+// or "" if s isn't a browser.
+func browserOwner(s audiosources.Source) string {
+	id := strings.ToLower(s.Name + " " + s.BundleID)
+	for _, b := range browsers {
+		if strings.Contains(id, b.match) {
+			return b.owner
+		}
+	}
+	return ""
 }
 
 // Auto is an AutoSource capture: the meeting app if one is making sound,
@@ -152,18 +216,18 @@ func (a *Auto) TryMeetingApp() (string, bool) {
 	if !ok {
 		return "", false
 	}
-	c, err := appCapturer(int32(src.PID))
+	c, err := src.capturer()
 	if err != nil {
 		return "", false
 	}
 	if err := a.sw.Switch(c); err != nil {
-		fmt.Printf("meetingaudio: couldn't switch to %s: %v\n", src.Name, err)
+		fmt.Printf("meetingaudio: couldn't switch to %s: %v\n", src.label, err)
 		return "", false
 	}
 	a.mu.Lock()
-	a.current, a.onApp = src.Name, true
+	a.current, a.onApp = src.label, true
 	a.mu.Unlock()
-	return src.Name, true
+	return src.label, true
 }
 
 // NewAutoMonitorSource starts AutoSource capture: the meeting app making
@@ -174,8 +238,8 @@ func NewAutoMonitorSource() (*audio.StreamCapturer, *Auto, error) {
 	a := &Auto{current: "Everything"}
 	var first audio.Capturer
 	if src, ok := activeMeetingApp(); ok {
-		if c, err := appCapturer(int32(src.PID)); err == nil {
-			first, a.current, a.onApp = c, src.Name, true
+		if c, err := src.capturer(); err == nil {
+			first, a.current, a.onApp = c, src.label, true
 		}
 	}
 	if first == nil {

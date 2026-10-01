@@ -65,3 +65,7 @@ func matchPlatformFromTitle(title string) Platform {
 
 	return PlatformUnknown
 }
+
+// PlatformFromTitle is the meeting platform a window title names
+// ("Meet - abc-defg-hij - Google Chrome" is Meet), or PlatformUnknown.
+func PlatformFromTitle(title string) Platform { return matchPlatformFromTitle(title) }
