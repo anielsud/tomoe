@@ -61,6 +61,13 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 			opts.sweep.thresholds, _ = cmd.Flags().GetFloat64Slice("sweep-thresholds")
 			opts.sweep.minOns, _ = cmd.Flags().GetFloat64Slice("sweep-min-on")
 			opts.sweep.merges, _ = cmd.Flags().GetFloat64Slice("sweep-merge")
+			if own, _ := cmd.Flags().GetBool("own-diarizer"); own {
+				opts.ownSweep = &ownSweepOptions{}
+				opts.ownSweep.thresholds, _ = cmd.Flags().GetFloat64Slice("own-thresholds")
+				opts.ownSweep.merges, _ = cmd.Flags().GetFloat64Slice("own-merges")
+				opts.ownSweep.roundings, _ = cmd.Flags().GetFloat64Slice("own-roundings")
+				opts.ownSweep.minOns, _ = cmd.Flags().GetFloat64Slice("own-min-on")
+			}
 		}
 		var err error
 		for name, dst := range map[string]*float64{"from": &opts.from, "to": &opts.to} {
@@ -87,6 +94,11 @@ func init() {
 	evalCmd.Flags().Float64Slice("sweep-thresholds", []float64{0.8, 0.95, 1.1, 1.25}, "Clustering thresholds to sweep")
 	evalCmd.Flags().Float64Slice("sweep-min-on", []float64{0.3, 0.1}, "Shortest speech turns (s) to sweep")
 	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
+	evalCmd.Flags().Bool("own-diarizer", false, "With --sweep: use Tomoe's step-by-step diarizer (cached segmentation and embeddings; settings cost about a second each)")
+	evalCmd.Flags().Float64Slice("own-thresholds", []float64{0.6, 0.7, 0.8, 0.9, 1.0, 1.1}, "Own diarizer: clustering thresholds to sweep")
+	evalCmd.Flags().Float64Slice("own-merges", []float64{0, 0.5, 0.6, 0.7}, "Own diarizer: centroid merge similarities to sweep (0 = none)")
+	evalCmd.Flags().Float64Slice("own-roundings", []float64{0.5, 0.4, 0.3}, "Own diarizer: speaker-count rounding points to sweep (lower keeps more overlap)")
+	evalCmd.Flags().Float64Slice("own-min-on", []float64{0.3, 0.1}, "Own diarizer: shortest turns (s) to sweep")
 	_ = evalCmd.MarkFlagRequired("ref")
 	rootCmd.AddCommand(evalCmd)
 }
@@ -99,7 +111,8 @@ type evalOptions struct {
 	from, to        float64 // seconds; to 0 = the end
 	threads         int
 	noCache         bool
-	sweep           *sweepOptions // nil unless --sweep
+	sweep           *sweepOptions    // nil unless --sweep
+	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
 }
 
 // evalRun is one pipeline configuration's results.
@@ -257,6 +270,9 @@ func runEval(opts evalOptions) error {
 	if opts.sweep != nil {
 		if !status.DiarizationReady() {
 			return fmt.Errorf("diarization models not downloaded (run 'tomoe model download')")
+		}
+		if opts.ownSweep != nil {
+			return runOwnSweep(opts, cfg, status, samples, ref, cache, outDir)
 		}
 		return runSweep(opts, cfg, status, samples, ref, cache, outDir)
 	}
