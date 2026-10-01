@@ -786,6 +786,9 @@ func formatEvalReport(r *evalReport) string {
 		}
 		if run.Timings != nil {
 			b.WriteString(formatTimings(run.Timings, r.AudioSecs, run.MinSilence))
+			if r.CacheHits > 0 {
+				fmt.Fprintln(&b, "                   (transcriptions reused from the cache take no time here, so decode times and delays understate; use --no-cache to time)")
+			}
 		}
 		if len(run.EarlyLabels) > 0 {
 			b.WriteString(formatEarlyLabels(run.EarlyLabels))
