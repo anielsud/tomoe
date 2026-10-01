@@ -19,6 +19,7 @@ func main() {
 	// Re-exec with LD_LIBRARY_PATH if GPU libraries are installed.
 	// Must happen before any cgo/sherpa-onnx code loads.
 	config.EnsureGPULibs()
+	setupLogFile()
 
 	app := backend.NewApp()
 

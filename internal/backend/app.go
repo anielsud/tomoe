@@ -696,6 +696,9 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	hs.sess, hs.coordinator, hs.diar = a.currentSess, coordinator, md
 	a.startHintWatcher(videoHintCtx, hs)
 	a.followMeetingAudio(videoHintCtx, audioAuto)
+	if micDevice != "" {
+		go a.watchMic(videoHintCtx, coordinator, micDevice)
+	}
 
 	// Start emitting segments to frontend
 	a.segmentsDone = a.emitSessionSegments(coordinator.Segments(), coordinator.SegmentUpdates(), a.currentSess, md)

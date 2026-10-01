@@ -140,6 +140,10 @@ type Coordinator struct {
 	hintNeededCh chan bool
 	startTime    time.Time
 
+	// micHeardAt is when the mic last delivered any real signal (Unix
+	// nanoseconds; 0 = not yet), for MicQuietFor.
+	micHeardAt atomic.Int64
+
 	// segmentUpdateCh carries revisions to a segment already sent on
 	// segmentCh (same ID) -- pass 2's refined text superseding pass 1's.
 	// Only used when cfg.StreamingEngine is set.
@@ -358,6 +362,20 @@ func (c *Coordinator) nextSegID() string {
 
 func (c *Coordinator) elapsed() float64 {
 	return c.now().Sub(c.startTime).Seconds()
+}
+
+// MicQuietFor is how long the mic has delivered essentially nothing
+// (below about -80 dBFS: a disabled or wrong device, not a quiet room),
+// counted from the start if it never has; 0 without a mic.
+func (c *Coordinator) MicQuietFor() time.Duration {
+	if c.cfg.MicCapturer == nil {
+		return 0
+	}
+	at := c.micHeardAt.Load()
+	if at == 0 {
+		return c.now().Sub(c.startTime)
+	}
+	return c.now().Sub(time.Unix(0, at))
 }
 
 // SessionTime converts a wall-clock time to session time (seconds since
