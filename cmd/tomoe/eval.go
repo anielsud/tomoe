@@ -458,7 +458,7 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 // runDiarization runs the post-meeting diarization pass (initial, then
 // merged), or loads it from the cache.
 func runDiarization(cfg *config.Config, status *models.Status, samples []float32, threshold, merge float64, threads int, cache *evalCache) (*cachedDiarization, float64, error) {
-	key := fmt.Sprintf("%s|%s|%v|%v", status.SpeakerSegmentationPath, status.SpeakerEmbeddingPath, threshold, merge)
+	key := fmt.Sprintf("%s|%s|%v|%v|merge-sorted", status.SpeakerSegmentationPath, status.SpeakerEmbeddingPath, threshold, merge)
 	if cache != nil {
 		if d, ok := cache.loadDiarization(key); ok {
 			fmt.Println("Diarization loaded from cache")

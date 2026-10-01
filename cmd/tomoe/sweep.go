@@ -217,7 +217,7 @@ func sweepMerged(status *models.Status, samples []float32, raw *cachedDiarizatio
 	if merge == 0 {
 		return &cachedDiarization{Raw: raw.Raw, RawMap: raw.RawMap, Merged: raw.Raw, MergedMap: raw.RawMap}, nil
 	}
-	key := fmt.Sprintf("%s|merge=%v", sweepRawKey(status, threshold, minOn), merge)
+	key := fmt.Sprintf("%s|merge-sorted=%v", sweepRawKey(status, threshold, minOn), merge)
 	if cache != nil {
 		if d, ok := cache.loadDiarization(key); ok {
 			return d, nil
