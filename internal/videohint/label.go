@@ -1,11 +1,7 @@
 package videohint
 
 import (
-	"bytes"
 	"fmt"
-	"image"
-	"image/color"
-	"image/png"
 	"strings"
 )
 
@@ -103,41 +99,18 @@ func cleanOCRName(raw string) string {
 	if len(words) < 2 {
 		return trimmed
 	}
-	last := strings.ToLower(words[len(words)-1])
+	last := words[len(words)-1]
+	lower := strings.ToLower(last)
 	for _, noise := range knownUINoiseWords {
-		if last == noise || (len(last) >= 3 && strings.HasPrefix(noise, last)) {
+		if lower == noise || (len(lower) >= 3 && strings.HasPrefix(noise, lower)) {
 			return strings.Join(words[:len(words)-1], " ")
 		}
 	}
+	// A one- or two-letter lowercase scrap after a name is an icon next to
+	// the label read as text (found live: "Amit Tripathi fo" from the
+	// co-organizer badge). Names don't end in lowercase scraps.
+	if len(last) <= 2 && last == lower {
+		return strings.Join(words[:len(words)-1], " ")
+	}
 	return trimmed
-}
-
-// RingThumbnailPNG crops the ring's own bounding box out of frame (the
-// participant's video tile itself, not just their name label) and
-// PNG-encodes it. Pairing this with a StageOCRHit Event's recognized
-// name lets a viewer sanity-check the match at a glance — text alone
-// doesn't show who was actually on screen when it was recognized.
-func RingThumbnailPNG(pix []byte, frameWidth, frameHeight int, ring RingMatch) ([]byte, error) {
-	crop, cw, ch, err := cropRGB(pix, frameWidth, frameHeight, ring.X, ring.Y, ring.Width, ring.Height)
-	if err != nil {
-		return nil, err
-	}
-	return encodeRGBPNG(crop, cw, ch)
-}
-
-// encodeRGBPNG PNG-encodes a packed RGB (no padding, 3 bytes per
-// pixel) buffer in memory.
-func encodeRGBPNG(pix []byte, width, height int) ([]byte, error) {
-	img := image.NewRGBA(image.Rect(0, 0, width, height))
-	for y := 0; y < height; y++ {
-		for x := 0; x < width; x++ {
-			i := (y*width + x) * 3
-			img.Set(x, y, color.RGBA{R: pix[i], G: pix[i+1], B: pix[i+2], A: 255})
-		}
-	}
-	var buf bytes.Buffer
-	if err := png.Encode(&buf, img); err != nil {
-		return nil, fmt.Errorf("videohint: encoding PNG: %w", err)
-	}
-	return buf.Bytes(), nil
 }

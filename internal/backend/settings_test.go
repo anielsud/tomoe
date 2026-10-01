@@ -76,7 +76,7 @@ func TestValidateSettings_Rejects(t *testing.T) {
 		{func(c *config.Config) { c.Meeting.SpeakerThreshold = 0 }, "speaker threshold"},
 		{func(c *config.Config) { c.Meeting.SpeakerThreshold = 1.5 }, "speaker threshold"},
 		{func(c *config.Config) { c.Meeting.MinAssignDuration = -1 }, "Minimum assign duration"},
-		{func(c *config.Config) { c.Meeting.VideoHintPollInterval = 0 }, "poll interval"},
+		{func(c *config.Config) { c.Meeting.VideoHintCheckInterval = 0 }, "look intervals"},
 		{func(c *config.Config) { c.Output.SilenceTimeout = -1 }, "silence timeout"},
 	}
 	for _, c := range cases {

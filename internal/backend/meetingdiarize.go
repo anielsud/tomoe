@@ -16,17 +16,20 @@ import (
 // records (see diarize.SessionDiarizer), sending relabeled lines to the
 // transcript, or returns nil (logging why, if it was asked for) so the
 // post-meeting pass runs as before.
-func newMeetingDiarizer(a *App, cfg *config.Config, status *models.Status, lang string) *diarize.SessionDiarizer {
+func newMeetingDiarizer(a *App, cfg *config.Config, status *models.Status, lang string, onSpeakerChange func()) *diarize.SessionDiarizer {
 	var d *diarize.SessionDiarizer
-	d, err := diarize.NewSessionDiarizer(cfg.Meeting, status, lang, &a.mu, func(changed []session.Segment) {
-		a.mu.Lock()
-		visible := a.meetingDiar == d
-		a.mu.Unlock()
-		if visible {
-			for _, seg := range changed {
-				wailsRuntime.EventsEmit(a.ctx, "transcript:segment:update", seg)
+	d, err := diarize.NewSessionDiarizer(cfg.Meeting, status, lang, &a.mu, diarize.SessionOptions{
+		OnChanged: func(changed []session.Segment) {
+			a.mu.Lock()
+			visible := a.meetingDiar == d
+			a.mu.Unlock()
+			if visible {
+				for _, seg := range changed {
+					wailsRuntime.EventsEmit(a.ctx, "transcript:segment:update", seg)
+				}
 			}
-		}
+		},
+		OnSpeakerChange: onSpeakerChange,
 	})
 	if err != nil {
 		fmt.Printf("diarize during meeting: %v; diarizing after the meeting instead\n", err)

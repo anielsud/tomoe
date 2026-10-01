@@ -4,6 +4,8 @@ import { Session } from '../types';
 
 interface Props {
   onExport: (sessionId: string) => void;
+  // Opens the hint timeline for a saved session.
+  onHints?: (sessionId: string) => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -65,7 +67,7 @@ function LanguageBadge({ language }: { language?: string }) {
   );
 }
 
-export default function SessionList({ onExport }: Props) {
+export default function SessionList({ onExport, onHints }: Props) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -300,6 +302,15 @@ export default function SessionList({ onExport }: Props) {
                     >
                       Export
                     </button>
+                    {onHints && (
+                      <button
+                        className="btn btn-secondary btn-sm"
+                        onClick={(e) => { e.stopPropagation(); onHints(sess.id); }}
+                        title="Every look at the meeting window during this session"
+                      >
+                        Hints
+                      </button>
+                    )}
                     <button
                       className="btn btn-secondary btn-sm btn-danger"
                       onClick={(e) => handleDelete(sess.id, e)}

@@ -20,6 +20,10 @@ func StreamConfigFor(m config.MeetingConfig, status *models.Status, lang string)
 	}
 	params := DefaultParams()
 	params.Threshold, params.MergeSimilarity = sm.StreamThreshold, sm.StreamMerge
+	stride := max(1, m.DiarizeStride)
+	if m.RecordForTuning {
+		stride = 1 // eval thins it to any stride
+	}
 	recluster := m.DiarizeRecluster
 	if recluster <= 0 {
 		recluster = 10
@@ -28,7 +32,7 @@ func StreamConfigFor(m config.MeetingConfig, status *models.Status, lang string)
 		SegmentationModel: status.SpeakerSegmentationPath,
 		EmbeddingModel:    path,
 		Threads:           1, // all on the Stream's low-priority thread
-		Stride:            max(1, m.DiarizeStride),
+		Stride:            stride,
 		ReclusterSeconds:  recluster,
 		Params:            params,
 	}, nil

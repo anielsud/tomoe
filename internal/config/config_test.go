@@ -241,21 +241,10 @@ func TestSessionDir(t *testing.T) {
 	}
 }
 
-func TestUnrecognizedUIPendingDir(t *testing.T) {
+func TestHintAnalysisDir(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/custom/data")
-	got := UnrecognizedUIPendingDir()
-	want := "/custom/data/tomoe/unrecognized-uis-pending"
-	if got != want {
-		t.Errorf("UnrecognizedUIPendingDir() = %q, want %q", got, want)
-	}
-}
-
-func TestUnrecognizedUIApprovedDir(t *testing.T) {
-	t.Setenv("XDG_DATA_HOME", "/custom/data")
-	got := UnrecognizedUIApprovedDir()
-	want := "/custom/data/tomoe/unrecognized-uis-approved"
-	if got != want {
-		t.Errorf("UnrecognizedUIApprovedDir() = %q, want %q", got, want)
+	if got, want := HintAnalysisDir(), "/custom/data/tomoe/hint-analysis"; got != want {
+		t.Errorf("HintAnalysisDir() = %q, want %q", got, want)
 	}
 }
 
@@ -496,24 +485,21 @@ func TestWatch_MissingFileNeverFires(t *testing.T) {
 }
 
 func TestMeetingConfig_VideoHintTiming(t *testing.T) {
-	m := MeetingConfig{VideoHintPollInterval: 5, VideoHintTriggerDebounce: 1}
-	interval, debounce := m.VideoHintTiming()
-	if interval != 5*time.Second {
-		t.Errorf("interval = %v, want 5s", interval)
-	}
-	if debounce != 1*time.Second {
-		t.Errorf("debounce = %v, want 1s", debounce)
+	m := MeetingConfig{VideoHintLearnInterval: 0.5, VideoHintCheckInterval: 2}
+	learn, check := m.VideoHintTiming()
+	if learn != 500*time.Millisecond || check != 2*time.Second {
+		t.Errorf("timing = %v, %v; want 500ms, 2s", learn, check)
 	}
 }
 
 func TestMeetingConfig_VideoHintTiming_FallsBackOnZero(t *testing.T) {
 	var m MeetingConfig // zero value
-	interval, debounce := m.VideoHintTiming()
+	learn, check := m.VideoHintTiming()
 	def := DefaultConfig().Meeting
-	if want := time.Duration(def.VideoHintPollInterval * float64(time.Second)); interval != want {
-		t.Errorf("interval = %v, want default %v", interval, want)
+	if want := time.Duration(def.VideoHintLearnInterval * float64(time.Second)); learn != want {
+		t.Errorf("learn = %v, want default %v", learn, want)
 	}
-	if want := time.Duration(def.VideoHintTriggerDebounce * float64(time.Second)); debounce != want {
-		t.Errorf("debounce = %v, want default %v", debounce, want)
+	if want := time.Duration(def.VideoHintCheckInterval * float64(time.Second)); check != want {
+		t.Errorf("check = %v, want default %v", check, want)
 	}
 }

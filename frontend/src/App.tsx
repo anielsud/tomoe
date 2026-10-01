@@ -6,8 +6,7 @@ import SessionList from './components/SessionList'
 import SettingsPanel from './components/SettingsPanel'
 import StatusBar from './components/StatusBar'
 import ExportDialog from './components/ExportDialog'
-import VideoHintActivity from './components/VideoHintActivity'
-import VideoHintReview from './components/VideoHintReview'
+import HintTimeline, { HintTicker } from './components/HintTimeline'
 import DiagnosticsPane from './components/DiagnosticsPane'
 import InitScreen from './components/InitScreen'
 import ToolsPanel from './components/ToolsPanel'
@@ -26,6 +25,8 @@ function App() {
   // StartSession, ...) before the engines they depend on actually exist.
   const [initializing, setInitializing] = useState(true);
   const [view, setView] = useState<View>('live');
+  // The saved session the hint timeline shows; undefined = the current one.
+  const [hintSession, setHintSession] = useState<string | undefined>(undefined);
   const [micDevice, setMicDevice] = useState('default');
   const [monitorDevice, setMonitorDevice] = useState('');
   const [devices, setDevices] = useState<DeviceInfo[]>([]);
@@ -243,8 +244,8 @@ function App() {
         {systemAudioMode === 'auto' && (
           <button
             className="btn-icon"
-            title="Pending Screenshots (macOS meeting-label review)"
-            onClick={() => setView(view === 'videohints' ? 'live' : 'videohints')}
+            title="Hint timeline (every look at the meeting window)"
+            onClick={() => { setHintSession(undefined); setView(view === 'videohints' ? 'live' : 'videohints'); }}
           >
             &#x1F4F7;
           </button>
@@ -274,13 +275,22 @@ function App() {
 
       {view === 'live' && (
         <>
-          {systemAudioMode === 'auto' && <VideoHintActivity />}
-          <TranscriptPane segments={segments} isRecording={isRecording} />
+          {systemAudioMode === 'auto' && <HintTicker onOpen={() => { setHintSession(undefined); setView('videohints'); }} />}
+          <TranscriptPane
+            segments={segments}
+            isRecording={isRecording}
+            onRename={(label, name) => {
+              window.go?.backend?.App?.RenameSpeaker('', label, name).catch(err => alert(`Couldn't rename: ${err}`));
+            }}
+          />
         </>
       )}
 
       {view === 'sessions' && (
-        <SessionList onExport={setExportSessionId} />
+        <SessionList
+          onExport={setExportSessionId}
+          onHints={systemAudioMode === 'auto' ? (id => { setHintSession(id); setView('videohints'); }) : undefined}
+        />
       )}
 
       {view === 'settings' && (
@@ -292,7 +302,7 @@ function App() {
       )}
 
       {view === 'videohints' && (
-        <VideoHintReview />
+        <HintTimeline sessionId={hintSession} />
       )}
 
       {view === 'diagnostics' && (

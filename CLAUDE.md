@@ -68,6 +68,10 @@ Mic Capturer → StreamCapturer → VAD → Transcribe(lang) → Segment
 - **macOS speaker naming (in progress)**: not a port of the Linux audio-only clustering approach — macOS has a second, independent naming signal Linux doesn't (Teams' visual active-speaker ring + name label, read via `internal/teamsvideo`). Plan is to keep `internal/speaker`'s embedding+clustering unchanged and *label* a cluster ID with a real name whenever a fresh video hint lands, carrying that label forward for the cluster's later turns — a cluster that never gets a hint still falls back to "Person N" exactly like Linux does today. See `docs/macos-support.md`.
 - **Two-pass transcription**: Parakeet TDT is an *offline* recognizer even in "live" mode — a full non-streaming decode per completed VAD segment — so nothing appeared until a pause. `internal/transcribe.StreamingEngine` (English streaming Zipformer INT8, `sherpa.OnlineRecognizer`) is pass 1: fed the same VAD windows, polled continuously for a growing partial hypothesis, so text appears as it's spoken. On segment completion, that partial text is emitted immediately (`session.Segment.Status: "pending"`); the segment's audio is also queued to `live.Coordinator`'s `refineWorker`, which re-decodes it through Parakeet (pass 2, full-context, higher fidelity) and supersedes it via `SegmentUpdates()` (`Status: ""`). English-only and off by default (`two_pass = false`, like the sticky-speaker and short-segment clustering rules: experimental until proven on real recordings) — nil `StreamingEngine` (model not downloaded, or a non-English session) falls back to the original single-pass behavior exactly.
 
+- **Speaker models per language**: `speaker_model = "auto"` uses the English-trained ERes2Net for English meetings and the Mandarin-trained base model otherwise (`models.SpeakerModels` holds each model's diarization settings). `eres2net-base` restores the previous model everywhere.
+- **Diarizing during the meeting** (`diarize_during_meeting`, on by default): `diarize.Stream` segments, fingerprints and reclusters the monitor audio as it arrives, and `diarize.SessionDiarizer` relabels transcript lines from each timeline, so final labels are ready when the meeting ends. `false` restores the previous post-meeting sherpa-onnx subprocess exactly, which also runs by itself if the in-process diarizer can't load. Design: `docs/speaker-pipeline-design.md`; measurements: `docs/speaker-attribution-research.md`.
+- **Video hints (macOS)**: `videohint.Watcher` looks at the Teams window often while a speaker needs naming or right after a speaker change, records every look with the session (`looks.jsonl`, thumbnails; shown in the hint timeline), and its name reads are attributed by vote against the diarization timeline and constrain clustering. See `docs/macos-video-hints.md`, including tuning with `record_for_tuning` and `tomoe tune`.
+
 ## Project Structure
 
 ```
@@ -176,6 +180,8 @@ tomoe model status        # Show model info + integrity check
 tomoe devices             # List audio input devices
 tomoe config              # Print current config
 tomoe session replay <id> # Replay a session's audio: default pipeline vs current config
+tomoe eval <media> --ref <transcript>  # Score every pass against a reviewed transcript (see docs/speaker-attribution-research.md)
+tomoe tune <id> --ref <transcript>     # Find the best speaker-naming settings from a session recorded for tuning
 ```
 
 ## Coding Conventions

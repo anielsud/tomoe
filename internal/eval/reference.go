@@ -220,3 +220,17 @@ func (r *Reference) Slice(from, to float64) *Reference {
 	}
 	return out
 }
+
+// Shift returns r with every turn moved by d seconds (positive: later),
+// for a reference whose clock started at a different moment than the
+// recording's (a Teams transcript counts from the meeting's start, a
+// Tomoe session from when recording began).
+func (r *Reference) Shift(d float64) *Reference {
+	out := &Reference{Title: r.Title, Warnings: r.Warnings}
+	for _, t := range r.Turns {
+		t.Start += d
+		t.End += d
+		out.Turns = append(out.Turns, t)
+	}
+	return out
+}

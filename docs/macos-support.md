@@ -33,11 +33,13 @@ the input signal is structurally different per platform:
 | Speaker naming signal | none — audio embeddings only | Teams' active-speaker ring + name label (visual, OCR'd) |
 | Speaker naming | `internal/speaker` clusters embeddings → "Person N" | same clustering, unchanged, plus a cluster can be *labeled* by a video hint |
 
-The design keeps `internal/speaker`'s embedding + clustering pipeline
-exactly as it runs on Linux, and adds a second input that assigns a
-real name to a cluster whenever a confident visual hint lands — a
-cluster that never gets a hint (no video signal, or a dial-in
-participant with no tile) still gets labeled "Person N". This also
+Speakers are separated by voice the same way on both platforms (by
+default, Tomoe's own diarizer running during the meeting; see
+[`speaker-pipeline-design.md`](speaker-pipeline-design.md)). macOS adds a
+second input: timestamped name reads from Teams' window, which name the
+timeline's speakers by vote and constrain its clustering. A speaker that
+never gets agreeing reads (no video signal, or a dial-in participant with
+no tile) still gets labeled "Person N". This also
 gives persistent per-person voiceprints a natural home later (see
 [Roadmap](#roadmap) item 1): a cluster's embedding centroid *is* the
 voiceprint, keyed to whatever name a hint resolved it to.
@@ -74,9 +76,11 @@ voiceprint, keyed to whatever name a hint resolved it to.
 ```
 
 `internal/teamsvideo` and `internal/guestaudio` are independent of each
-other and of `internal/speaker` — neither knows the other exists. The
-labeling step (bottom of the diagram) is real, shipped logic —
-`internal/speaker.Tracker.SetHintForRecent` — not a placeholder; see
+other and of the voice pipeline. The diagram shows the original design;
+today names are timestamped hints attributed by vote against the
+diarization timeline (`internal/diarize`), and only with
+`diarize_during_meeting = false` attached to the live tracker's most
+recent speaker (`speaker.Tracker.SetHintForRecent`). See
 `macos-video-hints.md`.
 
 ## Also shipped, not macOS-specific

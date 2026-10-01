@@ -87,7 +87,17 @@ type Config struct {
 	// runs on (see diarize.Stream). Called on the pipeline goroutine, so
 	// it must return quickly.
 	MonitorAudio func(samples []float32, endTime float64)
+
+	// OnMonitorSpeechStart, if set, is called when the monitor source's
+	// speech starts after at least speechStartPause of quiet: the
+	// earliest sign of a speaker change. On the pipeline goroutine, so it
+	// must return quickly.
+	OnMonitorSpeechStart func()
 }
+
+// speechStartPause is the quiet before speech that counts as a likely
+// speaker change (see Config.OnMonitorSpeechStart).
+const speechStartPause = 0.25
 
 // Default utterance boundaries (see Config.MinSilenceDuration).
 const (
@@ -346,4 +356,10 @@ func (c *Coordinator) nextSegID() string {
 
 func (c *Coordinator) elapsed() float64 {
 	return c.now().Sub(c.startTime).Seconds()
+}
+
+// SessionTime converts a wall-clock time to session time (seconds since
+// the session started), the time base segments use.
+func (c *Coordinator) SessionTime(t time.Time) float64 {
+	return t.Sub(c.startTime).Seconds()
 }
