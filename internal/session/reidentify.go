@@ -29,6 +29,10 @@ type DiarizeConfig struct {
 	MergeThreshold        float64 // cosine similarity threshold for post-merge (0 = disabled)
 	UseGPU                bool    // use CUDA execution provider if available
 	NumThreads            int     // CPU threads per model (0 = 4)
+	// MinDurationOn and MinDurationOff are the shortest speech turn and
+	// the shortest pause diarization keeps, in seconds (0 = 0.3 and 0.5).
+	MinDurationOn  float64
+	MinDurationOff float64
 	// SplitOnSpeakerChange splits a transcript line wherever diarization
 	// changes speaker mid-line (using the line's word timings), instead of
 	// giving the whole line one speaker. See SplitByDiarization.
@@ -75,7 +79,13 @@ func Diarize(samples []float32, cfg DiarizeConfig) ([]DiarizeSegment, map[int]st
 	}
 
 	sdConfig.MinDurationOn = 0.3
+	if cfg.MinDurationOn > 0 {
+		sdConfig.MinDurationOn = float32(cfg.MinDurationOn)
+	}
 	sdConfig.MinDurationOff = 0.5
+	if cfg.MinDurationOff > 0 {
+		sdConfig.MinDurationOff = float32(cfg.MinDurationOff)
+	}
 
 	sd := sherpa.NewOfflineSpeakerDiarization(&sdConfig)
 	if sd == nil {

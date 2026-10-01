@@ -56,6 +56,20 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.runs, _ = cmd.Flags().GetStringSlice("runs")
 		opts.threads, _ = cmd.Flags().GetInt("threads")
 		opts.noCache, _ = cmd.Flags().GetBool("no-cache")
+		opts.embeddingModel, _ = cmd.Flags().GetString("embedding-model")
+		if sweep, _ := cmd.Flags().GetBool("sweep"); sweep {
+			opts.sweep = &sweepOptions{}
+			opts.sweep.thresholds, _ = cmd.Flags().GetFloat64Slice("sweep-thresholds")
+			opts.sweep.minOns, _ = cmd.Flags().GetFloat64Slice("sweep-min-on")
+			opts.sweep.merges, _ = cmd.Flags().GetFloat64Slice("sweep-merge")
+			if own, _ := cmd.Flags().GetBool("own-diarizer"); own {
+				opts.ownSweep = &ownSweepOptions{}
+				opts.ownSweep.thresholds, _ = cmd.Flags().GetFloat64Slice("own-thresholds")
+				opts.ownSweep.merges, _ = cmd.Flags().GetFloat64Slice("own-merges")
+				opts.ownSweep.roundings, _ = cmd.Flags().GetFloat64Slice("own-roundings")
+				opts.ownSweep.minOns, _ = cmd.Flags().GetFloat64Slice("own-min-on")
+			}
+		}
 		var err error
 		for name, dst := range map[string]*float64{"from": &opts.from, "to": &opts.to} {
 			v, _ := cmd.Flags().GetString(name)
@@ -77,6 +91,16 @@ func init() {
 	evalCmd.Flags().String("to", "", "Score only up to this point (e.g. 20m)")
 	evalCmd.Flags().Int("threads", 0, "CPU threads per parallel job (default: all cores split between jobs)")
 	evalCmd.Flags().Bool("no-cache", false, "Recompute transcription and diarization instead of reusing earlier results")
+	evalCmd.Flags().Bool("sweep", false, "Score a grid of diarization settings instead of the normal passes (writes sweep.txt)")
+	evalCmd.Flags().Float64Slice("sweep-thresholds", []float64{0.8, 0.95, 1.1, 1.25}, "Clustering thresholds to sweep")
+	evalCmd.Flags().Float64Slice("sweep-min-on", []float64{0.3, 0.1}, "Shortest speech turns (s) to sweep")
+	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
+	evalCmd.Flags().String("embedding-model", "", "Own diarizer: speaker embedding model (.onnx) to diarize with instead of the installed one")
+	evalCmd.Flags().Bool("own-diarizer", false, "With --sweep: use Tomoe's step-by-step diarizer (cached segmentation and embeddings; settings cost about a second each)")
+	evalCmd.Flags().Float64Slice("own-thresholds", []float64{0.6, 0.7, 0.8, 0.9, 1.0, 1.1}, "Own diarizer: clustering thresholds to sweep")
+	evalCmd.Flags().Float64Slice("own-merges", []float64{0, 0.5, 0.6, 0.7}, "Own diarizer: centroid merge similarities to sweep (0 = none)")
+	evalCmd.Flags().Float64Slice("own-roundings", []float64{0.5, 0.4, 0.3}, "Own diarizer: speaker-count rounding points to sweep (lower keeps more overlap)")
+	evalCmd.Flags().Float64Slice("own-min-on", []float64{0.3, 0.1}, "Own diarizer: shortest turns (s) to sweep")
 	_ = evalCmd.MarkFlagRequired("ref")
 	rootCmd.AddCommand(evalCmd)
 }
@@ -89,6 +113,9 @@ type evalOptions struct {
 	from, to        float64 // seconds; to 0 = the end
 	threads         int
 	noCache         bool
+	sweep           *sweepOptions    // nil unless --sweep
+	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
+	embeddingModel  string           // diarization embedding model override ("" = the installed one)
 }
 
 // evalRun is one pipeline configuration's results.
@@ -114,6 +141,12 @@ type evalRun struct {
 	OverlapsLive  eval.OverlapScore  `json:"annotated_overlaps_live"`
 	OverlapsFinal *eval.OverlapScore `json:"annotated_overlaps_final,omitempty"`
 
+	// Speaker accuracy by word for each line pass (see
+	// eval.WordAlignment).
+	WordsLive  eval.WordSpeakerScore  `json:"word_speakers_live"`
+	WordsFinal *eval.WordSpeakerScore `json:"word_speakers_final,omitempty"`
+	WordsSplit *eval.WordSpeakerScore `json:"word_speakers_final_split,omitempty"`
+
 	// The final pass with lines split where diarization changes speaker
 	// mid-line (split_on_speaker_change).
 	SpeakersSplit    *eval.SpeakerScore  `json:"speakers_final_split,omitempty"`
@@ -123,7 +156,8 @@ type evalRun struct {
 
 	Seconds float64 `json:"run_seconds"`
 
-	segs               []session.Segment // the run's final segments, with word timings
+	segs               []session.Segment   // the run's final segments, with word timings
+	align              *eval.WordAlignment // the run's words matched to the reference
 	live, final, split []eval.Labeled
 	pass1              []eval.Labeled
 }
@@ -147,8 +181,12 @@ type evalReport struct {
 	DiarizationRefined *eval.SpeakerScore `json:"diarization_refined,omitempty"`
 	OverlapsInitial    *eval.OverlapScore `json:"annotated_overlaps_diarization_initial,omitempty"`
 	OverlapsRefined    *eval.OverlapScore `json:"annotated_overlaps_diarization_refined,omitempty"`
-	RefWarnings        []string           `json:"reference_warnings,omitempty"`
-	DiarizationSecs    float64            `json:"diarization_seconds,omitempty"`
+	// Speaker accuracy by word for the diarization passes, labeling the
+	// first run's transcribed words with whoever diarization has speaking.
+	WordsInitial    *eval.WordSpeakerScore `json:"word_speakers_diarization_initial,omitempty"`
+	WordsRefined    *eval.WordSpeakerScore `json:"word_speakers_diarization_refined,omitempty"`
+	RefWarnings     []string               `json:"reference_warnings,omitempty"`
+	DiarizationSecs float64                `json:"diarization_seconds,omitempty"`
 
 	Runs []*evalRun `json:"runs"`
 }
@@ -228,6 +266,20 @@ func runEval(opts evalOptions) error {
 		}
 	}
 
+	outDir := opts.out
+	if outDir == "" {
+		outDir = "eval-" + strings.TrimSuffix(filepath.Base(opts.media), filepath.Ext(opts.media))
+	}
+	if opts.sweep != nil {
+		if !status.DiarizationReady() {
+			return fmt.Errorf("diarization models not downloaded (run 'tomoe model download')")
+		}
+		if opts.ownSweep != nil {
+			return runOwnSweep(opts, cfg, status, samples, ref, cache, outDir)
+		}
+		return runSweep(opts, cfg, status, samples, ref, cache, outDir)
+	}
+
 	// Every run and the diarization pass are independent, so they run at
 	// once, splitting the CPU between them.
 	jobs := len(runs)
@@ -290,6 +342,11 @@ func runEval(opts evalOptions) error {
 		oi := eval.ScoreAnnotatedOverlaps(ref, initial, si.Mapping, 3)
 		or := eval.ScoreAnnotatedOverlaps(ref, refined, sr.Mapping, 3)
 		report.OverlapsInitial, report.OverlapsRefined = &oi, &or
+		if len(runs) > 0 {
+			wi := diarWordScore(runs[0], initial, si.Mapping)
+			wr := diarWordScore(runs[0], refined, sr.Mapping)
+			report.WordsInitial, report.WordsRefined = &wi, &wr
+		}
 		for _, run := range runs {
 			segs := append([]session.Segment(nil), run.segs...)
 			session.RelabelByDiarization(segs, diar.Merged, diar.MergedMap)
@@ -297,6 +354,8 @@ func runEval(opts evalOptions) error {
 			split, _ := session.SplitByDiarization(append([]session.Segment(nil), run.segs...), diar.Merged, diar.MergedMap)
 			run.split = segmentsLabeled(split)
 			ss := eval.ScoreSpeakers(ref, run.split, opts.collar)
+			wsplit := run.align.Score(segmentSpeakers(split), ss.Mapping)
+			run.WordsSplit = &wsplit
 			ws := eval.SpeakerAttributedErrors(ref, run.split, ss.Mapping)
 			xs := eval.ScoreQuickExchanges(ref, run.split, ss.Mapping, 8, 6, 3)
 			ovs := eval.ScoreAnnotatedOverlaps(ref, run.split, ss.Mapping, 3)
@@ -305,16 +364,14 @@ func runEval(opts evalOptions) error {
 			wf := eval.SpeakerAttributedErrors(ref, run.final, sf.Mapping)
 			xf := eval.ScoreQuickExchanges(ref, run.final, sf.Mapping, 8, 6, 3)
 			of := eval.ScoreAnnotatedOverlaps(ref, run.final, sf.Mapping, 3)
+			wfinal := run.align.Score(segmentSpeakers(segs), sf.Mapping)
+			run.WordsFinal = &wfinal
 			run.SpeakersFinal, run.WhoSaidWhatFinal, run.ExchangesFinal, run.OverlapsFinal = &sf, &wf, &xf, &of
 		}
 	}
 	report.Runs = runs
 	report.WallSecs = time.Since(began).Seconds()
 
-	outDir := opts.out
-	if outDir == "" {
-		outDir = "eval-" + strings.TrimSuffix(filepath.Base(opts.media), filepath.Ext(opts.media))
-	}
 	if err := writeEvalOutputs(outDir, report, ref, initial, refined); err != nil {
 		return err
 	}
@@ -429,6 +486,42 @@ func scoreRun(run *evalRun, ref *eval.Reference, refWords []string, collar float
 	run.WhoSaidWhatLive = eval.SpeakerAttributedErrors(ref, run.live, run.SpeakersLive.Mapping)
 	run.ExchangesLive = eval.ScoreQuickExchanges(ref, run.live, run.SpeakersLive.Mapping, 8, 6, 3)
 	run.OverlapsLive = eval.ScoreAnnotatedOverlaps(ref, run.live, run.SpeakersLive.Mapping, 3)
+	var texts []string
+	for _, s := range run.segs {
+		for _, w := range s.Words {
+			texts = append(texts, w.Text)
+		}
+	}
+	run.align = eval.NewWordAlignment(ref, texts)
+	run.WordsLive = run.align.Score(segmentSpeakers(run.segs), run.SpeakersLive.Mapping)
+}
+
+// wordAt is the time a word counts as said: just after it starts.
+func wordAt(w session.Word) float64 { return w.Start + min(0.1, (w.End-w.Start)/2) }
+
+// segmentSpeakers labels each transcribed word, in order, with its line's
+// speaker. Splitting lines keeps the words and their order, so every line
+// pass of a run lines up with the run's word alignment.
+func segmentSpeakers(segs []session.Segment) [][]string {
+	var out [][]string
+	for _, s := range segs {
+		for range s.Words {
+			out = append(out, []string{s.Speaker})
+		}
+	}
+	return out
+}
+
+// diarWordScore scores a diarization pass by word: the run's transcribed
+// words, each labeled with whoever the diarization has speaking then.
+func diarWordScore(run *evalRun, diar []eval.Labeled, mapping map[string]string) eval.WordSpeakerScore {
+	var times []float64
+	for _, s := range run.segs {
+		for _, w := range s.Words {
+			times = append(times, wordAt(w))
+		}
+	}
+	return run.align.Score(eval.SpeakersAt(diar, times), mapping)
 }
 
 func segmentsLabeled(segs []session.Segment) []eval.Labeled {
@@ -471,11 +564,24 @@ func copyMap(m map[int]string) map[int]string {
 
 func pct(x float64) string { return fmt.Sprintf("%5.1f%%", 100*x) }
 
-func speakerLine(name string, s *eval.SpeakerScore) string {
-	if s == nil {
-		return fmt.Sprintf("  %-26s %s\n", name, "(skipped)")
+// speakerLine is one pass's row in the speaker table: speaker accuracy by
+// word (overall and by turn length), time confusion, people matched and
+// cluster count.
+func speakerLine(name string, s *eval.SpeakerScore, w *eval.WordSpeakerScore) string {
+	if s == nil || w == nil {
+		return fmt.Sprintf("  %-24s (skipped)\n", name)
 	}
-	return fmt.Sprintf("  %-26s %s  %s  %s  %3d vs %d   %6.0fs\n", name, pct(s.Confusion), pct(s.Purity), pct(s.Coverage), s.HypSpeakers, s.RefSpeakers, s.OverlapSeconds)
+	var b strings.Builder
+	fmt.Fprintf(&b, "  %-24s %s ", name, pct(w.Accuracy()))
+	for _, bk := range w.Buckets {
+		if bk.Words == 0 {
+			b.WriteString("      -  ")
+			continue
+		}
+		fmt.Fprintf(&b, " %s  ", pct(bk.Accuracy()))
+	}
+	fmt.Fprintf(&b, "   %s     %d/%d   %4d\n", pct(s.Confusion), s.RefSpeakersMatched, s.RefSpeakers, s.HypSpeakers)
+	return b.String()
 }
 
 // formatEvalReport renders the human-readable report.
@@ -498,33 +604,28 @@ func formatEvalReport(r *evalReport) string {
 			fmt.Fprintf(&b, "  %-16s %s     (%d / %d / %d)\n", "pass 1 (live)", pct(run.TextPass1.Rate()), run.TextPass1.Substitutions, run.TextPass1.Deletions, run.TextPass1.Insertions)
 		}
 		fmt.Fprintf(&b, "  %-16s %s     (%d / %d / %d)\n", "final", pct(run.TextFinal.Rate()), run.TextFinal.Substitutions, run.TextFinal.Deletions, run.TextFinal.Insertions)
-		fmt.Fprintln(&b, "Speakers                     confusion purity  coverage speakers  overlap")
-		b.WriteString(speakerLine("live guess", &run.SpeakersLive))
+		var buckets strings.Builder
+		for _, bk := range run.WordsLive.Buckets {
+			fmt.Fprintf(&buckets, " %-8s", bk.Label[:strings.Index(bk.Label, " ")])
+		}
+		fmt.Fprintf(&b, "Speakers: right speaker by word, overall and by turn length (words) | time confusion | people | clusters\n")
+		fmt.Fprintf(&b, "  %-24s overall %s     confusion people clusters\n", "", buckets.String())
+		if len(run.WordsLive.Buckets) > 0 {
+			fmt.Fprintf(&b, "  %-24s %-7s", "(words scored)", fmt.Sprint(run.WordsLive.Words))
+			for _, bk := range run.WordsLive.Buckets {
+				fmt.Fprintf(&b, "  %-7d", bk.Words)
+			}
+			fmt.Fprintln(&b)
+		}
+		b.WriteString(speakerLine("live guess", &run.SpeakersLive, &run.WordsLive))
 		if r.DiarizationInitial != nil {
-			b.WriteString(speakerLine("initial diarization", r.DiarizationInitial))
-			b.WriteString(speakerLine("refined diarization", r.DiarizationRefined))
+			b.WriteString(speakerLine("initial diarization", r.DiarizationInitial, r.WordsInitial))
+			b.WriteString(speakerLine("refined diarization", r.DiarizationRefined, r.WordsRefined))
 		}
-		b.WriteString(speakerLine("final transcript labels", run.SpeakersFinal))
+		b.WriteString(speakerLine("final transcript labels", run.SpeakersFinal, run.WordsFinal))
 		if run.SpeakersSplit != nil {
-			b.WriteString(speakerLine("final, split at changes", run.SpeakersSplit))
+			b.WriteString(speakerLine("final, split at changes", run.SpeakersSplit, run.WordsSplit))
 		}
-		fmt.Fprintf(&b, "Who said what      live %s", pct(run.WhoSaidWhatLive.Rate()))
-		if run.WhoSaidWhatFinal != nil {
-			fmt.Fprintf(&b, "   final %s", pct(run.WhoSaidWhatFinal.Rate()))
-		}
-		if run.WhoSaidWhatSplit != nil {
-			fmt.Fprintf(&b, "   split %s", pct(run.WhoSaidWhatSplit.Rate()))
-		}
-		fmt.Fprintln(&b, "   (word errors, a right word with the wrong speaker counts as wrong)")
-		x := run.ExchangesLive
-		fmt.Fprintf(&b, "Quick exchanges    %d short turns: live found %d, right speaker %d", x.Turns, x.Found, x.RightSpeaker)
-		if run.ExchangesFinal != nil {
-			fmt.Fprintf(&b, "; final right speaker %d", run.ExchangesFinal.RightSpeaker)
-		}
-		if run.ExchangesSplit != nil {
-			fmt.Fprintf(&b, "; split right speaker %d", run.ExchangesSplit.RightSpeaker)
-		}
-		fmt.Fprintln(&b)
 		if run.OverlapsLive.Interjections > 0 {
 			o := run.OverlapsLive
 			fmt.Fprintf(&b, "Annotated overlap  %d interjections (%.0fs): transcribed live %d, right speaker live %d", o.Interjections, o.Seconds, o.Found, o.RightSpeaker)
@@ -552,8 +653,11 @@ func formatEvalReport(r *evalReport) string {
 		fmt.Fprintf(&b, "; transcription cache: %d reused, %d decoded", r.CacheHits, r.CacheMisses)
 	}
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, "\nConfusion: share of scored speech given to the wrong person (lower is better).")
-	fmt.Fprintln(&b, "Purity: how much each detected speaker is one person. Coverage: how much each person stays in one detected speaker.")
+	fmt.Fprintln(&b, "\nRight speaker by word: share of transcribed words whose speaker is who the reference has talking then (higher is better),")
+	fmt.Fprintln(&b, "independent of whether the word itself was transcribed right. Turn length is the reference turn the word falls in;")
+	fmt.Fprintln(&b, "during annotated overlap, the interjection. Every pass is scored on the same words.")
+	fmt.Fprintln(&b, "Time confusion: share of scored speech time given to the wrong person (lower is better).")
+	fmt.Fprintln(&b, "People: reference speakers with a cluster of their own; the rest were merged into someone else.")
 	return b.String()
 }
 
