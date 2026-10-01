@@ -64,7 +64,12 @@ func runOwnSweep(opts evalOptions, cfg *config.Config, status *models.Status, sa
 		defer wg.Done()
 		pipeErr = runPipeline(run, cfg, status, samples, threads, cache)
 	}()
-	prep, err := preparedDiarization(status, samples, workers, threads, cache)
+	embModel := status.SpeakerEmbeddingPath
+	if opts.embeddingModel != "" {
+		embModel = opts.embeddingModel
+	}
+	fmt.Printf("Diarization embedding model: %s\n", filepath.Base(embModel))
+	prep, err := preparedDiarization(status.SpeakerSegmentationPath, embModel, samples, workers, threads, cache)
 	wg.Wait()
 	if err != nil {
 		return err
@@ -160,7 +165,7 @@ func runOwnSweep(opts evalOptions, cfg *config.Config, status *models.Status, sa
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
-	text := formatOwnSweep(results, prep, ref)
+	text := formatOwnSweep(results, prep, ref, filepath.Base(embModel))
 	if err := os.WriteFile(filepath.Join(outDir, "own-sweep.txt"), []byte(text), 0o644); err != nil {
 		return err
 	}
@@ -176,10 +181,10 @@ func runOwnSweep(opts evalOptions, cfg *config.Config, status *models.Status, sa
 
 // preparedDiarization runs (or loads from cache) the expensive diarization
 // steps for samples.
-func preparedDiarization(status *models.Status, samples []float32, workers, threads int, cache *evalCache) (*diarize.Prepared, error) {
+func preparedDiarization(segModel, embModel string, samples []float32, workers, threads int, cache *evalCache) (*diarize.Prepared, error) {
 	var path string
 	if cache != nil {
-		path = filepath.Join(cache.dir, "prepared-"+hashString(status.SpeakerSegmentationPath+"|"+status.SpeakerEmbeddingPath)+".gob")
+		path = filepath.Join(cache.dir, "prepared-"+hashString(segModel+"|"+embModel)+".gob")
 		if f, err := os.Open(path); err == nil {
 			var p diarize.Prepared
 			err := gob.NewDecoder(f).Decode(&p)
@@ -192,7 +197,7 @@ func preparedDiarization(status *models.Status, samples []float32, workers, thre
 	}
 	fmt.Printf("Preparing diarization (segmentation and embeddings, %d workers x %d threads)...\n", workers, threads)
 	began := time.Now()
-	p, err := diarize.Prepare(samples, status.SpeakerSegmentationPath, status.SpeakerEmbeddingPath, workers, threads)
+	p, err := diarize.Prepare(samples, segModel, embModel, workers, threads)
 	if err != nil {
 		return nil, err
 	}
@@ -208,9 +213,9 @@ func preparedDiarization(status *models.Status, samples []float32, workers, thre
 	return p, nil
 }
 
-func formatOwnSweep(results []*ownSweepResult, prep *diarize.Prepared, ref *eval.Reference) string {
+func formatOwnSweep(results []*ownSweepResult, prep *diarize.Prepared, ref *eval.Reference, embName string) string {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Own diarizer sweep: %d settings from %d cached window-speaker embeddings, %d reference speakers.\n", len(results), len(prep.Embeddings), len(ref.Speakers()))
+	fmt.Fprintf(&b, "Own diarizer sweep: %d settings from %d cached window-speaker embeddings (%s), %d reference speakers.\n", len(results), len(prep.Embeddings), embName, len(ref.Speakers()))
 	fmt.Fprintln(&b, "Sorted by final (split) right speaker by word. thresh: clustering cut (higher merges more). merge: centroid merge")
 	fmt.Fprintln(&b, "similarity (0 = none). round: where the averaged speaker count rounds up (lower keeps more overlap). min-on: shortest turn.")
 	fmt.Fprintln(&b, "worst nbr: lowest final word accuracy one grid step away (plateau vs cliff). people: speakers with their own cluster.")
