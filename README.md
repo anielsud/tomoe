@@ -134,6 +134,9 @@ min_assign_duration = 0            # segments shorter than this (s) join the las
 short_segment_grace_window = 15.0  # seconds after the last speaker that rule applies
 split_on_speaker_change = false    # after a meeting, split lines where the speaker changes mid-line (experimental)
 speaker_model = 'auto'             # voice model: 'auto' (English-trained for English, base otherwise), 'eres2net-en', 'eres2net-base'
+diarize_during_meeting = false     # work out who spoke when while recording instead of after (experimental; more CPU during the call)
+diarize_stride = 2                 # with it on: fingerprint every Nth analysis window (higher = less CPU)
+diarize_recluster = 10             # with it on: seconds between label updates
 ```
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`

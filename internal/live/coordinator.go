@@ -80,6 +80,13 @@ type Config struct {
 	// recording them in Probes: whether labeling within an utterance
 	// catches speaker changes that have no pause. 0 = off.
 	WindowSize, WindowStep float64
+
+	// MonitorAudio, if set, receives all of the monitor source's audio,
+	// speech or not, one capture window at a time, with the session time
+	// (seconds) at the window's end: what diarizing during the meeting
+	// runs on (see diarize.Stream). Called on the pipeline goroutine, so
+	// it must return quickly.
+	MonitorAudio func(samples []float32, endTime float64)
 }
 
 // Default utterance boundaries (see Config.MinSilenceDuration).

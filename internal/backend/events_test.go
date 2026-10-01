@@ -19,7 +19,7 @@ func TestEmitSessionSegmentsAppliesLateRefinementsToTheirOwnSession(t *testing.T
 
 	segments := make(chan session.Segment, 4)
 	updates := make(chan session.Segment, 4)
-	done := a.emitSessionSegments(segments, updates, stopped)
+	done := a.emitSessionSegments(segments, updates, stopped, nil)
 
 	// The refinement may overtake its segment; both orders must converge.
 	updates <- session.Segment{ID: "seg-1", Text: "Refined.", StartTime: 1}

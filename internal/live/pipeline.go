@@ -171,6 +171,9 @@ func (c *Coordinator) finishSource(st *sourceState) {
 // processWindow feeds one audio window through VAD (and pass 1, if
 // enabled), then handles any speech segments that completed.
 func (c *Coordinator) processWindow(st *sourceState, window []float32) {
+	if st.source == SourceMonitor && c.cfg.MonitorAudio != nil {
+		c.cfg.MonitorAudio(window, c.elapsed())
+	}
 	// Feed window to VAD (must be exactly windowSize)
 	if len(window) == vadWindowSize {
 		vadBegan := time.Now()

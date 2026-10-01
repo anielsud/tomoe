@@ -62,6 +62,9 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
 		opts.probePrefixes, _ = cmd.Flags().GetFloat64Slice("probe-prefixes")
 		opts.windowSize, _ = cmd.Flags().GetFloat64("window-size")
+		opts.stream, _ = cmd.Flags().GetBool("stream-diarizer")
+		opts.streamStride, _ = cmd.Flags().GetInt("stream-stride")
+		opts.streamRecluster, _ = cmd.Flags().GetFloat64("stream-recluster")
 		opts.windowStep, _ = cmd.Flags().GetFloat64("window-step")
 		opts.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
 		opts.workers, _ = cmd.Flags().GetInt("workers")
@@ -114,6 +117,9 @@ func init() {
 	evalCmd.Flags().String("diarization-timing", "", "Only time post-meeting diarization (sherpa or own) at --threads/--workers, with nothing else running")
 	evalCmd.Flags().Int("workers", 0, "Own diarizer: parallel workers for segmentation and embeddings (default: cores / --threads)")
 	evalCmd.Flags().Float64Slice("probe-prefixes", nil, "Live: also label each utterance from just its first N seconds, for each N (e.g. 1,5,10,20), and score those early labels")
+	evalCmd.Flags().Bool("stream-diarizer", false, "Also diarize each run during the replay, as diarize_during_meeting does in the app, and score its labels")
+	evalCmd.Flags().Int("stream-stride", 2, "With --stream-diarizer: fingerprint every nth window")
+	evalCmd.Flags().Float64("stream-recluster", 10, "With --stream-diarizer: seconds of audio between reclusters")
 	evalCmd.Flags().Float64("window-size", 0, "Live: also label words from overlapping windows of this many seconds within each longer utterance, and score that (0 = off)")
 	evalCmd.Flags().Float64("window-step", 0, "Live: step between those windows (s; default half the window)")
 	evalCmd.Flags().Float64("min-silence", live.DefaultMinSilenceDuration, "Live: the pause (s) that ends an utterance")
@@ -146,7 +152,10 @@ type evalOptions struct {
 	online          *onlineOptions   // set with --online
 	embeddingModel  string           // speaker model override, an ID or a path ("" = as configured)
 	probePrefixes   []float64        // live: early-label prefixes to score (s)
-	windowSize      float64          // live: within-utterance window labels (s)
+	stream          bool             // diarize during the replay (diarize.Stream)
+	streamStride    int
+	streamRecluster float64
+	windowSize      float64 // live: within-utterance window labels (s)
 	windowStep      float64
 	minSilence      float64 // live utterance bounds (s)
 	maxSpeech       float64
@@ -174,8 +183,18 @@ type evalRun struct {
 	TextPass1 *eval.ErrorCounts `json:"text_pass1,omitempty"`
 	TextFinal eval.ErrorCounts  `json:"text_final"`
 
-	SpeakersLive  eval.SpeakerScore  `json:"speakers_live"`
-	SpeakersFinal *eval.SpeakerScore `json:"speakers_final,omitempty"`
+	SpeakersLive eval.SpeakerScore `json:"speakers_live"`
+
+	// Stream: diarizing during the replay (--stream-diarizer).
+	stream           *diarize.StreamConfig
+	streamTimeline   *diarize.Timeline
+	streamOffset     float64
+	StreamReclusters int                    `json:"stream_reclusters,omitempty"`
+	StreamFinishSecs float64                `json:"stream_finish_seconds,omitempty"`
+	StreamSplit      *eval.WordSpeakerScore `json:"stream_final_split,omitempty"`
+	StreamTimelineW  *eval.WordSpeakerScore `json:"stream_timeline_only,omitempty"`
+	StreamPeople     int                    `json:"stream_people,omitempty"`
+	SpeakersFinal    *eval.SpeakerScore     `json:"speakers_final,omitempty"`
 
 	WhoSaidWhatLive  eval.ErrorCounts  `json:"who_said_what_live"`
 	WhoSaidWhatFinal *eval.ErrorCounts `json:"who_said_what_final,omitempty"`
@@ -274,6 +293,9 @@ func runEval(opts evalOptions) error {
 		}
 	}
 	status.SpeakerEmbeddingPath, opts.embeddingModel = smPath, smPath
+	if _, known := models.SpeakerModelByID(sm.ID); known && sm.Name != filepath.Base(smPath) {
+		cfg.Meeting.SpeakerModel = sm.ID // so the streaming diarizer resolves the same model
+	}
 	opts.diarThreshold, opts.diarMerge = sm.DiarizeThreshold, sm.DiarizeMerge
 	fmt.Printf("Speaker model: %s (diarization threshold %v, merge %v)\n", sm.Name, sm.DiarizeThreshold, sm.DiarizeMerge)
 
@@ -333,6 +355,15 @@ func runEval(opts evalOptions) error {
 	}
 	for _, r := range runs {
 		r.MinSilence, r.MaxSpeech = opts.minSilence, opts.maxSpeech
+		if opts.stream {
+			m := cfg.Meeting
+			m.DiarizeStride, m.DiarizeRecluster = opts.streamStride, opts.streamRecluster
+			sc, err := diarize.StreamConfigFor(m, status, "en")
+			if err != nil {
+				return fmt.Errorf("--stream-diarizer: %w", err)
+			}
+			r.stream = &sc
+		}
 		if len(opts.probePrefixes) > 0 || opts.windowSize > 0 {
 			r.Probes = &live.Probes{}
 			r.probePrefixes = opts.probePrefixes
@@ -495,6 +526,23 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 	lc.MinSilenceDuration, lc.MaxSpeechDuration = run.MinSilence, run.MaxSpeech
 	lc.ProbePrefixes, lc.Probes = run.probePrefixes, run.Probes
 	lc.WindowSize, lc.WindowStep = run.windowSize, run.windowStep
+	var stream *diarize.Stream
+	if run.stream != nil {
+		sc := *run.stream
+		sc.OnTimeline = func(diarize.Timeline) { run.StreamReclusters++ }
+		if stream, err = diarize.NewStream(sc); err != nil {
+			return fmt.Errorf("streaming diarizer: %w", err)
+		}
+		defer stream.Close()
+		fed, first := 0, true
+		lc.MonitorAudio = func(samples []float32, endTime float64) {
+			if first {
+				run.streamOffset, first = endTime-float64(len(samples))/16000, false
+			}
+			fed += len(samples)
+			stream.Feed(samples)
+		}
+	}
 	run.Timings = &live.Timings{}
 	lc.Timings = run.Timings
 	res, err := live.ReplayDetailed(lc, nil, samples)
@@ -502,6 +550,15 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 		return err
 	}
 	run.Seconds = time.Since(began).Seconds()
+	if stream != nil {
+		fb := time.Now()
+		tl, err := stream.Finish()
+		if err != nil {
+			return fmt.Errorf("streaming diarizer: %w", err)
+		}
+		run.StreamFinishSecs = time.Since(fb).Seconds()
+		run.streamTimeline = &tl
+	}
 	run.segs = res.Segments
 	sort.SliceStable(run.segs, func(i, j int) bool { return run.segs[i].StartTime < run.segs[j].StartTime })
 	for _, s := range res.Segments {
@@ -642,6 +699,7 @@ func scoreRun(run *evalRun, ref *eval.Reference, refWords []string, collar float
 	}
 	run.SpeakersLive = eval.ScoreSpeakers(ref, run.live, collar)
 	defer func() {
+		scoreStream(run, ref, collar)
 		run.EarlyLabels = scoreEarlyLabels(run)
 		run.Windowed = scoreWindowed(run)
 	}()
@@ -814,6 +872,11 @@ func formatEvalReport(r *evalReport) string {
 		}
 		if run.Windowed != nil {
 			b.WriteString(formatWindowed(run.Windowed))
+		}
+		if run.StreamSplit != nil {
+			fmt.Fprintf(&b, "During meeting     diarized as it was recorded (every %d windows, recluster every %.0fs): final %s, timeline alone %s, %d/%d people, %d reclusters, %.1fs to finish after the end\n",
+				run.stream.Stride, run.stream.ReclusterSeconds, pct(run.StreamSplit.Accuracy()), pct(run.StreamTimelineW.Accuracy()),
+				run.StreamPeople, r.RefSpeakers, run.StreamReclusters, run.StreamFinishSecs)
 		}
 		fmt.Fprintln(&b, "Video-hint names   not scored (no hints in an offline eval yet)")
 		fmt.Fprintf(&b, "Run time           pipeline %s", formatDuration(run.Seconds))
@@ -1168,4 +1231,28 @@ func formatWindowed(ws *windowedScore) string {
 	row("utterance", ws.Utterance)
 	fmt.Fprintf(&b, "                   %d words relabeled: %d fixed, %d broken\n", ws.Relabeled, ws.Fixed, ws.Broken)
 	return b.String()
+}
+
+// scoreStream scores the streaming diarizer's final timeline as the app
+// would apply it: words take the timeline's speaker, words in a gap their
+// line's.
+func scoreStream(run *evalRun, ref *eval.Reference, collar float64) {
+	tl := run.streamTimeline
+	if tl == nil || run.align == nil {
+		return
+	}
+	turns := make([]session.DiarizeSegment, len(tl.Turns))
+	for i, t := range tl.Turns {
+		t.Start += run.streamOffset
+		t.End += run.streamOffset
+		turns[i] = t
+	}
+	split, _ := session.SplitByDiarization(append([]session.Segment(nil), run.segs...), turns, tl.Labels)
+	sc := eval.ScoreSpeakers(ref, segmentsLabeled(split), collar)
+	w := run.align.Score(segmentSpeakers(split), sc.Mapping)
+	run.StreamSplit, run.StreamPeople = &w, sc.RefSpeakersMatched
+	lab := diarLabeled(turns, tl.Labels)
+	tsc := eval.ScoreSpeakers(ref, lab, collar)
+	tw := diarWordScore(run, lab, tsc.Mapping)
+	run.StreamTimelineW = &tw
 }

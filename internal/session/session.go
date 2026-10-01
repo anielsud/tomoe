@@ -50,6 +50,19 @@ type Segment struct {
 	// diarization says the speaker changed (see SplitByDiarization).
 	// Absent for pass-1 text and for sessions recorded before it existed.
 	Words []Word `json:"words,omitempty"`
+	// LiveSpeaker is the label the live pass gave the segment when a
+	// later pass (diarizing during the meeting) has since relabeled
+	// Speaker: kept because it can carry a video-hint name that the
+	// relabeling votes on. "" means Speaker is still the live label.
+	LiveSpeaker string `json:"live_speaker,omitempty"`
+}
+
+// LiveLabel is the label the live pass gave seg (see LiveSpeaker).
+func (seg Segment) LiveLabel() string {
+	if seg.LiveSpeaker != "" {
+		return seg.LiveSpeaker
+	}
+	return seg.Speaker
 }
 
 // Word is one transcribed word and when it was said. Short JSON keys, since

@@ -1,6 +1,9 @@
 # Speaker pipeline: a simpler design
 
-Status: proposal. Simulated on one reviewed meeting it matches the
+Status: first version built, opt-in (`diarize_during_meeting`, off by
+default; GUI app only, not yet the CLI daemon). It keeps the live
+`speaker.Tracker` for the instant label and video-hint names, and replaces
+the post-meeting pass. Proposal for the rest. Simulated on one reviewed meeting it matches the
 post-meeting pass's accuracy (97.9%) with final labels ready when the
 meeting ends, and labels as first shown (96.8–97.5%) beat every live
 approach measured. Nothing here ships until it holds on more than one
@@ -78,6 +81,32 @@ algorithm; transcription independent of it.
 
 The clustering threshold and merge similarity (per speaker model), the
 fingerprint stride (CPU budget) and the recluster interval.
+
+## What the first version does
+
+- `diarize.Stream` takes the monitor audio as it's captured
+  (`live.Config.MonitorAudio`), segments each 10 s window once it's
+  complete, fingerprints every `diarize_stride`th one, and reclusters every
+  `diarize_recluster` seconds of audio, keeping speaker numbers stable
+  (`diarize.StableLabels`). Work runs on its own goroutine and catches up
+  if it falls behind.
+- `backend.meetingDiarizer` relabels the session's lines from each
+  timeline and sends the changed lines to the transcript. A new line is
+  labeled from the timeline if it already covers it, else from whichever
+  timeline speaker its live label has mapped to so far.
+- `Segment.LiveSpeaker` keeps the live label a line was relabeled from;
+  timeline speakers are named from the video-hint names in those labels,
+  as the post-meeting pass names its clusters.
+- When the meeting stops the stream finishes its backlog, reclusters once
+  more, applies the result (splitting lines if `split_on_speaker_change`
+  is on), and saves the fingerprints as `diarization.gob` next to the
+  session. If anything fails, the post-meeting pass runs as before.
+- Settings come from the speaker model's profile (`StreamThreshold`,
+  `StreamMerge` in `models.SpeakerModels`).
+
+Not yet: removing the live tracker's rules, cutting utterances for text
+alone, the CLI daemon, a cap for very long meetings, lower thread
+priority.
 
 ## Costs and risks
 

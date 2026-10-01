@@ -20,14 +20,14 @@ import (
 // the returned channel). Reading a.currentSess instead would drop them,
 // or, once the next session has started, apply them to its segments,
 // since segment IDs restart at seg-1 for every coordinator.
-func (a *App) emitSessionSegments(segments, updates <-chan session.Segment, sess *session.Session) <-chan struct{} {
+func (a *App) emitSessionSegments(segments, updates <-chan session.Segment, sess *session.Session, md *meetingDiarizer) <-chan struct{} {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
 	go func() {
 		defer wg.Done()
 		for seg := range segments {
-			a.applySegment(sess, seg, "transcript:segment")
+			a.applySegment(sess, md, seg, "transcript:segment")
 		}
 	}()
 	// Refinements arrive as a distinct event, since the frontend needs to
@@ -37,7 +37,7 @@ func (a *App) emitSessionSegments(segments, updates <-chan session.Segment, sess
 	go func() {
 		defer wg.Done()
 		for seg := range updates {
-			a.applySegment(sess, seg, "transcript:segment:update")
+			a.applySegment(sess, md, seg, "transcript:segment:update")
 		}
 	}()
 	go func() {
@@ -51,8 +51,14 @@ func (a *App) emitSessionSegments(segments, updates <-chan session.Segment, sess
 // travel on different channels, so either may arrive first) and forwards
 // it to the frontend -- unless another session has started since, whose
 // transcript the frontend is now showing.
-func (a *App) applySegment(sess *session.Session, seg session.Segment, event string) {
+//
+// When the session is diarized during the meeting (md non-nil), seg is
+// relabeled from the latest timeline first (see meetingDiarizer).
+func (a *App) applySegment(sess *session.Session, md *meetingDiarizer, seg session.Segment, event string) {
 	a.mu.Lock()
+	if md != nil {
+		md.labelNewLocked(&seg)
+	}
 	sess.UpsertSegment(seg)
 	visible := a.currentSess == nil || a.currentSess == sess
 	a.mu.Unlock()
