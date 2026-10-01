@@ -86,9 +86,10 @@ export interface Config {
     DefaultLang: string;
   };
   Meeting: {
-    // DefaultSources, MaxSpeechDuration, MinSilenceDuration and AutoSave
-    // exist in config.toml but nothing reads them, so the settings page
-    // doesn't offer them.
+    // DefaultSources and AutoSave exist in config.toml but nothing reads
+    // them, and MaxSpeechDuration/MinSilenceDuration (utterance bounds for
+    // meetings) are still being measured, so the settings page doesn't
+    // offer them.
     DefaultSources: string;
     MonitorDevice: string;
     SpeakerThreshold: number;
@@ -106,6 +107,11 @@ export interface Config {
     // "auto" (English-trained for English, base otherwise) or a
     // models.SpeakerModels ID.
     SpeakerModel: string;
+    // Diarize with Tomoe's own diarizer while recording instead of after
+    // (see docs/speaker-pipeline-design.md).
+    DiarizeDuringMeeting: boolean;
+    DiarizeStride: number;
+    DiarizeRecluster: number;
   };
 }
 

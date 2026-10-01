@@ -183,6 +183,11 @@ func planApply(old, next *config.Config) applyPlan {
 	if old.Meeting.SplitOnSpeakerChange != next.Meeting.SplitOnSpeakerChange {
 		p.later = append(p.later, "Line splitting after the meeting")
 	}
+	if old.Meeting.DiarizeDuringMeeting != next.Meeting.DiarizeDuringMeeting ||
+		old.Meeting.DiarizeStride != next.Meeting.DiarizeStride ||
+		old.Meeting.DiarizeRecluster != next.Meeting.DiarizeRecluster {
+		p.later = append(p.later, "Diarizing during the meeting")
+	}
 	if old.Meeting.VideoHintPollInterval != next.Meeting.VideoHintPollInterval ||
 		old.Meeting.VideoHintTriggerDebounce != next.Meeting.VideoHintTriggerDebounce {
 		p.later = append(p.later, "Video hint timing")
@@ -260,6 +265,12 @@ func validateSettings(c *config.Config) error {
 		if v < 0 {
 			return fmt.Errorf("%s can't be negative", name)
 		}
+	}
+	if mt.DiarizeStride < 1 {
+		return fmt.Errorf("fingerprint stride must be at least 1")
+	}
+	if mt.DiarizeRecluster <= 0 {
+		return fmt.Errorf("recluster interval must be above 0")
 	}
 	if mt.VideoHintPollInterval <= 0 {
 		return fmt.Errorf("video hint poll interval must be above 0")

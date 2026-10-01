@@ -16,6 +16,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/audiosources"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
+	"github.com/sosuke-ai/tomoe-pc/internal/diarize"
 	"github.com/sosuke-ai/tomoe-pc/internal/gpu"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
@@ -69,6 +70,9 @@ type App struct {
 	// segmentsDone is closed once the current session's coordinator has
 	// delivered its last segment and refinement (see emitSessionSegments).
 	segmentsDone <-chan struct{}
+	// meetingDiar diarizes the current session while it records (nil if
+	// that's off); see diarize.SessionDiarizer.
+	meetingDiar *diarize.SessionDiarizer
 
 	// configWatchStop stops the config.toml hot-reload watcher started
 	// in Startup (see speaker.Tracker.SetTuning) once the app shuts
@@ -117,8 +121,9 @@ type App struct {
 type saveRequest struct {
 	sess         *session.Session
 	coordinator  *live.Coordinator
-	segmentsDone <-chan struct{} // see App.segmentsDone
-	release      func()          // ends the session's engine lease; see App.sessionRelease
+	diar         *diarize.SessionDiarizer // nil unless diarizing during the meeting
+	segmentsDone <-chan struct{}          // see App.segmentsDone
+	release      func()                   // ends the session's engine lease; see App.sessionRelease
 }
 
 const saveQueueDepth = 16
@@ -564,11 +569,13 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	status := bundle.modelMgr.Check()
 
 	cfg := live.Config{
-		Engine:            bundle.engines.Get(lang),
-		Embedder:          meetingEmbedder(a.cfg, status, bundle.embedders, lang),
-		Tracker:           a.tracker,
-		VADPath:           status.VADPath,
-		SegmentBufferSize: 64,
+		Engine:             bundle.engines.Get(lang),
+		Embedder:           meetingEmbedder(a.cfg, status, bundle.embedders, lang),
+		MinSilenceDuration: a.cfg.Meeting.MinSilenceDuration,
+		MaxSpeechDuration:  a.cfg.Meeting.MaxSpeechDuration,
+		Tracker:            a.tracker,
+		VADPath:            status.VADPath,
+		SegmentBufferSize:  64,
 	}
 	// Realtime pass is English-only (see internal/transcribe's
 	// StreamingEngine); other languages keep today's single-pass path.
@@ -606,8 +613,18 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		a.tracker.Reset()
 	}
 
+	var md *diarize.SessionDiarizer
+	if cfg.MonitorCapturer != nil && !cfg.SkipMonitorDiarization {
+		if md = newMeetingDiarizer(a, a.cfg, status, lang); md != nil {
+			cfg.MonitorAudio = md.Feed
+		}
+	}
+
 	coordinator := live.New(cfg)
 	if err := coordinator.Start(a.ctx); err != nil {
+		if md != nil {
+			md.Abort()
+		}
 		if cfg.MicCapturer != nil {
 			cfg.MicCapturer.Close()
 		}
@@ -643,6 +660,10 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		Sources:   sources,
 	}
 
+	if md != nil {
+		md.SetSessionLocked(a.currentSess) // a.mu is held, so no timeline is applied before this
+	}
+	a.meetingDiar = md
 	a.coordinator = coordinator
 	a.recording = true
 	started = true
@@ -663,7 +684,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	go a.emitVideoHintEvents(videoHintCtx, videoHintEvents)
 
 	// Start emitting segments to frontend
-	a.segmentsDone = a.emitSessionSegments(coordinator.Segments(), coordinator.SegmentUpdates(), a.currentSess)
+	a.segmentsDone = a.emitSessionSegments(coordinator.Segments(), coordinator.SegmentUpdates(), a.currentSess, md)
 
 	wailsRuntime.EventsEmit(a.ctx, "session:started", a.currentSess.ID)
 	return nil
@@ -688,6 +709,8 @@ func (a *App) StopSession() (*session.Session, error) {
 	sess := a.currentSess
 	videoHintCancel := a.videoHintCancel
 	segmentsDone := a.segmentsDone
+	diar := a.meetingDiar
+	a.meetingDiar = nil
 	release := a.sessionRelease
 	a.sessionRelease = nil
 	a.recording = false
@@ -715,7 +738,7 @@ func (a *App) StopSession() (*session.Session, error) {
 
 	// Hand off to the serial save worker so the next StartSession can
 	// proceed immediately while encoding + diarization run in the background.
-	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator, segmentsDone: segmentsDone, release: release}
+	a.saveQueue <- &saveRequest{sess: sess, coordinator: coordinator, diar: diar, segmentsDone: segmentsDone, release: release}
 
 	return sess, nil
 }
@@ -790,6 +813,16 @@ func (a *App) persistSession(req *saveRequest) {
 	// session.json with refined labels. We don't reload here because
 	// the frontend will re-fetch via LoadSession on the session:saved
 	// event below.
+	// Diarized during the meeting: its final labels replace the
+	// post-meeting pass (which still runs if that failed).
+	if req.diar != nil && finishMeetingDiarizer(req.diar, sess) {
+		if err := a.store.Save(sess); err != nil {
+			fmt.Printf("Error saving session: %v\n", err)
+		}
+		wailsRuntime.EventsEmit(a.ctx, "session:saved", sess.ID)
+		return
+	}
+
 	a.mu.Lock()
 	modelMgr := a.bundle.modelMgr
 	a.mu.Unlock()

@@ -124,8 +124,8 @@ silence_timeout = 5.0
 default_sources = 'both'
 monitor_device = ''       # '' = default monitor source, 'none' = mic only
 speaker_threshold = 0.65           # cosine similarity for a confident speaker match
-max_speech_duration = 30.0
-min_silence_duration = 0.5
+max_speech_duration = 30.0         # longest utterance (s) before it's cut; each utterance gets one speaker label
+min_silence_duration = 0.5         # pause (s) that ends an utterance
 auto_save = true
 auto_detect = true
 sticky_grace_window = 3.0          # seconds a near-miss can still join the last speaker
@@ -134,6 +134,9 @@ min_assign_duration = 0            # segments shorter than this (s) join the las
 short_segment_grace_window = 15.0  # seconds after the last speaker that rule applies
 split_on_speaker_change = false    # after a meeting, split lines where the speaker changes mid-line (experimental)
 speaker_model = 'auto'             # voice model: 'auto' (English-trained for English, base otherwise), 'eres2net-en', 'eres2net-base'
+diarize_during_meeting = true      # work out who spoke when while recording; false = the previous pass after the meeting
+diarize_stride = 2                 # with it on: fingerprint every Nth analysis window; sets CPU use during the call (higher = less)
+diarize_recluster = 10             # with it on: seconds between label updates
 ```
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`

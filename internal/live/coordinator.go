@@ -58,6 +58,54 @@ type Config struct {
 	SkipMonitorDiarization bool
 	// Timings, if set, collects per-stage processing time (see Timings).
 	Timings *Timings
+
+	// MinSilenceDuration is the pause (seconds) that ends an utterance,
+	// and MaxSpeechDuration the longest utterance before it's cut. Each
+	// utterance gets one speaker embedding, so these set how much audio
+	// a speaker label is based on. 0 means the defaults, 0.5 and 30.
+	MinSilenceDuration float64
+	MaxSpeechDuration  float64
+
+	// ProbePrefixes, for measurement only, also labels each utterance
+	// from just its first N seconds for every N listed that's shorter
+	// than the utterance, read-only (speaker.Tracker.Peek) just before
+	// the real assignment, recording them in Probes. Costs one embedding
+	// per prefix.
+	ProbePrefixes []float64
+	Probes        *Probes
+
+	// WindowSize and WindowStep (seconds), for measurement only, also
+	// match overlapping windows within each utterance longer than
+	// WindowSize against the known speakers (speaker.Tracker.PeekMatch),
+	// recording them in Probes: whether labeling within an utterance
+	// catches speaker changes that have no pause. 0 = off.
+	WindowSize, WindowStep float64
+
+	// MonitorAudio, if set, receives all of the monitor source's audio,
+	// speech or not, one capture window at a time, with the session time
+	// (seconds) at the window's end: what diarizing during the meeting
+	// runs on (see diarize.Stream). Called on the pipeline goroutine, so
+	// it must return quickly.
+	MonitorAudio func(samples []float32, endTime float64)
+}
+
+// Default utterance boundaries (see Config.MinSilenceDuration).
+const (
+	DefaultMinSilenceDuration = 0.5
+	DefaultMaxSpeechDuration  = 30.0
+)
+
+// utteranceBounds is cfg's MinSilenceDuration and MaxSpeechDuration, with
+// defaults for unset values.
+func (cfg Config) utteranceBounds() (minSilence, maxSpeech float64) {
+	minSilence, maxSpeech = cfg.MinSilenceDuration, cfg.MaxSpeechDuration
+	if minSilence <= 0 {
+		minSilence = DefaultMinSilenceDuration
+	}
+	if maxSpeech <= 0 {
+		maxSpeech = DefaultMaxSpeechDuration
+	}
+	return minSilence, maxSpeech
 }
 
 // Stats holds runtime statistics about the coordinator.

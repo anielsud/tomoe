@@ -248,6 +248,22 @@ func (p *Prepared) Reconstruct(clusters []int, params Params) ([]session.Diarize
 // turns (sherpa-onnx's ReLabel, ComputeSpeakerCount, FinalizeLabels and
 // ComputeResult).
 func (p *Prepared) reconstruct(clusters []int, params Params) ([]session.DiarizeSegment, map[int]string) {
+	return renumber(p.turns(clusters, params))
+}
+
+// ReconstructClusters is Reconstruct with each turn's Speaker left as its
+// cluster index (no renumbering), for callers that track clusters across
+// reclusterings (see StableLabels).
+func (p *Prepared) ReconstructClusters(clusters []int, params Params) []session.DiarizeSegment {
+	if len(clusters) == 0 {
+		return nil
+	}
+	return p.turns(clusters, params)
+}
+
+// turns turns per-window cluster assignments into speaker turns, Speaker
+// being the cluster index.
+func (p *Prepared) turns(clusters []int, params Params) []session.DiarizeSegment {
 	m := p.Meta
 	numClusters := 0
 	for _, c := range clusters {
@@ -350,8 +366,12 @@ func (p *Prepared) reconstruct(clusters []int, params Params) ([]session.Diarize
 		}
 	}
 	sort.SliceStable(segs, func(i, j int) bool { return segs[i].Start < segs[j].Start })
+	return segs
+}
 
-	// Renumber clusters by first appearance, so labels read Person 1, 2...
+// renumber numbers segs' clusters by first appearance, so labels read
+// Person 1, 2...
+func renumber(segs []session.DiarizeSegment) ([]session.DiarizeSegment, map[int]string) {
 	renum := map[int]int{}
 	labels := map[int]string{}
 	for i := range segs {

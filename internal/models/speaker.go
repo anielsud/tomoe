@@ -22,6 +22,13 @@ type SpeakerModel struct {
 	// session.DiarizeConfig).
 	DiarizeThreshold float64
 	DiarizeMerge     float64
+
+	// StreamThreshold and StreamMerge are the clustering cut and centroid
+	// merge for Tomoe's own diarizer (internal/diarize), used when
+	// diarizing during the meeting. Its distances aren't sherpa-onnx's
+	// scale, so these differ from the above.
+	StreamThreshold float64
+	StreamMerge     float64
 }
 
 // Speaker model IDs. SpeakerModelAuto picks by meeting language (see
@@ -45,6 +52,9 @@ var SpeakerModels = []SpeakerModel{
 		URL:              SpeakerEmbeddingURL,
 		DiarizeThreshold: 1.1,
 		DiarizeMerge:     0.55,
+		// Best on a plateau in `tomoe eval --sweep --own-diarizer`.
+		StreamThreshold: 0.7,
+		StreamMerge:     0.6,
 	},
 	{
 		ID:   SpeakerModelEres2NetEn,
@@ -56,6 +66,8 @@ var SpeakerModels = []SpeakerModel{
 		// docs/speaker-attribution-research.md).
 		DiarizeThreshold: 1.1,
 		DiarizeMerge:     0.55,
+		StreamThreshold:  0.6,
+		StreamMerge:      0.5,
 	},
 }
 

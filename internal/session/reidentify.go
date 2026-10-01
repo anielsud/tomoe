@@ -306,11 +306,6 @@ func ReidentifyByDiarization(sess *Session, cfg DiarizeConfig) (int, error) {
 	return relabelByDiarization(sess.Segments, diarSegments, speakerMap, cfg.Verbose), nil
 }
 
-// diarizable reports whether a transcript segment's speaker label should
-// come from diarization: not the mic ("You"), and not "System Audio",
-// which live transcription uses for a whole-system audio tap (macOS's
-// "Everything" source) precisely because per-speaker clustering isn't
-// meaningful there.
 // RelabelByDiarization gives each diarizable segment the label of the
 // diarization speaker it overlaps most (see relabelByDiarization), for
 // callers that already have diarization output, such as `tomoe eval`.
@@ -318,8 +313,35 @@ func RelabelByDiarization(segs []Segment, diar []DiarizeSegment, speakerMap map[
 	return relabelByDiarization(segs, diar, speakerMap, false)
 }
 
+// DiarizationLabels returns, for each segment, the diarization speaker it
+// overlaps most (-1 if none, or not diarizable), and each diarization
+// speaker's label with the video-hint name its segments' live labels carry
+// most, if any (see relabelByDiarization).
+func DiarizationLabels(segs []Segment, diar []DiarizeSegment, speakerMap map[int]string) (assigned []int, labels map[int]string) {
+	return diarizationLabels(segs, diar, speakerMap)
+}
+
+// diarizable reports whether a transcript segment's speaker label should
+// come from diarization: not the mic ("You"), and not "System Audio",
+// which live transcription uses for a whole-system audio tap (macOS's
+// "Everything" source) precisely because per-speaker clustering isn't
+// meaningful there. Judged by the live label, since Speaker may have been
+// relabeled already.
 func diarizable(seg Segment) bool {
-	return seg.Source != "mic" && seg.Speaker != "You" && seg.Speaker != "System Audio"
+	live := seg.LiveLabel()
+	return seg.Source != "mic" && live != "You" && live != "System Audio"
+}
+
+// Diarizable reports whether seg's speaker comes from diarization (see
+// diarizable).
+func Diarizable(seg Segment) bool { return diarizable(seg) }
+
+// HintName is the video-hint name in a live label "Person N (Name)", or "".
+func HintName(label string) string {
+	if m := hintLabel.FindStringSubmatch(label); m != nil {
+		return m[1]
+	}
+	return ""
 }
 
 // hintLabel matches a live speaker label with a video-hint name attached,
@@ -375,7 +397,7 @@ func diarizationLabels(segs []Segment, diar []DiarizeSegment, speakerMap map[int
 		if assigned[i] < 0 {
 			continue
 		}
-		if m := hintLabel.FindStringSubmatch(seg.Speaker); m != nil {
+		if m := hintLabel.FindStringSubmatch(seg.LiveLabel()); m != nil {
 			if nameTime[assigned[i]] == nil {
 				nameTime[assigned[i]] = make(map[string]float64)
 			}

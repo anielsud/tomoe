@@ -61,3 +61,53 @@ func (c *Coordinator) timingsOrZero() *Timings {
 }
 
 var discardTimings Timings
+
+// Probes records speaker labels taken from just the start of each
+// utterance (see Config.ProbePrefixes): how early a label could be shown,
+// and how often it would hold.
+type Probes struct {
+	mu sync.Mutex
+	// ByStart maps an utterance's start time (seconds into the session)
+	// to its labels, one per prefix shorter than the utterance.
+	ByStart map[float64][]ProbeLabel
+	// Windows maps an utterance's start time to the speakers of
+	// overlapping windows within it (see Config.WindowSize).
+	Windows map[float64][]WindowLabel
+}
+
+// WindowLabel is the existing speaker a window of an utterance (Start to
+// End, seconds into the session) confidently matches.
+type WindowLabel struct {
+	Start, End float64
+	Speaker    string
+}
+
+func (p *Probes) addWindows(start float64, labels []WindowLabel) {
+	if p == nil || len(labels) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.Windows == nil {
+		p.Windows = map[float64][]WindowLabel{}
+	}
+	p.Windows[start] = labels
+}
+
+// ProbeLabel is the speaker an utterance's first Prefix seconds match.
+type ProbeLabel struct {
+	Prefix  float64
+	Speaker string
+}
+
+func (p *Probes) add(start float64, labels []ProbeLabel) {
+	if p == nil || len(labels) == 0 {
+		return
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.ByStart == nil {
+		p.ByStart = map[float64][]ProbeLabel{}
+	}
+	p.ByStart[start] = labels
+}

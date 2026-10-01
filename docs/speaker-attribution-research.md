@@ -197,7 +197,114 @@ many speakers the live pass created for the 8 people.
 - None of this reaches the final transcript, which the post-meeting pass
   relabels.
 
+## Utterance length
 
+Each utterance gets one speaker fingerprint and is transcribed on its
+own, so where the speech detector cuts affects both. Two knobs: the pause
+that ends an utterance and the longest one before it's cut
+(`min_silence_duration`, `max_speech_duration`). English-trained model,
+experimental live settings:
+
+| Pause | Max | Live guess | 4–15 words | 16–60 words | Clusters | Text word error |
+|---|---|---|---|---|---|---|
+| 0.3 s | 10 s | 95.9% | 59.8% | 94.8% | 71 | 11.4% |
+| 0.3 s | 30 s | 95.9% | 59.8% | 94.8% | 70 | 11.4% |
+| 0.5 s | 10 s | 96.4% | 57.1% | 94.8% | 45 | 10.5% |
+| 0.5 s | 30 s (current) | 95.9% | 48.0% | 94.8% | 42 | 10.2% |
+| 0.8 s | 10 s | 96.3% | 56.9% | 95.3% | 29 | 10.5% |
+| 0.8 s | 30 s | 93.6% | 47.7% | 83.6% | 25 | 9.8% |
+
+- A 10 s cap helps 4–15 word turns most (people talking back to back with
+  no 0.5 s gap otherwise end up in one utterance under one label), for
+  little text cost.
+- A long pause without the cap merges speakers: 16–60 word turns fall
+  to 83.6%.
+- Shorter utterances cost text accuracy because Parakeet decodes each one
+  without the audio around it, and words at the cuts get clipped. This is
+  the case for separating the speaker timeline from transcription (see
+  [speaker-pipeline-design.md](speaker-pipeline-design.md)).
+- The added delay is the pause itself; processing adds about 80–110 ms
+  here.
+
+## Labeling within an utterance
+
+### Early labels during a long utterance
+
+How soon a long utterance's speaker could be shown and relabeled as more
+audio arrives: the label from just its first N seconds (read-only match,
+`Tracker.Peek`) against the label from all of it. Experimental settings,
+English-trained model; "words" are those in utterances longer than N.
+
+| After | Utterances | Words | From the start | From all of it | Same label |
+|---|---|---|---|---|---|
+| 1 s | 421 | 8659 | 34.7% | 96.3% | 44.2% |
+| 2 s | 379 | 8449 | 80.4% | 96.7% | 83.4% |
+| 3 s | 331 | 8127 | 90.4% | 97.0% | 92.4% |
+| 5 s | 226 | 6858 | 94.2% | 96.9% | 96.0% |
+| 10 s | 84 | 3724 | 95.4% | 96.0% | 97.6% |
+
+A label is usable after about 3 s and nearly final after 5 s. One second
+of audio is too little for a fingerprint.
+
+### Windows within an utterance
+
+Each word labeled from the fingerprint of the window around it (windows
+every 0.5 s within each utterance, matched to known speakers only),
+against one label per utterance. Experimental settings, English-trained
+model. Fingerprint load is all live fingerprinting as a share of meeting
+time.
+
+| Window | Overall | 1–3 words | 4–15 words | 16–60 words | Words relabeled (fixed / broken) | Fingerprint load |
+|---|---|---|---|---|---|---|
+| none (per utterance) | 95.9% | 15.8% | 48.0% | 94.8% | — | 3.2% |
+| 1.5 s | 96.8% | 18.4% | 65.6% | 96.6% | 143 (106 / 24) | 10.0% |
+| 2 s | 97.2% | 15.8% | 66.1% | 97.2% | 173 (138 / 19) | not measured alone |
+| 3 s | 97.2% | 13.2% | 64.8% | 97.4% | 157 (131 / 12) | 13.4% |
+
+Labeling inside utterances brings the live guess to 97.2%, near the
+post-meeting pass (97.7%), and lifts 4–15 word turns from 48% to 66%. It
+catches speaker changes with no pause between them, which one label per
+utterance can't, for three to four times the fingerprint work.
+
+## Diarizing during the meeting (simulated)
+
+The design in [speaker-pipeline-design.md](speaker-pipeline-design.md):
+Tomoe's own diarizer run during the meeting, reclustering every interval
+on the windows finished so far, with speaker numbers kept stable across
+reclusters (`tomoe eval --online`). English-trained model, threshold 0.6,
+merge 0.5. Words take the timeline's speaker, and words in a gap their
+line's. *First shown* is the label a word got from the first recluster
+covering it; *relabeled* is the share of words whose label changed after
+that; *delay* is from the end of a word to its first label.
+
+| Fingerprint every | Recluster every | Final | 4–15 words (final) | First shown | Relabeled | Delay median / 90th | Slowest recluster | All reclusters |
+|---|---|---|---|---|---|---|---|---|
+| window | 10 s | 97.9% | 77.5% | 96.8% | 1.9% | 5 / 9 s | 2.41 s | 242 s |
+| window | 30 s | 97.9% | 77.5% | 97.3% | 1.0% | 15 / 27 s | 2.50 s | 85 s |
+| 2nd window | 10 s | 97.6% | 75.8% | 96.9% | 2.2% | 5 / 9 s | 0.64 s | 66 s |
+| 2nd window | 30 s | 97.6% | 75.8% | 97.5% | 1.1% | 15 / 27 s | 0.70 s | 23 s |
+| 3rd window | 10 s | 97.7% | 75.3% | 87.9% | 10.9% | 5 / 9 s | 0.29 s | 29 s |
+| 5th window | 10 s | 97.2% | 73.1% | 96.1% | 2.0% | 5 / 9 s | 0.11 s | 11 s |
+| 5th window | 30 s | 97.2% | 73.1% | 96.6% | 1.1% | 15 / 27 s | 0.11 s | 4 s |
+
+- **The final result equals the post-meeting run** (97.9% at full
+  depth), but it's ready seconds after the meeting ends.
+- **Labels as first shown (96–97.5%) beat every live approach measured**
+  (best: windows within utterances, 97.2%), and only 1–2% of words
+  change afterwards.
+- **Every 2nd window costs 0.3 points** for half the fingerprint work;
+  every 5th costs 0.7 points for a fifth.
+- Every 3rd window is an unexplained outlier: its final score is normal
+  but first-shown labels are much worse and relabel 11% of words. To
+  investigate before relying on any stride.
+- Without the gap rule (timeline only) final scores drop to 94–94.6%.
+
+The built version (`diarize_during_meeting`, `tomoe eval
+--stream-diarizer`, running the real `diarize.Stream` through the live
+replay) reproduces the simulation: every 2nd window, recluster every 10 s,
+**97.6% final**, 7/8 people, 356 reclusters.
+
+## Speed and processing load
 
 Measured on the same hour of audio, uncached, one run at a time.
 "This Mac" is the performance cores of an Apple Silicon desktop with 4

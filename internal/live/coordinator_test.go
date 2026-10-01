@@ -115,7 +115,7 @@ func TestAssignSpeakerMic(t *testing.T) {
 		cfg: Config{},
 	}
 
-	label, decision := c.assignSpeaker(SourceMic, []float32{0.1, 0.2})
+	label, decision := c.assignSpeaker(SourceMic, []float32{0.1, 0.2}, 0)
 	if label != "You" {
 		t.Errorf("mic speaker = %q, want %q", label, "You")
 	}
@@ -130,7 +130,7 @@ func TestAssignSpeakerMonitorNoEmbedder(t *testing.T) {
 	}
 
 	// Without embedder, all monitor segments get "Other"
-	label, _ := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2})
+	label, _ := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2}, 0)
 	if label != "Other" {
 		t.Errorf("monitor speaker = %q, want %q", label, "Other")
 	}
@@ -141,7 +141,7 @@ func TestAssignSpeakerMonitorSkipDiarization(t *testing.T) {
 		cfg: Config{SkipMonitorDiarization: true},
 	}
 
-	label, decision := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2})
+	label, decision := c.assignSpeaker(SourceMonitor, []float32{0.1, 0.2}, 0)
 	if label != "System Audio" {
 		t.Errorf("monitor speaker with SkipMonitorDiarization = %q, want %q", label, "System Audio")
 	}
@@ -155,7 +155,7 @@ func TestAssignSpeakerMicUnaffectedBySkipDiarization(t *testing.T) {
 		cfg: Config{SkipMonitorDiarization: true},
 	}
 
-	label, _ := c.assignSpeaker(SourceMic, []float32{0.1, 0.2})
+	label, _ := c.assignSpeaker(SourceMic, []float32{0.1, 0.2}, 0)
 	if label != "You" {
 		t.Errorf("mic speaker with SkipMonitorDiarization = %q, want %q (mic is unaffected)", label, "You")
 	}
