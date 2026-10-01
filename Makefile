@@ -178,6 +178,22 @@ endif
 	# a Dock-launched app has no way to find one on PATH, and diarization
 	# is silently skipped.
 	cp $(BINARY) $(APP_BUNDLE)/Contents/MacOS/$(BINARY)
+	# Bundle the native libraries the binaries load via @rpath (sherpa-onnx
+	# and ONNX Runtime, otherwise found in the Go module cache, which only
+	# exists on the build machine) and point the binaries at the bundled
+	# copies instead. Tomoe's own diarizer finds ONNX Runtime the same way
+	# (internal/diarize's findOnnxRuntime).
+	mkdir -p $(APP_BUNDLE)/Contents/Frameworks
+	@set -e; for bin in $(BINARY) $(GUI_BINARY); do \
+		dst=$(APP_BUNDLE)/Contents/MacOS/$$bin; \
+		for rp in $$(otool -l $$dst | awk '/cmd LC_RPATH/ {getline; getline; print $$2}'); do \
+			for lib in $$(otool -L $$dst | awk '/@rpath\// {sub("@rpath/", "", $$1); print $$1}'); do \
+				if [ -f "$$rp/$$lib" ]; then install -m 644 "$$rp/$$lib" $(APP_BUNDLE)/Contents/Frameworks/; fi; \
+			done; \
+			install_name_tool -delete_rpath "$$rp" $$dst; \
+		done; \
+		install_name_tool -add_rpath @executable_path/../Frameworks $$dst; \
+	done
 	sed 's/__VERSION__/$(VERSION)/g' packaging/macos/Info.plist.template > $(APP_BUNDLE)/Contents/Info.plist
 	codesign --sign "$(CODESIGN_IDENTITY)" --force --deep $(APP_BUNDLE)
 	rm -rf "$(APPLICATIONS_DIR)/$(APP_NAME).app"
