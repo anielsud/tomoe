@@ -132,23 +132,38 @@ merge 0.55):
 | Live guess, default | 83.6% | 90.9% |
 | Live guess, experimental | 91.8% | 95.9% |
 | Initial diarization | 91.4% | 83.5% |
-| Refined diarization | 92.5% | 93.6% |
-| Final labels | 94.8% | 96.3% |
-| Final, split at changes | 95.8% | 96.9% |
+| Refined diarization | 92.5% | 94.4% |
+| Final labels | 94.8% | 96.8% |
+| Final, split at changes | 95.8% | 97.7% |
+| 4–15 word turns, final split | 70.9% | 76.2% |
+| 1–3 word turns, final split | 55.3% | 36.8% |
 | People with own cluster (final) | 5/8 | 7/8 |
 
 It's better in every pass that reaches the transcript, and the live guess
 improves most. Its initial diarization is worse at threshold 1.1 (it
 over-splits, and the merge step recovers), which suggests its own
-diarization settings should differ; see the sweep below. On short turns it
-is mixed (1–3 words 31.6% vs 55.3% split, a difference of 9 words;
-4–15 words 66.1% vs 70.9%).
+diarization settings might differ; the sweep below says they needn't. On
+short turns it is mixed: better on 4–15 word turns, worse on 1–3 word
+turns (a difference of 7 of 38 words).
 
 Because of this, `speaker_model = "auto"` (the default) uses the
 English-trained model for English meetings. Other languages, Bengali
 included, keep the base model until a model is measured on them.
 
-<!-- en-sweep -->
+Sweeping sherpa's settings for the English-trained model (same grid as
+above) puts the base model's settings (1.1, 0.3 s, merge 0.55) on a wide
+plateau: ten settings around it score 97.6–97.7% final, and the best
+anywhere is 97.7%. So it keeps the same settings. It keeps 7 of 8 people
+apart at every threshold up to 1.1; the base model keeps 5 or 6.
+
+### The merge step was order-dependent (fixed)
+
+`MergeSimilarSpeakers` merges greedily over speaker clusters taken from a
+Go map, whose order is random, so the same meeting could get different
+final labels each time it was diarized: two runs of the English-trained
+model at the same settings scored 96.9% and 97.7%. It now sorts the
+clusters first. With the base model the shipped settings scored 95.8%
+both before and after, so its figures above stand.
 
 ## Speed and processing load
 

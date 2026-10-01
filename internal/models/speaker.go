@@ -51,8 +51,9 @@ var SpeakerModels = []SpeakerModel{
 		Name: "ERes2Net (VoxCeleb, English-trained)",
 		File: "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
 		URL:  speakerModelsURL + "3dspeaker_speech_eres2net_sv_en_voxceleb_16k.onnx",
-		// The base model's settings until swept for this one
-		// (`tomoe eval --speaker-model eres2net-en --sweep`).
+		// The base model's settings sit on a plateau for this model too
+		// (`tomoe eval --embedding-model eres2net-en --sweep`; see
+		// docs/speaker-attribution-research.md).
 		DiarizeThreshold: 1.1,
 		DiarizeMerge:     0.55,
 	},
