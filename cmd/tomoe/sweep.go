@@ -30,11 +30,18 @@ type sweepResult struct {
 	MinOn     float64 `json:"min_duration_on"`
 	Merge     float64 `json:"merge"`
 
-	Diarization eval.SpeakerScore  `json:"diarization"`
-	Split       eval.SpeakerScore  `json:"final_split"`
-	WhoSaidWhat eval.ErrorCounts   `json:"who_said_what_split"`
-	Exchanges   eval.ExchangeScore `json:"quick_exchanges_split"`
-	Overlaps    eval.OverlapScore  `json:"annotated_overlaps_split"`
+	Initial     eval.SpeakerScore `json:"initial_diarization"`
+	Diarization eval.SpeakerScore `json:"refined_diarization"`
+	Split       eval.SpeakerScore `json:"final_split"`
+
+	// Speaker accuracy by word for the initial and refined diarization and
+	// the final split transcript (see eval.WordAlignment).
+	WordsInitial eval.WordSpeakerScore `json:"word_speakers_initial"`
+	WordsRefined eval.WordSpeakerScore `json:"word_speakers_refined"`
+	WordsSplit   eval.WordSpeakerScore `json:"word_speakers_final_split"`
+	WhoSaidWhat  eval.ErrorCounts      `json:"who_said_what_split"`
+	Exchanges    eval.ExchangeScore    `json:"quick_exchanges_split"`
+	Overlaps     eval.OverlapScore     `json:"annotated_overlaps_split"`
 	// OverlapHeard is how much annotated overlap the diarization itself
 	// labeled with two voices.
 	OverlapHeard float64 `json:"overlap_heard_seconds"`
@@ -127,23 +134,33 @@ func runSweep(opts evalOptions, cfg *config.Config, status *models.Status, sampl
 		_ = cache.save()
 	}
 
+	var refWords []string
+	for _, t := range ref.Turns {
+		refWords = append(refWords, eval.Words(t.Text)...)
+	}
+	scoreRun(run, ref, refWords, opts.collar) // the run's word alignment, shared below
 	for _, r := range results {
 		d := r.diar
+		initial := diarLabeled(d.Raw, d.RawMap)
+		r.Initial = eval.ScoreSpeakers(ref, initial, opts.collar)
+		r.WordsInitial = diarWordScore(run, initial, r.Initial.Mapping)
 		labeled := diarLabeled(d.Merged, d.MergedMap)
 		r.Diarization = eval.ScoreSpeakers(ref, labeled, opts.collar)
+		r.WordsRefined = diarWordScore(run, labeled, r.Diarization.Mapping)
 		r.OverlapHeard = eval.ScoreAnnotatedOverlaps(ref, labeled, r.Diarization.Mapping, 3).DetectedSeconds
 		split, _ := session.SplitByDiarization(append([]session.Segment(nil), run.segs...), d.Merged, d.MergedMap)
 		lab := segmentsLabeled(split)
 		r.Split = eval.ScoreSpeakers(ref, lab, opts.collar)
+		r.WordsSplit = run.align.Score(segmentSpeakers(split), r.Split.Mapping)
 		r.WhoSaidWhat = eval.SpeakerAttributedErrors(ref, lab, r.Split.Mapping)
 		r.Exchanges = eval.ScoreQuickExchanges(ref, lab, r.Split.Mapping, 8, 6, 3)
 		r.Overlaps = eval.ScoreAnnotatedOverlaps(ref, lab, r.Split.Mapping, 3)
 	}
 	sort.Slice(results, func(i, j int) bool {
-		if results[i].Split.Confusion != results[j].Split.Confusion {
-			return results[i].Split.Confusion < results[j].Split.Confusion
+		if a, b := results[i].WordsSplit.Accuracy(), results[j].WordsSplit.Accuracy(); a != b {
+			return a > b
 		}
-		return results[i].WhoSaidWhat.Rate() < results[j].WhoSaidWhat.Rate()
+		return results[i].WordsSplit.Buckets[0].Accuracy() > results[j].WordsSplit.Buckets[0].Accuracy()
 	})
 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -216,25 +233,27 @@ func sweepMerged(status *models.Status, samples []float32, raw *cachedDiarizatio
 
 func formatSweep(results []*sweepResult, ref *eval.Reference) string {
 	var b strings.Builder
-	interjections := 0
-	if len(results) > 0 {
-		interjections = results[0].Overlaps.Interjections
-	}
-	fmt.Fprintf(&b, "Diarization sweep: %d configurations, %d reference speakers. Sorted by final (split) speaker confusion.\n", len(results), len(ref.Speakers()))
+	fmt.Fprintf(&b, "Diarization sweep: %d configurations, %d reference speakers. Sorted by final (split) right speaker by word.\n", len(results), len(ref.Speakers()))
 	fmt.Fprintln(&b, "thresh: clustering threshold (higher merges more). min-on: shortest turn kept. merge: post-merge similarity (0 = off).")
-	fmt.Fprintln(&b, "people: reference speakers with a cluster of their own. * = current settings.")
+	fmt.Fprintln(&b, "Each pass: right speaker by word, overall / in 1-3 word turns. people: speakers with a cluster of their own. * = current.")
+	if len(results) > 0 {
+		w := results[0].WordsSplit
+		fmt.Fprintf(&b, "Words scored: %d of %d reference words (%d in 1-3 word turns).\n", w.Words, w.RefWords, w.Buckets[0].Words)
+	}
 	fmt.Fprintln(&b)
-	fmt.Fprintf(&b, "  thresh min-on merge | diarization: confusion people clusters | final split: confusion who-said-what exchanges interjections | overlap heard\n")
+	fmt.Fprintln(&b, "  thresh min-on merge |  initial diarization   |  refined diarization          |  final, split           | overlap")
+	fmt.Fprintln(&b, "                      | overall  short  people | overall  short  people clusters | overall  short  4-15w  | heard  (refined: words with nobody)")
 	for _, r := range results {
 		mark := " "
 		if r.Current {
 			mark = "*"
 		}
-		fmt.Fprintf(&b, "%s  %5.2f  %4.2f  %4.2f |              %s  %d/%d  %4d     |              %s   %s      %3d/%d       %d/%d     | %4.1fs\n",
+		fmt.Fprintf(&b, "%s  %5.2f  %4.2f  %4.2f | %s %s   %d/%d  | %s %s   %d/%d   %4d    | %s %s %s | %4.1fs  %s\n",
 			mark, r.Threshold, r.MinOn, r.Merge,
-			pct(r.Diarization.Confusion), r.Diarization.RefSpeakersMatched, r.Diarization.RefSpeakers, r.Diarization.HypSpeakers,
-			pct(r.Split.Confusion), pct(r.WhoSaidWhat.Rate()), r.Exchanges.RightSpeaker, r.Exchanges.Turns,
-			r.Overlaps.RightSpeaker, interjections, r.OverlapHeard)
+			pct(r.WordsInitial.Accuracy()), pct(r.WordsInitial.Buckets[0].Accuracy()), r.Initial.RefSpeakersMatched, r.Initial.RefSpeakers,
+			pct(r.WordsRefined.Accuracy()), pct(r.WordsRefined.Buckets[0].Accuracy()), r.Diarization.RefSpeakersMatched, r.Diarization.RefSpeakers, r.Diarization.HypSpeakers,
+			pct(r.WordsSplit.Accuracy()), pct(r.WordsSplit.Buckets[0].Accuracy()), pct(r.WordsSplit.Buckets[1].Accuracy()),
+			r.OverlapHeard, pct(ratio(r.WordsRefined.Unlabeled, r.WordsRefined.Words)))
 	}
 	return b.String()
 }

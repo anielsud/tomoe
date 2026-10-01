@@ -364,3 +364,55 @@ func TestScoreAnnotatedOverlaps(t *testing.T) {
 		t.Errorf("overlaps = %+v", s)
 	}
 }
+
+func TestAlignPairs(t *testing.T) {
+	ref := strings.Fields("the cat sat on the mat")
+	got := alignPairs(ref, strings.Fields("the bat sat the mat today"))
+	// the=0, bat~cat=1, sat=2, ("on" deleted), the=4, mat=5, today inserted
+	want := []int{0, 1, 2, 4, 5, -1}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("alignPairs = %v, want %v", got, want)
+	}
+}
+
+func TestWordAlignment_ScoresShortTurnsAndOverlapByText(t *testing.T) {
+	// A talks, B interjects "yes exactly" (same start: overlap), A carries
+	// on. Times don't matter: words are matched to turns by text.
+	ref := &Reference{Turns: []Turn{
+		{"A", 0, 5, "we shipped thirty three features this quarter"},
+		{"B", 5, 6, "yes exactly"},
+		{"A", 5, 9, "and retention held at seventy five percent"},
+	}}
+	texts := strings.Fields("we shipped 33 features this quarter yes exactly and retention held at 75%")
+	a := NewWordAlignment(ref, texts)
+	lab := make([][]string, len(texts))
+	for i := range lab {
+		lab[i] = []string{"P1"} // everything given to A
+	}
+	s := a.Score(lab, map[string]string{"P1": "A", "P2": "B"})
+	// 14 normalized words each side ("33" and "75 percent" normalize to
+	// match), all matched; B's 2 are wrong.
+	if s.Words != 14 || s.RefWords != 14 {
+		t.Errorf("scored %d of %d reference words, want 14 of 14", s.Words, s.RefWords)
+	}
+	if s.Correct != s.Words-2 {
+		t.Errorf("correct = %d of %d, want all but B's 2", s.Correct, s.Words)
+	}
+	short := s.Buckets[0]
+	if short.Words != 2 || short.Correct != 0 {
+		t.Errorf("1-3 word bucket = %+v, want B's 2 words, both wrong", short)
+	}
+	// Labeling the interjection right fixes exactly those 2.
+	lab[6], lab[7] = []string{"P2"}, []string{"P2"}
+	if s := a.Score(lab, map[string]string{"P1": "A", "P2": "B"}); s.Correct != s.Words {
+		t.Errorf("all right: %d of %d", s.Correct, s.Words)
+	}
+}
+
+func TestSpeakersAt(t *testing.T) {
+	hyp := []Labeled{{0, 5, "A", ""}, {4, 6, "B", ""}}
+	got := SpeakersAt(hyp, []float64{1, 4.5, 7})
+	if !reflect.DeepEqual(got, [][]string{{"A"}, {"A", "B"}, nil}) {
+		t.Errorf("SpeakersAt = %v", got)
+	}
+}

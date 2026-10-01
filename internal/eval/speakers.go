@@ -398,3 +398,231 @@ func ScoreAnnotatedOverlaps(ref *Reference, hyp []Labeled, mapping map[string]st
 	}
 	return s
 }
+
+// TurnBucket groups reference turns by length, in words.
+type TurnBucket struct {
+	Label    string `json:"label"`
+	MinWords int    `json:"min_words"`
+	MaxWords int    `json:"max_words"` // 0 = no upper limit
+	Words    int    `json:"words"`
+	Correct  int    `json:"correct"`
+}
+
+// Accuracy is the share of the bucket's words with the right speaker.
+func (b TurnBucket) Accuracy() float64 {
+	if b.Words == 0 {
+		return 0
+	}
+	return float64(b.Correct) / float64(b.Words)
+}
+
+// DefaultTurnBuckets are the turn-length groups word accuracy is broken
+// down by: interjections, short replies, normal turns and monologues.
+func DefaultTurnBuckets() []TurnBucket {
+	return []TurnBucket{
+		{Label: "1-3 words", MinWords: 1, MaxWords: 3},
+		{Label: "4-15 words", MinWords: 4, MaxWords: 15},
+		{Label: "16-60 words", MinWords: 16, MaxWords: 60},
+		{Label: "61+ words", MinWords: 61},
+	}
+}
+
+// WordSpeakerScore is speaker accuracy by word: of the transcribed words
+// matched to a reference word, the share whose speaker is the one who said
+// that reference word, overall and by the length of its turn.
+type WordSpeakerScore struct {
+	// Words is how many transcribed words matched a reference word (and so
+	// were scored); RefWords is the reference total.
+	Words    int `json:"words"`
+	RefWords int `json:"ref_words"`
+	Correct  int `json:"correct"`
+	// Unlabeled counts scored words the pass gave no speaker at all (a
+	// diarization gap): wrong, but missed rather than misattributed.
+	Unlabeled int          `json:"unlabeled"`
+	Buckets   []TurnBucket `json:"buckets"`
+}
+
+// Accuracy is the overall share of scored words with the right speaker.
+func (s WordSpeakerScore) Accuracy() float64 {
+	if s.Words == 0 {
+		return 0
+	}
+	return float64(s.Correct) / float64(s.Words)
+}
+
+// WordAlignment pairs a pass's transcribed words with the reference words
+// they correspond to, by text, so each transcribed word knows which
+// reference turn (and so which speaker) it belongs to. Aligning by text
+// rather than by time needs no collar around speaker changes, so short
+// turns and interjections are scored too, and during annotated overlap a
+// word belongs to whoever actually said it.
+//
+// Build one per sequence of transcribed words and reuse it for every pass
+// that labels those same words (live, final, split, diarization).
+type WordAlignment struct {
+	ref       *Reference
+	turnWords []int // words per reference turn
+	// tokenWord[k] is the transcribed word normalized token k came from,
+	// and tokenTurn[k] the reference turn it aligned to (-1: none).
+	tokenWord []int
+	tokenTurn []int
+	refTokens int
+}
+
+// NewWordAlignment aligns texts (the transcribed words, in order) with the
+// reference's words.
+func NewWordAlignment(ref *Reference, texts []string) *WordAlignment {
+	a := &WordAlignment{ref: ref, turnWords: make([]int, len(ref.Turns))}
+	var refToks []string
+	var refTurn []int
+	for i, t := range ref.Turns {
+		ws := Words(t.Text)
+		a.turnWords[i] = len(ws)
+		for _, w := range ws {
+			refToks = append(refToks, w)
+			refTurn = append(refTurn, i)
+		}
+	}
+	a.refTokens = len(refToks)
+	var hypToks []string
+	for i, t := range texts {
+		for _, w := range Words(t) {
+			hypToks = append(hypToks, w)
+			a.tokenWord = append(a.tokenWord, i)
+		}
+	}
+	pairs := alignPairs(refToks, hypToks)
+	a.tokenTurn = make([]int, len(hypToks))
+	for k, r := range pairs {
+		a.tokenTurn[k] = -1
+		if r >= 0 {
+			a.tokenTurn[k] = refTurn[r]
+		}
+	}
+	return a
+}
+
+// Score scores one pass: speakers[i] are the labels the pass gives
+// transcribed word i (as passed to NewWordAlignment). A word is right if
+// any label maps (via mapping) to the speaker of the reference turn it
+// aligned to. Transcribed words that align to no reference word aren't
+// scored.
+func (a *WordAlignment) Score(speakers [][]string, mapping map[string]string) WordSpeakerScore {
+	s := WordSpeakerScore{RefWords: a.refTokens, Buckets: DefaultTurnBuckets()}
+	for k, turn := range a.tokenTurn {
+		if turn < 0 {
+			continue
+		}
+		want := a.ref.Turns[turn].Speaker
+		right := false
+		if w := a.tokenWord[k]; w >= len(speakers) || len(speakers[w]) == 0 {
+			s.Unlabeled++
+		} else {
+			for _, l := range speakers[w] {
+				if mapping[l] == want {
+					right = true
+					break
+				}
+			}
+		}
+		s.Words++
+		if right {
+			s.Correct++
+		}
+		n := a.turnWords[turn]
+		for b := range s.Buckets {
+			bk := &s.Buckets[b]
+			if n >= bk.MinWords && (bk.MaxWords == 0 || n <= bk.MaxWords) {
+				bk.Words++
+				if right {
+					bk.Correct++
+				}
+				break
+			}
+		}
+	}
+	return s
+}
+
+// alignPairs computes the minimum-edit alignment of hyp against ref and
+// returns, for each hyp token, the ref token it's paired with (a match or a
+// substitution), or -1 for an insertion. Keeps one byte of backtrace per
+// cell, so an hour-long meeting (~9k x 9k) needs ~80MB.
+func alignPairs(ref, hyp []string) []int {
+	n, m := len(ref), len(hyp)
+	const (
+		diag = iota
+		up   // deletion: a ref token with no hyp token
+		left // insertion: a hyp token with no ref token
+	)
+	back := make([]byte, (n+1)*(m+1))
+	prev := make([]int32, m+1)
+	cur := make([]int32, m+1)
+	for j := 0; j <= m; j++ {
+		prev[j] = int32(j)
+		back[j] = left
+	}
+	for i := 1; i <= n; i++ {
+		cur[0] = int32(i)
+		back[i*(m+1)] = up
+		for j := 1; j <= m; j++ {
+			cost := prev[j-1]
+			if ref[i-1] != hyp[j-1] {
+				cost++
+			}
+			best, dir := cost, byte(diag)
+			if prev[j]+1 < best {
+				best, dir = prev[j]+1, up
+			}
+			if cur[j-1]+1 < best {
+				best, dir = cur[j-1]+1, left
+			}
+			cur[j] = best
+			back[i*(m+1)+j] = dir
+		}
+		prev, cur = cur, prev
+	}
+	pairs := make([]int, m)
+	i, j := n, m
+	for i > 0 || j > 0 {
+		switch back[i*(m+1)+j] {
+		case diag:
+			pairs[j-1] = i - 1
+			i, j = i-1, j-1
+		case up:
+			i--
+		default:
+			pairs[j-1] = -1
+			j--
+		}
+	}
+	return pairs
+}
+
+// SpeakersAt returns, for each time, the labels of the stretches covering
+// it: how a diarization pass labels a word.
+func SpeakersAt(hyp []Labeled, times []float64) [][]string {
+	sorted := append([]Labeled(nil), hyp...)
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].Start < sorted[j].Start })
+	out := make([][]string, len(times))
+	for i, t := range times {
+		for _, h := range sorted {
+			if h.Start > t {
+				break
+			}
+			if t < h.End && !containsString(out[i], h.Speaker) {
+				out[i] = append(out[i], h.Speaker)
+			}
+		}
+	}
+	return out
+}
+
+func containsString(xs []string, x string) bool {
+	for _, v := range xs {
+		if v == x {
+			return true
+		}
+	}
+	return false
+}
