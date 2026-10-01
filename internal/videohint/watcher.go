@@ -9,8 +9,29 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
 )
 
+// Video hint sources (WatchConfig.Source): SourceAuto finds the Teams
+// meeting window; SourceNone turns hints off; anything else is an app's
+// name, whose largest window is watched. An app with no rule yet (only
+// Teams has one) is still captured, so its frames can be saved for
+// analysis and a rule written from them; its looks never name anyone.
+const (
+	SourceAuto = ""
+	SourceNone = "none"
+)
+
+// WindowChoice is an app whose window video hints could watch.
+type WindowChoice struct {
+	App   string `json:"app"`
+	Title string `json:"title"`
+	// Known is whether there's a rule for reading its active speaker.
+	Known bool `json:"known"`
+}
+
 // WatchConfig configures a Watcher.
 type WatchConfig struct {
+	// Source is which window to watch (see SourceAuto); SetSource changes
+	// it while running.
+	Source string
 	// LearnInterval is the time between looks while learning: some
 	// speaker still has no confident name (NeedsLearning), or a speaker
 	// change just happened (Burst). CheckInterval is the time between
@@ -58,9 +79,11 @@ type Watcher struct {
 	cfg  WatchConfig
 	wake chan struct{}
 
-	mu         sync.Mutex
-	burstUntil time.Time
-	frames     []keptFrame
+	mu            sync.Mutex
+	source        string
+	sourceChanged bool // the watcher goroutine forgets its tiles
+	burstUntil    time.Time
+	frames        []keptFrame
 
 	// Watcher-goroutine state.
 	nextID  int
@@ -97,7 +120,16 @@ func NewWatcher(cfg WatchConfig) *Watcher {
 	if cfg.CheckInterval <= 0 {
 		cfg.CheckInterval = DefaultCheckInterval
 	}
-	return &Watcher{cfg: cfg, wake: make(chan struct{}, 1)}
+	return &Watcher{cfg: cfg, source: cfg.Source, wake: make(chan struct{}, 1)}
+}
+
+// SetSource switches the window watched (see SourceAuto). Safe from any
+// goroutine.
+func (w *Watcher) SetSource(source string) {
+	w.mu.Lock()
+	w.source, w.sourceChanged = source, true
+	w.mu.Unlock()
+	w.Burst()
 }
 
 // SetOnFullFrame sets WatchConfig.OnFullFrame; call before Run.
@@ -172,12 +204,18 @@ func (w *Watcher) learning() bool {
 func (w *Watcher) look(learning bool) {
 	w.nextID++
 	l := Look{ID: w.nextID, Time: time.Now()}
-	fr, stage, detail := captureMeetingWindow()
+	w.mu.Lock()
+	source := w.source
+	if w.sourceChanged {
+		w.sourceChanged, w.tiles, w.last = false, nil, nil
+	}
+	w.mu.Unlock()
+	fr, platform, window, stage, detail := captureWindow(source)
 	l.Cost.Capture = msSince(l.Time)
-	l.Stage, l.Detail = stage, detail
+	l.Stage, l.Detail, l.Window = stage, detail, window
 	if fr != nil {
 		l.Width, l.Height = fr.width, fr.height
-		w.analyze(&l, fr, learning)
+		w.analyze(&l, fr, platform, learning)
 		began := time.Now()
 		w.keepThumb(&l, fr)
 		l.Cost.Encode = msSince(began)
@@ -189,10 +227,10 @@ func (w *Watcher) look(learning bool) {
 }
 
 // analyze finds the ring and the name in fr.
-func (w *Watcher) analyze(l *Look, fr *frame, learning bool) {
-	rule, ok := ruleFor(meeting.PlatformTeams) // the only window finder so far
+func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learning bool) {
+	rule, ok := ruleFor(platform)
 	if !ok {
-		l.Stage, l.Detail = StageNoRule, "no rule configured for this platform"
+		l.Stage, l.Detail = StageNoRule, "no rule for this app yet: frames are kept for analysis, nothing is read"
 		return
 	}
 	if rule.Chrome.configured() && !DetectCallChrome(fr.pix, fr.width, fr.height, rule.Chrome) {

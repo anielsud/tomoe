@@ -139,10 +139,25 @@ labels and for app-identity matching (see `isTeamsPID` below).
 platform-agnostic second-audio-source entry point. On macOS,
 `sourceHint` is either:
 
+- `"auto"` or `""` (the default, "Meeting app (automatic)") — the
+  meeting app's audio when one is making sound (Teams, Zoom, Webex,
+  FaceTime, Discord, Slack, in that order of preference, matched by app
+  name and bundle ID), otherwise the whole system's audio until one does:
+  every 3 s the session checks again and moves capture to the app
+  (`audio.SwitchCapturer`, keeping the audio already buffered), so
+  notification sounds and music stay out of the transcript once the call
+  is going. The source picker shows what it's capturing. Browser
+  meetings count too: a browser making sound whose window title names a
+  meeting (`meeting.PlatformFromTitle`, shared with Linux's detection:
+  "Meet - abc-defg-hij", or Teams/Zoom/Webex on the web) is captured via
+  that window. The meeting's tab must be the one showing, and a
+  browser's audio is the whole browser's, other tabs included.
 - `"everything"` — the whole system's audio via
-  `guestaudio.NewSystemCapturer()`, speaker diarization skipped
-  (`live.Config.SkipMonitorDiarization`) since it's not one app's
-  isolated stream — labeled `"System Audio"` rather than clustered.
+  `guestaudio.NewSystemCapturer()`. Speakers are separated like any
+  other source: in a meeting the system's audio is mostly the call, and
+  other sounds just become short extra "speakers". (It used to skip
+  diarization and label everything `"System Audio"`; older sessions
+  recorded that way keep those labels.)
 - a decimal PID from `audiosources.ListActive()` — that app's audio via
   a window it owns. Resolved by app identity, not process ancestry:
   `isTeamsPID` checks the source's own name/bundle ID from

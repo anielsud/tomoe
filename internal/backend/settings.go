@@ -188,6 +188,9 @@ func planApply(old, next *config.Config) applyPlan {
 		old.Meeting.DiarizeRecluster != next.Meeting.DiarizeRecluster {
 		p.later = append(p.later, "Diarizing during the meeting")
 	}
+	if old.Meeting.VideoHintWindow != next.Meeting.VideoHintWindow {
+		p.later = append(p.later, "Video hint window (the hint timeline switches it at once)")
+	}
 	if old.Meeting.RecordForTuning != next.Meeting.RecordForTuning {
 		p.later = append(p.later, "Record for tuning")
 	}

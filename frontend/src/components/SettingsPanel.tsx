@@ -20,6 +20,21 @@ function clone(c: Config): Config {
   return JSON.parse(JSON.stringify(c));
 }
 
+// WindowSelect picks the video hint window ("" Teams, "none", an app).
+function WindowSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [apps, setApps] = useState<{ app: string; title: string; known: boolean }[]>([]);
+  const refresh = () => { window.go?.backend?.App?.ListHintWindows().then(ws => setApps(ws || [])).catch(() => {}); };
+  useEffect(refresh, []);
+  return (
+    <select className="setting-input" value={value} onFocus={refresh} onChange={e => onChange(e.target.value)}>
+      <option value="">Teams meeting (automatic)</option>
+      <option value="none">Off</option>
+      {value && value !== 'none' && !apps.some(a => a.app === value) && <option value={value}>{value}</option>}
+      {apps.map(a => <option key={a.app} value={a.app}>{a.app}{a.known ? '' : ' (no rule yet)'}</option>)}
+    </select>
+  );
+}
+
 function Row({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <div className="setting-row setting-row-edit">
@@ -329,7 +344,10 @@ export default function SettingsPanel() {
         </Group>
 
         {mac && (
-          <Group title="Teams video hints" applies="next">
+          <Group title="Video hints" applies="next">
+            <Row label="Watch" hint="Which window to read the active speaker from. Pick any app to collect its frames for a future rule (shown in the hint timeline); only Teams is read today. The hint timeline can switch it during a meeting">
+              <WindowSelect value={draft.Meeting.VideoHintWindow || ''} onChange={v => set('Meeting', 'VideoHintWindow', v)} />
+            </Row>
             <Row label="Look while learning (seconds)" hint="While someone speaking has no name yet, or right after a speaker change">{num('Meeting', 'VideoHintLearnInterval', 0.05, 0.1)}</Row>
             <Row label="Look while checking (seconds)" hint="When everyone speaking already has a name">{num('Meeting', 'VideoHintCheckInterval', 0.25, 0.25)}</Row>
           </Group>

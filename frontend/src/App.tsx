@@ -134,12 +134,11 @@ function App() {
       if (!window.go?.backend?.App?.ListAudioSources) return;
       const sources = await window.go.backend.App.ListAudioSources();
       setAudioSources(sources || []);
-      // Default to "Everything" (matches the old auto-detect's
-      // always-on-if-available behavior) rather than leaving the
-      // picker unset until the user notices it. Only when nothing is
-      // selected yet: an explicit "No System Audio" is "none", so this
-      // periodic refresh never overrides it.
-      setMonitorDevice(prev => prev || 'everything');
+      // Default to "Meeting app (automatic)": the meeting app's audio
+      // when one is making sound, else everything until it does. Only
+      // when nothing is selected yet: an explicit "No System Audio" is
+      // "none", so this periodic refresh never overrides it.
+      setMonitorDevice(prev => prev || 'auto');
     } catch (e) {
       console.error('Failed to load audio sources:', e);
     }

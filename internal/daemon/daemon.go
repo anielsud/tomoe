@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"syscall"
 	"time"
@@ -423,14 +424,22 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	// monitor" on macOS specifically (a PID wouldn't survive an app
 	// restart anyway), unlike Linux's "use the default device" meaning
 	// for the same empty value.
-	monCapturer, err := meetingaudio.NewMonitorSource(d.cfg.Meeting.MonitorDevice)
+	var monCapturer *audio.StreamCapturer
+	var audioAuto *meetingaudio.Auto
+	if src := d.cfg.Meeting.MonitorDevice; src == meetingaudio.AutoSource || (src == "" && runtime.GOOS == "darwin") {
+		monCapturer, audioAuto, err = meetingaudio.NewAutoMonitorSource()
+		if audioAuto != nil {
+			fmt.Printf("system audio: capturing %s\n", audioAuto.Current())
+		}
+	} else {
+		monCapturer, err = meetingaudio.NewMonitorSource(src)
+	}
 	if err != nil {
 		cfg.MicCapturer.Close()
 		return nil, fmt.Errorf("creating monitor capturer: %w", err)
 	}
 	if monCapturer != nil {
 		cfg.MonitorCapturer = monCapturer
-		cfg.SkipMonitorDiarization = d.cfg.Meeting.MonitorDevice == "everything"
 	}
 
 	// Reset speaker tracker
@@ -451,6 +460,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	)
 	learn, check := d.cfg.Meeting.VideoHintTiming()
 	watcher := videohint.NewWatcher(videohint.WatchConfig{
+		Source:        d.cfg.Meeting.VideoHintWindow,
 		LearnInterval: learn,
 		CheckInterval: check,
 		NeedsLearning: func() bool {
@@ -598,6 +608,23 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	videoHintCtx, videoHintCancel := context.WithCancel(ctx)
 	lookLog = videohint.NewLookLog(filepath.Join(config.SessionDir(), sess.ID))
 	go watcher.Run(videoHintCtx)
+	if audioAuto != nil {
+		go func() {
+			t := time.NewTicker(3 * time.Second)
+			defer t.Stop()
+			for {
+				select {
+				case <-videoHintCtx.Done():
+					return
+				case <-t.C:
+					if name, ok := audioAuto.TryMeetingApp(); ok {
+						fmt.Printf("system audio: now capturing %s only\n", name)
+						return
+					}
+				}
+			}
+		}()
+	}
 	go func() {
 		for {
 			select {

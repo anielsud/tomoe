@@ -22,6 +22,8 @@ type Look struct {
 	Time   time.Time  `json:"time"`
 	Stage  EventStage `json:"stage"`
 	Detail string     `json:"detail"`
+	// Window is the app (and window title) captured.
+	Window string `json:"window,omitempty"`
 	// Ring is the active-speaker ring found, if exactly one was.
 	Ring *RingMatch `json:"ring,omitempty"`
 	// Rings are every candidate when more than one was found, and

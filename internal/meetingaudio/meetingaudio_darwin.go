@@ -6,10 +6,12 @@ import (
 	"fmt"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/audiosources"
 	"github.com/sosuke-ai/tomoe-pc/internal/guestaudio"
+	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
 	"github.com/sosuke-ai/tomoe-pc/internal/teamsvideo"
 )
 
@@ -17,9 +19,14 @@ import (
 // sourceHint (from the frontend's source picker — see
 // internal/audiosources.ListActive and internal/backend's
 // ListAudioSources/StartSession):
-//   - "" (nothing selected) or NoSource: no monitor capture, mic-only.
-//   - "everything": the whole system's audio output, not tied to any
-//     one app (internal/guestaudio.NewSystemCapturer).
+//   - NoSource: no monitor capture, mic-only.
+//   - AutoSource: the meeting app if one is making sound, else the whole
+//     system (see NewAutoMonitorSource, which can also move to the app
+//     later).
+//   - "everything", or "" (the default): the whole system's audio
+//     output, not tied to any one app
+//     (internal/guestaudio.NewSystemCapturer). Speakers are separated
+//     the same as for one app's audio.
 //   - a decimal PID (e.g. "1234", from ListActive): that specific
 //     app's audio, via a window it owns. Teams (identified by app
 //     name/bundle ID, not process ancestry — see isTeamsPID) resolves
@@ -36,12 +43,14 @@ import (
 // failure here would make meeting mode strictly worse than today for
 // no benefit.
 func NewMonitorSource(sourceHint string) (*audio.StreamCapturer, error) {
-	if sourceHint == "" || sourceHint == NoSource {
+	if sourceHint == NoSource {
 		return nil, nil
 	}
-
+	if sourceHint == AutoSource || sourceHint == "" {
+		stream, _, err := NewAutoMonitorSource()
+		return stream, err
+	}
 	var capturer audio.Capturer
-
 	if sourceHint == "everything" {
 		capturer = guestaudio.NewSystemCapturer()
 	} else {
@@ -50,32 +59,11 @@ func NewMonitorSource(sourceHint string) (*audio.StreamCapturer, error) {
 			fmt.Printf("meetingaudio: invalid source selection %q, starting mic-only: %v\n", sourceHint, err)
 			return nil, nil
 		}
-		var windowID teamsvideo.WindowID
-		if isTeamsPID(int32(pid)) {
-			// CoreAudio's audio-active PID for Teams is frequently a
-			// short-lived helper/module process (found live: "Microsoft
-			// Teams WebView", and later a differently-named "modulehost"
-			// helper for a different call) that isn't even a descendant
-			// of the main Teams process via the normal parent-PID chain
-			// FindWindowForPID walks -- some of these helpers are
-			// launchd-spawned XPC services with PID 1 as their parent,
-			// not a child of Teams itself, so that walk terminates
-			// immediately with "no window found" and silently falls
-			// back to mic-only. Once we know from the source's own
-			// app identity (not process ancestry) that this is Teams,
-			// skip PID/window matching entirely and go straight to the
-			// existing, independently-proven title-based finder.
-			windowID, err = teamsvideo.FindMeetingWindow()
-		} else {
-			windowID, err = teamsvideo.FindWindowForPID(int32(pid))
-		}
-		if err != nil {
+		if capturer, err = appCapturer(int32(pid)); err != nil {
 			fmt.Printf("meetingaudio: no window found for selected app (PID %d), starting mic-only: %v\n", pid, err)
 			return nil, nil
 		}
-		capturer = guestaudio.NewWindowCapturer(uint32(windowID))
 	}
-
 	// Start now, up front, to confirm the tap actually works (most
 	// commonly: Screen Recording permission not yet granted) before
 	// committing to it as the monitor source. Capturer.Start is
@@ -86,8 +74,183 @@ func NewMonitorSource(sourceHint string) (*audio.StreamCapturer, error) {
 		fmt.Printf("meetingaudio: guest audio capture unavailable, starting mic-only (%v) — check Screen Recording permission in System Settings > Privacy & Security\n", err)
 		return nil, nil
 	}
-
 	return audio.NewStreamCapturer(capturer, audio.DefaultWindowSize, 128), nil
+}
+
+// appCapturer captures one app's audio, via a window it owns.
+func appCapturer(pid int32) (audio.Capturer, error) {
+	var windowID teamsvideo.WindowID
+	var err error
+	if isTeamsPID(pid) {
+		// CoreAudio's audio-active PID for Teams is frequently a
+		// short-lived helper/module process (found live: "Microsoft
+		// Teams WebView", and later a differently-named "modulehost"
+		// helper for a different call) that isn't even a descendant
+		// of the main Teams process via the normal parent-PID chain
+		// FindWindowForPID walks -- some of these helpers are
+		// launchd-spawned XPC services with PID 1 as their parent,
+		// not a child of Teams itself. Once we know from the source's
+		// own app identity (not process ancestry) that this is Teams,
+		// skip PID/window matching entirely and go straight to the
+		// existing, independently-proven title-based finder.
+		windowID, err = teamsvideo.FindMeetingWindow()
+	} else {
+		windowID, err = teamsvideo.FindWindowForPID(pid)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return guestaudio.NewWindowCapturer(uint32(windowID)), nil
+}
+
+// meetingApps are the apps AutoSource captures, most likely first,
+// matched against an audio source's name and bundle ID.
+var meetingApps = []string{"teams", "zoom", "webex", "facetime", "discord", "slack"}
+
+// browsers maps a browser's audio source (matched against name and
+// bundle ID, most specific first: Edge and Brave are Chromium too) to the
+// app that owns its windows.
+var browsers = []struct{ match, owner string }{
+	{"edge", "Microsoft Edge"},
+	{"brave", "Brave Browser"},
+	{"thebrowser", "Arc"},
+	{"chrome", "Google Chrome"},
+	{"chromium", "Chromium"},
+	{"firefox", "Firefox"},
+	{"safari", "Safari"},
+	{"webkit", "Safari"},
+}
+
+// meetingSource is a meeting found making sound: a native app (pid), or a
+// browser window showing a meeting (window).
+type meetingSource struct {
+	label  string
+	pid    int32
+	window teamsvideo.WindowID
+}
+
+func (m meetingSource) capturer() (audio.Capturer, error) {
+	if m.window != 0 {
+		return guestaudio.NewWindowCapturer(uint32(m.window)), nil
+	}
+	return appCapturer(m.pid)
+}
+
+// activeMeetingApp is the meeting making sound right now, if any: a
+// meeting app, or a browser making sound with a window whose title names
+// a meeting (Meet, or Teams/Zoom/Webex on the web; the tab has to be the
+// one showing). A browser's audio is the whole browser's, other tabs
+// included.
+func activeMeetingApp() (meetingSource, bool) {
+	sources, err := audiosources.ListActive()
+	if err != nil {
+		return meetingSource{}, false
+	}
+	for _, app := range meetingApps {
+		for _, s := range sources {
+			if strings.Contains(strings.ToLower(s.Name+" "+s.BundleID), app) {
+				return meetingSource{label: s.Name, pid: int32(s.PID)}, true
+			}
+		}
+	}
+	for _, s := range sources {
+		owner := browserOwner(s)
+		if owner == "" {
+			continue
+		}
+		windows, err := teamsvideo.ListWindows()
+		if err != nil {
+			return meetingSource{}, false
+		}
+		for _, w := range windows {
+			if w.Owner != owner {
+				continue
+			}
+			if p := meeting.PlatformFromTitle(w.Title); p != meeting.PlatformUnknown {
+				return meetingSource{label: fmt.Sprintf("%s in %s", p, owner), window: w.ID}, true
+			}
+		}
+	}
+	return meetingSource{}, false
+}
+
+// browserOwner is the app owning the windows of browser audio source s,
+// or "" if s isn't a browser.
+func browserOwner(s audiosources.Source) string {
+	id := strings.ToLower(s.Name + " " + s.BundleID)
+	for _, b := range browsers {
+		if strings.Contains(id, b.match) {
+			return b.owner
+		}
+	}
+	return ""
+}
+
+// Auto is an AutoSource capture: the meeting app if one is making sound,
+// else the whole system until one does (see TryMeetingApp).
+type Auto struct {
+	sw *audio.SwitchCapturer
+
+	mu      sync.Mutex
+	current string
+	onApp   bool
+}
+
+// Current names what's being captured ("Everything" or the app's name).
+func (a *Auto) Current() string {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.current
+}
+
+// TryMeetingApp switches from the whole system to the meeting app if one
+// is making sound now, returning its name. Does nothing once on an app.
+func (a *Auto) TryMeetingApp() (string, bool) {
+	a.mu.Lock()
+	onApp := a.onApp
+	a.mu.Unlock()
+	if onApp {
+		return "", false
+	}
+	src, ok := activeMeetingApp()
+	if !ok {
+		return "", false
+	}
+	c, err := src.capturer()
+	if err != nil {
+		return "", false
+	}
+	if err := a.sw.Switch(c); err != nil {
+		fmt.Printf("meetingaudio: couldn't switch to %s: %v\n", src.label, err)
+		return "", false
+	}
+	a.mu.Lock()
+	a.current, a.onApp = src.label, true
+	a.mu.Unlock()
+	return src.label, true
+}
+
+// NewAutoMonitorSource starts AutoSource capture: the meeting app making
+// sound now if there is one, else the whole system (call TryMeetingApp
+// later to move to the app once it starts). Returns nil, nil if capture
+// isn't available at all (mic-only, as NewMonitorSource).
+func NewAutoMonitorSource() (*audio.StreamCapturer, *Auto, error) {
+	a := &Auto{current: "Everything"}
+	var first audio.Capturer
+	if src, ok := activeMeetingApp(); ok {
+		if c, err := src.capturer(); err == nil {
+			first, a.current, a.onApp = c, src.label, true
+		}
+	}
+	if first == nil {
+		first = guestaudio.NewSystemCapturer()
+	}
+	a.sw = audio.NewSwitchCapturer(first)
+	if err := a.sw.Start(); err != nil {
+		fmt.Printf("meetingaudio: guest audio capture unavailable, starting mic-only (%v) — check Screen Recording permission in System Settings > Privacy & Security\n", err)
+		return nil, nil, nil
+	}
+	return audio.NewStreamCapturer(a.sw, audio.DefaultWindowSize, 128), a, nil
 }
 
 // isTeamsPID reports whether pid (an audio-active process from

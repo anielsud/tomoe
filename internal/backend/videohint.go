@@ -12,6 +12,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/diarize"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
+	"github.com/sosuke-ai/tomoe-pc/internal/meetingaudio"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
@@ -26,6 +27,7 @@ type LookView struct {
 	SessionTime float64               `json:"sessionTime"`
 	Stage       string                `json:"stage"`
 	Detail      string                `json:"detail"`
+	Window      string                `json:"window,omitempty"`
 	Name        string                `json:"name,omitempty"`
 	FromCache   bool                  `json:"fromCache,omitempty"`
 	Usable      bool                  `json:"usable"`
@@ -44,7 +46,7 @@ type LookView struct {
 func toLookView(l videohint.Look, start time.Time, withThumb bool) LookView {
 	v := LookView{
 		ID: l.ID, Time: l.Time.Format(time.RFC3339Nano), SessionTime: l.Time.Sub(start).Seconds(),
-		Stage: string(l.Stage), Detail: l.Detail, Name: l.Name, FromCache: l.FromCache, Usable: l.Usable,
+		Stage: string(l.Stage), Detail: l.Detail, Window: l.Window, Name: l.Name, FromCache: l.FromCache, Usable: l.Usable,
 		Ring: l.Ring, Rings: l.Rings, Candidates: l.Candidates, Width: l.Width, Height: l.Height, ThumbOf: l.ThumbOf,
 	}
 	if withThumb && len(l.Thumb) > 0 {
@@ -68,6 +70,7 @@ func (a *App) newHintWatcher() (*videohint.Watcher, *hintSession) {
 	hs := &hintSession{}
 	learn, check := a.cfg.Meeting.VideoHintTiming()
 	hs.watcher = videohint.NewWatcher(videohint.WatchConfig{
+		Source:        a.cfg.Meeting.VideoHintWindow,
 		LearnInterval: learn,
 		CheckInterval: check,
 		NeedsLearning: func() bool {
@@ -139,6 +142,40 @@ func (a *App) onLook(hs *hintSession, l videohint.Look) {
 	if current {
 		wailsRuntime.EventsEmit(a.ctx, "videohint:look", toLookView(l, hs.sess.CreatedAt, true))
 	}
+}
+
+// ListHintWindows returns the apps with a window on screen that video
+// hints could watch (see SetHintWindow).
+func (a *App) ListHintWindows() ([]videohint.WindowChoice, error) {
+	a.fixSignals()
+	return videohint.Windows()
+}
+
+// SetHintWindow chooses which window video hints watch: "" for the Teams
+// meeting window, "none" for off, or an app's name. Takes effect at once
+// in a recording and is saved for later ones.
+func (a *App) SetHintWindow(app string) error {
+	a.fixSignals()
+	a.mu.Lock()
+	if a.cfg == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("Tomoe is still starting up")
+	}
+	next := *a.cfg
+	next.Meeting.VideoHintWindow = app
+	if err := config.Save(&next, config.Path()); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	a.cfg = &next
+	a.mu.Unlock()
+	a.videoHintMu.Lock()
+	hs := a.hints
+	a.videoHintMu.Unlock()
+	if hs != nil && hs.watcher != nil {
+		hs.watcher.SetSource(app)
+	}
+	return nil
 }
 
 // GetVideoHintLooks returns a session's looks at the meeting window,
@@ -299,4 +336,52 @@ func renameLines(sess *session.Session, label, name string) []session.Segment {
 		}
 	}
 	return changed
+}
+
+// followMeetingAudio reports what the automatic system-audio source is
+// capturing, and while it's still the whole system (the call hadn't
+// started making sound yet), checks every few seconds for a meeting app
+// to move to, so notification sounds stay out of the transcript once
+// the call is going. Does nothing for a fixed source (auto nil).
+func (a *App) followMeetingAudio(ctx context.Context, auto *meetingaudio.Auto) {
+	a.videoHintMu.Lock()
+	a.audioSource = ""
+	if auto != nil {
+		a.audioSource = auto.Current()
+	}
+	current := a.audioSource
+	a.videoHintMu.Unlock()
+	if auto == nil {
+		return
+	}
+	wailsRuntime.EventsEmit(a.ctx, "audio:source", current)
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if name, ok := auto.TryMeetingApp(); ok {
+					fmt.Printf("system audio: now capturing %s only\n", name)
+					a.videoHintMu.Lock()
+					a.audioSource = name
+					a.videoHintMu.Unlock()
+					wailsRuntime.EventsEmit(a.ctx, "audio:source", name)
+					return
+				}
+			}
+		}
+	}()
+}
+
+// CurrentAudioSource names what the automatic system-audio source is
+// capturing in the current recording ("Everything" or a meeting app), or
+// "" for a fixed source or no recording.
+func (a *App) CurrentAudioSource() string {
+	a.fixSignals()
+	a.videoHintMu.Lock()
+	defer a.videoHintMu.Unlock()
+	return a.audioSource
 }

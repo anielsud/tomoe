@@ -54,7 +54,9 @@ type Config struct {
 	// unrelated audio streams together (notifications, music, several
 	// apps at once), so per-embedding speaker clustering isn't
 	// meaningful there the way it is for one app's own audio. Defaults
-	// to false (diarize), unchanged from before this field existed.
+	// to false (diarize). The app no longer sets it: "Everything" is
+	// diarized too, since in a meeting it's mostly the call (and a
+	// notification sound is just one more short "speaker").
 	SkipMonitorDiarization bool
 	// Timings, if set, collects per-stage processing time (see Timings).
 	Timings *Timings

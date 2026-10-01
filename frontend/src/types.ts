@@ -35,6 +35,7 @@ export interface LookView {
   sessionTime: number; // seconds into the session
   stage: string;
   detail: string;
+  window?: string; // app (and window title) captured
   name?: string;
   fromCache?: boolean;
   usable: boolean;
@@ -119,6 +120,7 @@ export interface Config {
     StickyThresholdMargin: number;
     MinAssignDuration: number;
     ShortSegmentGraceWindow: number;
+    VideoHintWindow: string; // "" Teams meeting window, "none" off, else an app's name
     VideoHintLearnInterval: number;
     VideoHintCheckInterval: number;
     SplitOnSpeakerChange: boolean;

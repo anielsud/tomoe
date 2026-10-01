@@ -133,6 +133,7 @@ import "C"
 import (
 	"fmt"
 	"os/exec"
+	"sort"
 	"strconv"
 	"strings"
 	"unsafe"
@@ -312,4 +313,62 @@ func parentPID(pid int32) (int32, error) {
 		return 0, fmt.Errorf("parsing ppid: %w", err)
 	}
 	return int32(ppid), nil
+}
+
+// WindowInfo describes an on-screen app window, for choosing which one
+// video hints watch.
+type WindowInfo struct {
+	ID            WindowID
+	Owner, Title  string
+	Width, Height int
+}
+
+// ListWindows returns the on-screen, normal-layer windows at least
+// 300x200, largest first.
+func ListWindows() ([]WindowInfo, error) {
+	windows := C.list_windows()
+	if C.cfarray_is_null(windows) != 0 {
+		return nil, fmt.Errorf("teamsvideo: CGWindowListCopyWindowInfo returned nil")
+	}
+	defer C.release_windows(windows)
+	var out []WindowInfo
+	n := int(C.window_count(windows))
+	for i := 0; i < n; i++ {
+		idx := C.CFIndex(i)
+		if int32(C.window_layer(windows, idx)) != 0 {
+			continue
+		}
+		num := int32(C.window_number(windows, idx))
+		w, h := int(C.window_bounds_width(windows, idx)), int(C.window_bounds_height(windows, idx))
+		if num < 0 || w < 300 || h < 200 {
+			continue
+		}
+		info := WindowInfo{ID: WindowID(num), Width: w, Height: h}
+		if p := C.window_owner_name(windows, idx); p != nil {
+			info.Owner = C.GoString(p)
+			C.free(unsafe.Pointer(p))
+		}
+		if p := C.window_name(windows, idx); p != nil {
+			info.Title = C.GoString(p)
+			C.free(unsafe.Pointer(p))
+		}
+		out = append(out, info)
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Width*out[i].Height > out[j].Width*out[j].Height })
+	return out, nil
+}
+
+// FindWindowByOwner returns the largest on-screen window of the app named
+// owner (as ListWindows reports it).
+func FindWindowByOwner(owner string) (WindowInfo, error) {
+	ws, err := ListWindows()
+	if err != nil {
+		return WindowInfo{}, err
+	}
+	for _, w := range ws {
+		if w.Owner == owner {
+			return w, nil
+		}
+	}
+	return WindowInfo{}, fmt.Errorf("teamsvideo: no %s window on screen", owner)
 }

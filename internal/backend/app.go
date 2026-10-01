@@ -86,6 +86,9 @@ type App struct {
 	videoHintMu sync.Mutex
 	hints       *hintSession
 	videoLooks  []videohint.Look
+	// audioSource is what the automatic system-audio source is capturing
+	// (see followMeetingAudio); guarded by videoHintMu.
+	audioSource string
 
 	// trayDictCh is signalled by the tray "Start/Stop Dictation" menu item.
 	// Carries language code; "" = stop.
@@ -507,8 +510,8 @@ type AudioSourceView struct {
 }
 
 // ListAudioSources returns macOS's second-audio-source picker options:
-// "Everything" (always first, whole-system audio, no speaker
-// diarization — see live.Config.SkipMonitorDiarization) followed by
+// "Everything" (always first, and the default: whole-system audio, with
+// speakers separated like any other source) followed by
 // every app currently producing audio output
 // (internal/audiosources.ListActive). Empty (not an error) on Linux,
 // where SystemAudioMode() already tells the frontend to use
@@ -519,7 +522,10 @@ func (a *App) ListAudioSources() ([]AudioSourceView, error) {
 	if runtime.GOOS != "darwin" {
 		return []AudioSourceView{}, nil
 	}
-	out := []AudioSourceView{{ID: "everything", Name: "Everything"}}
+	out := []AudioSourceView{
+		{ID: meetingaudio.AutoSource, Name: "Meeting app (automatic)"},
+		{ID: "everything", Name: "Everything"},
+	}
 
 	active, err := audiosources.ListActive()
 	if err != nil {
@@ -597,7 +603,13 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	// (a PulseAudio monitor device on Linux, chosen from
 	// ListMonitorSources; a specific app or "everything" on macOS,
 	// chosen from ListAudioSources — see internal/meetingaudio).
-	monCapturer, err := meetingaudio.NewMonitorSource(monitorDevice)
+	var monCapturer *audio.StreamCapturer
+	var audioAuto *meetingaudio.Auto
+	if monitorDevice == meetingaudio.AutoSource || (monitorDevice == "" && runtime.GOOS == "darwin") {
+		monCapturer, audioAuto, err = meetingaudio.NewAutoMonitorSource()
+	} else {
+		monCapturer, err = meetingaudio.NewMonitorSource(monitorDevice)
+	}
 	if err != nil {
 		if cfg.MicCapturer != nil {
 			cfg.MicCapturer.Close()
@@ -606,7 +618,6 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	}
 	if monCapturer != nil {
 		cfg.MonitorCapturer = monCapturer
-		cfg.SkipMonitorDiarization = monitorDevice == "everything"
 	}
 
 	// Reset speaker tracker for new session
@@ -684,6 +695,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	a.videoHintCancel = videoHintCancel
 	hs.sess, hs.coordinator, hs.diar = a.currentSess, coordinator, md
 	a.startHintWatcher(videoHintCtx, hs)
+	a.followMeetingAudio(videoHintCtx, audioAuto)
 
 	// Start emitting segments to frontend
 	a.segmentsDone = a.emitSessionSegments(coordinator.Segments(), coordinator.SegmentUpdates(), a.currentSess, md)
@@ -736,6 +748,9 @@ func (a *App) StopSession() (*session.Session, error) {
 	sess.Duration = sess.EndedAt.Sub(sess.CreatedAt).Seconds()
 
 	// Notify UI immediately — recording is done
+	a.videoHintMu.Lock()
+	a.audioSource = ""
+	a.videoHintMu.Unlock()
 	wailsRuntime.EventsEmit(a.ctx, "session:stopped", sess.ID)
 
 	// Hand off to the serial save worker so the next StartSession can

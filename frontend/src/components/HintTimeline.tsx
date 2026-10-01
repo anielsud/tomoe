@@ -66,6 +66,55 @@ function Thumb({ look, sessionId, cache }: { look: LookView; sessionId: string; 
   );
 }
 
+interface WindowChoice {
+  app: string;
+  title: string;
+  known: boolean;
+}
+
+// WindowPicker chooses which window video hints watch: the Teams meeting
+// window (automatic), off, or any app's window. An app without a rule yet
+// is still captured, so its frames can be saved for analysis.
+export function WindowPicker() {
+  const [value, setValue] = useState('');
+  const [choices, setChoices] = useState<WindowChoice[]>([]);
+  const [error, setError] = useState('');
+  function refresh() {
+    api()?.ListHintWindows().then(ws => setChoices(ws || [])).catch(() => {});
+  }
+  useEffect(() => {
+    api()?.GetConfig().then((c: any) => setValue(c?.Meeting?.VideoHintWindow || '')).catch(() => {});
+    refresh();
+  }, []);
+  const known = new Set(choices.map(c => c.app));
+  return (
+    <label className="hint-window" title="Which window to read the active speaker from">
+      Watch
+      <select
+        className="setting-input"
+        value={value}
+        onFocus={refresh}
+        onChange={e => {
+          const v = e.target.value;
+          setValue(v);
+          setError('');
+          api()?.SetHintWindow(v).catch(err => setError(String(err)));
+        }}
+      >
+        <option value="">Teams meeting (automatic)</option>
+        <option value="none">Off</option>
+        {value && value !== 'none' && !known.has(value) && <option value={value}>{value} (not on screen)</option>}
+        {choices.map(c => (
+          <option key={c.app} value={c.app}>
+            {c.app}{c.title ? ` — ${c.title.slice(0, 40)}` : ''}{c.known ? '' : ' (no rule yet: frames kept for analysis)'}
+          </option>
+        ))}
+      </select>
+      {error && <span className="hint-fail">{error}</span>}
+    </label>
+  );
+}
+
 interface Props {
   // The saved session to show; undefined for the current recording.
   sessionId?: string;
@@ -123,6 +172,7 @@ export default function HintTimeline({ sessionId }: Props) {
         <span className="hint-fail">{summary.noRing} no ring</span>
         <span className="hint-fail">{summary.ambiguous} several tiles lit</span>
         <span className="hint-fail">{summary.noName} no name read</span>
+        {!sessionId && <WindowPicker />}
         <label className="hint-filter">
           <input type="checkbox" checked={changesOnly} onChange={e => setChangesOnly(e.target.checked)} />
           changes only
@@ -143,6 +193,7 @@ export default function HintTimeline({ sessionId }: Props) {
                 <span className={`hint-stage ${stageClass(l)}`}>{STAGE_LABEL[l.stage] || l.stage}</span>
                 {l.name && <span className="hint-name">{l.name}{l.fromCache ? ' (known tile)' : ''}</span>}
                 {l.candidates && <span className="hint-name">{l.candidates.map(c => c || '?').join(' / ')}</span>}
+                {l.window && <span className="hint-time">{l.window}</span>}
               </div>
               <div className="hint-detail">{l.detail}</div>
               {l.width > 0 && (
