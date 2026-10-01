@@ -15,6 +15,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
+	"github.com/sosuke-ai/tomoe-pc/internal/diarize"
 	"github.com/sosuke-ai/tomoe-pc/internal/eval"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
@@ -57,6 +58,8 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.threads, _ = cmd.Flags().GetInt("threads")
 		opts.noCache, _ = cmd.Flags().GetBool("no-cache")
 		opts.embeddingModel, _ = cmd.Flags().GetString("embedding-model")
+		opts.workers, _ = cmd.Flags().GetInt("workers")
+		opts.timeDiarization, _ = cmd.Flags().GetString("diarization-timing")
 		if sweep, _ := cmd.Flags().GetBool("sweep"); sweep {
 			opts.sweep = &sweepOptions{}
 			opts.sweep.thresholds, _ = cmd.Flags().GetFloat64Slice("sweep-thresholds")
@@ -95,6 +98,8 @@ func init() {
 	evalCmd.Flags().Float64Slice("sweep-thresholds", []float64{0.8, 0.95, 1.1, 1.25}, "Clustering thresholds to sweep")
 	evalCmd.Flags().Float64Slice("sweep-min-on", []float64{0.3, 0.1}, "Shortest speech turns (s) to sweep")
 	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
+	evalCmd.Flags().String("diarization-timing", "", "Only time post-meeting diarization (sherpa or own) at --threads/--workers, with nothing else running")
+	evalCmd.Flags().Int("workers", 0, "Own diarizer: parallel workers for segmentation and embeddings (default: cores / --threads)")
 	evalCmd.Flags().String("embedding-model", "", "Own diarizer: speaker embedding model (.onnx) to diarize with instead of the installed one")
 	evalCmd.Flags().Bool("own-diarizer", false, "With --sweep: use Tomoe's step-by-step diarizer (cached segmentation and embeddings; settings cost about a second each)")
 	evalCmd.Flags().Float64Slice("own-thresholds", []float64{0.6, 0.7, 0.8, 0.9, 1.0, 1.1}, "Own diarizer: clustering thresholds to sweep")
@@ -116,6 +121,8 @@ type evalOptions struct {
 	sweep           *sweepOptions    // nil unless --sweep
 	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
 	embeddingModel  string           // diarization embedding model override ("" = the installed one)
+	workers         int              // own diarizer: parallel workers (0 = cores / threads)
+	timeDiarization string           // "sherpa" or "own": only time post-meeting diarization
 }
 
 // evalRun is one pipeline configuration's results.
@@ -155,6 +162,8 @@ type evalRun struct {
 	OverlapsSplit    *eval.OverlapScore  `json:"annotated_overlaps_final_split,omitempty"`
 
 	Seconds float64 `json:"run_seconds"`
+	// Timings is where the run's pipeline spent its time, by stage.
+	Timings *live.Timings `json:"timings"`
 
 	segs               []session.Segment   // the run's final segments, with word timings
 	align              *eval.WordAlignment // the run's words matched to the reference
@@ -223,6 +232,10 @@ func runEval(opts evalOptions) error {
 	}
 	for _, w := range ref.Warnings {
 		fmt.Printf("Reference warning: %s\n", w)
+	}
+
+	if opts.timeDiarization != "" {
+		return timeDiarizationOnly(opts, cfg, status, samples)
 	}
 
 	from, to := opts.from, opts.to
@@ -398,7 +411,10 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 	}
 	fmt.Printf("Running %s pipeline (%s)...\n", run.Name, run.Tuning)
 	began := time.Now()
-	res, err := live.ReplayDetailed(pipe.liveConfig(tuningFor(run.Name), run.TwoPass), nil, samples)
+	lc := pipe.liveConfig(tuningFor(run.Name), run.TwoPass)
+	run.Timings = &live.Timings{}
+	lc.Timings = run.Timings
+	res, err := live.ReplayDetailed(lc, nil, samples)
 	if err != nil {
 		return err
 	}
@@ -641,6 +657,9 @@ func formatEvalReport(r *evalReport) string {
 					r.OverlapsInitial.DetectedSeconds, r.OverlapsRefined.DetectedSeconds, o.Seconds)
 			}
 		}
+		if run.Timings != nil {
+			b.WriteString(formatTimings(run.Timings, r.AudioSecs))
+		}
 		fmt.Fprintln(&b, "Video-hint names   not scored (no hints in an offline eval yet)")
 		fmt.Fprintf(&b, "Run time           pipeline %s", formatDuration(run.Seconds))
 		if r.DiarizationSecs > 0 {
@@ -779,4 +798,70 @@ func parseSeconds(v string) (float64, error) {
 		return d.Seconds(), nil
 	}
 	return strconv.ParseFloat(v, 64)
+}
+
+// formatTimings reports where a run spent its time: each stage's total,
+// time per call, and load (processing time as a share of the audio's
+// duration: live use needs it well under 100%), plus how long each
+// utterance took from the end of its speech to its final label.
+func formatTimings(t *live.Timings, audioSecs float64) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Processing         stage           total      per call      load (share of audio time)")
+	for _, s := range []struct {
+		name string
+		st   live.Stage
+	}{{"speech detection", t.VAD}, {"pass-1 streaming", t.Streaming}, {"Parakeet decode", t.Decode}, {"speaker embedding", t.Embed}, {"speaker clustering", t.Assign}} {
+		if s.st.Calls == 0 {
+			continue
+		}
+		fmt.Fprintf(&b, "                   %-18s %7.1fs  %8.2fms   %6.1f%%\n", s.name, s.st.Seconds, 1000*s.st.Seconds/float64(s.st.Calls), 100*s.st.Seconds/audioSecs)
+	}
+	if n := len(t.Utterances); n > 0 {
+		u := append([]float64(nil), t.Utterances...)
+		sort.Float64s(u)
+		q := func(p float64) float64 { return u[min(n-1, int(p*float64(n)))] }
+		fmt.Fprintf(&b, "Per utterance      end of speech to final label: median %.0fms, 90th %.0fms, 99th %.0fms, max %.0fms (%d utterances; plus the %.1fs of silence the detector waits for)\n",
+			1000*q(0.5), 1000*q(0.9), 1000*q(0.99), 1000*u[n-1], n, 0.5)
+	}
+	return b.String()
+}
+
+// timeDiarizationOnly measures post-meeting diarization alone: sherpa-onnx's
+// (as the app runs it today: threshold 1.1, then the similar-speaker
+// merge) or Tomoe's own step-by-step diarizer, uncached.
+func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.Status, samples []float32) error {
+	threads := max(1, opts.threads)
+	audio := float64(len(samples)) / 16000
+	began := time.Now()
+	switch opts.timeDiarization {
+	case "sherpa":
+		segs, m, err := session.Diarize(samples, session.DiarizeConfig{
+			SegmentationModelPath: status.SpeakerSegmentationPath, EmbeddingModelPath: status.SpeakerEmbeddingPath,
+			Threshold: 1.1, MergeThreshold: 0.55, NumThreads: threads,
+		})
+		if err != nil {
+			return err
+		}
+		fmt.Printf("sherpa diarization (%d threads): %d speakers, %d turns\n", threads, len(m), len(segs))
+	case "own":
+		workers := max(1, opts.workers)
+		embModel := status.SpeakerEmbeddingPath
+		if opts.embeddingModel != "" {
+			embModel = opts.embeddingModel
+		}
+		p, err := diarize.Prepare(samples, status.SpeakerSegmentationPath, embModel, workers, threads)
+		if err != nil {
+			return err
+		}
+		prepared := time.Since(began).Seconds()
+		cb := time.Now()
+		segs, m := p.Diarize(diarize.Params{Threshold: 0.7, MergeSimilarity: 0.6, SpeakerCountRounding: 0.5, MinDurationOn: 0.3, MinDurationOff: 0.5})
+		fmt.Printf("own diarization (%d workers x %d threads, %s): prepare %.1fs, cluster+reconstruct %.2fs; %d speakers, %d turns\n",
+			workers, threads, filepath.Base(embModel), prepared, time.Since(cb).Seconds(), len(m), len(segs))
+	default:
+		return fmt.Errorf("--diarization-timing must be sherpa or own")
+	}
+	secs := time.Since(began).Seconds()
+	fmt.Printf("total %.1fs for %.1f min of audio (%.1f%% of audio time)\n", secs, audio/60, 100*secs/audio)
+	return nil
 }

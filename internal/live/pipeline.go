@@ -172,7 +172,9 @@ func (c *Coordinator) finishSource(st *sourceState) {
 func (c *Coordinator) processWindow(st *sourceState, window []float32) {
 	// Feed window to VAD (must be exactly windowSize)
 	if len(window) == vadWindowSize {
+		vadBegan := time.Now()
 		st.vad.AcceptWaveform(window)
+		c.cfg.Timings.add(&c.timingsOrZero().VAD, vadBegan)
 		isSpeech := st.vad.IsSpeech()
 
 		if st.streamSess != nil {
@@ -181,7 +183,9 @@ func (c *Coordinator) processWindow(st *sourceState, window []float32) {
 				// the eventual speaker embedding clean.
 				st.live.audio = append(st.live.audio, window...)
 			}
+			feedBegan := time.Now()
 			text, err := st.streamSess.Feed(window)
+			c.cfg.Timings.add(&c.timingsOrZero().Streaming, feedBegan)
 			if err == nil && text != st.live.partial {
 				st.live.partial = text
 				if text != "" {
@@ -385,9 +389,12 @@ func (c *Coordinator) queueUnannounced(source SourceType, samples []float32, sta
 // configured): one synchronous decode per completed segment, emitted as
 // final immediately.
 func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32, startTime, endTime float64) {
+	began := time.Now()
+	defer c.cfg.Timings.utterance(began)
 	c.transcribeMu.Lock()
 	result, err := c.cfg.Engine.TranscribeDirect(samples)
 	c.transcribeMu.Unlock()
+	c.cfg.Timings.add(&c.timingsOrZero().Decode, began)
 
 	if err != nil || result == nil || strings.TrimSpace(result.Text) == "" {
 		return
@@ -478,9 +485,12 @@ func (c *Coordinator) refineWorker() {
 // nothing to show for it. Otherwise refinement failing just means pass
 // 1's text is what stands, not that the segment stays "pending" forever.
 func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
+	began := time.Now()
+	defer c.cfg.Timings.utterance(began)
 	c.transcribeMu.Lock()
 	result, err := c.cfg.Engine.TranscribeDirect(job.samples)
 	c.transcribeMu.Unlock()
+	c.cfg.Timings.add(&c.timingsOrZero().Decode, began)
 
 	text := job.pass1Text
 	lang := "en"
@@ -549,7 +559,9 @@ func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []f
 	if source == SourceMic || c.cfg.SkipMonitorDiarization || c.cfg.Embedder == nil || c.cfg.Tracker == nil {
 		return nil
 	}
+	embedBegan := time.Now()
 	embedding, err := c.cfg.Embedder.Extract(samples)
+	c.cfg.Timings.add(&c.timingsOrZero().Embed, embedBegan)
 	if err != nil {
 		return nil
 	}
@@ -575,7 +587,9 @@ func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, durat
 	// For monitor source, try speaker embedding + clustering
 	if len(embedding) > 0 && c.cfg.Tracker != nil {
 		before := c.cfg.Tracker.NumSpeakers()
+		assignBegan := time.Now()
 		label, needsHint := c.cfg.Tracker.Assign(embedding, duration)
+		c.cfg.Timings.add(&c.timingsOrZero().Assign, assignBegan)
 		decision := c.cfg.Tracker.LastDecision()
 		isNew := c.cfg.Tracker.NumSpeakers() > before
 

@@ -55,6 +55,9 @@ func runOwnSweep(opts evalOptions, cfg *config.Config, status *models.Status, sa
 		threads = 2
 	}
 	workers := max(1, runtime.NumCPU()/threads)
+	if opts.workers > 0 {
+		workers = opts.workers
+	}
 
 	var wg sync.WaitGroup
 	run := &evalRun{Name: "default", Tuning: "single-pass; threshold 0.65, sticky and short-segment rules off"}
