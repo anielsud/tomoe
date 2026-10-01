@@ -2,6 +2,7 @@ package diarize
 
 import (
 	"fmt"
+	"runtime"
 	"sync"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
@@ -12,7 +13,9 @@ import (
 type StreamConfig struct {
 	SegmentationModel string
 	EmbeddingModel    string
-	// Threads for the segmentation model (the embedder uses one).
+	// Threads for the segmentation model (the embedder uses one). Above
+	// 1, the extra threads are ONNX Runtime's and don't share the Stream
+	// thread's low priority.
 	Threads int
 	// Stride embeds every nth window; the others still count how many
 	// people are talking (see Prepared.EveryNth). 0 or 1 embeds all.
@@ -136,6 +139,10 @@ func (s *Stream) Close() {
 
 func (s *Stream) run() {
 	defer close(s.done)
+	// One low-priority OS thread does all of it (the models run with one
+	// thread each), so the meeting's audio and transcript come first.
+	runtime.LockOSThread()
+	lowerThreadPriority()
 	m := s.meta
 	for range s.wake {
 		for {
@@ -162,7 +169,7 @@ func (s *Stream) run() {
 				s.bufStart += drop
 			}
 			s.mu.Unlock()
-			if s.sinceRecl >= s.reclEvery {
+			if s.sinceRecl >= s.reclEvery*reclusterSpacing(len(s.embs)) {
 				s.recluster(false)
 			}
 		}
@@ -218,6 +225,43 @@ func (s *Stream) finish() {
 	s.final = s.recluster(true)
 }
 
+// Clustering time grows with the square of the number of embeddings
+// (about 0.7 s for 2,400 here, an hour at every 2nd window). Past
+// spaceAbove, reclusters are spaced out by the same factor, so their CPU
+// cost per minute stays flat as a long meeting grows. Every clustering
+// keeps at most maxCluster embeddings, thinned evenly across the meeting:
+// the comparison table takes 4 bytes per pair, 128 MB at 8,000 (about 3.3
+// hours at every 2nd window).
+const (
+	spaceAbove = 3000
+	maxCluster = 8000
+)
+
+// reclusterSpacing is how many recluster intervals to wait at n
+// embeddings.
+func reclusterSpacing(n int) int {
+	if n <= spaceAbove {
+		return 1
+	}
+	r := float64(n) / spaceAbove
+	return int(r*r + 0.5)
+}
+
+// thin keeps at most limit of pairs/embs, evenly spaced.
+func thin(pairs []ChunkSpeaker, embs [][]float32, limit int) ([]ChunkSpeaker, [][]float32) {
+	if len(embs) <= limit {
+		return pairs, embs
+	}
+	outP := make([]ChunkSpeaker, 0, limit)
+	outE := make([][]float32, 0, limit)
+	for i := 0; i < limit; i++ {
+		j := i * len(embs) / limit
+		outP = append(outP, pairs[j])
+		outE = append(outE, embs[j])
+	}
+	return outP, outE
+}
+
 // recluster clusters everything so far and reports the timeline.
 func (s *Stream) recluster(final bool) Timeline {
 	s.sinceRecl = 0
@@ -232,12 +276,13 @@ func (s *Stream) recluster(final bool) Timeline {
 	}
 	tl := Timeline{Through: float64(numSamples) / float64(m.SampleRate), Final: final, Labels: map[int]string{}}
 	if len(s.embs) > 0 {
-		p := &Prepared{Meta: m, NumSamples: numSamples, Labels: s.labels, Pairs: s.pairs, Embeddings: s.embs}
+		pairs, embs := thin(s.pairs, s.embs, maxCluster)
+		p := &Prepared{Meta: m, NumSamples: numSamples, Labels: s.labels, Pairs: pairs, Embeddings: embs}
 		clusters := p.Cluster(s.cfg.Params.Threshold, s.cfg.Params.NumClusters)
 		if s.cfg.Params.MergeSimilarity > 0 {
 			clusters = p.MergeClusters(clusters, s.cfg.Params.MergeSimilarity)
 		}
-		ids := s.stable.Assign(s.pairs, clusters)
+		ids := s.stable.Assign(pairs, clusters)
 		for _, t := range p.ReconstructClusters(clusters, s.cfg.Params) {
 			t.Speaker = ids[t.Speaker]
 			tl.Turns = append(tl.Turns, t)

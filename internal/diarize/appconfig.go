@@ -27,7 +27,7 @@ func StreamConfigFor(m config.MeetingConfig, status *models.Status, lang string)
 	return StreamConfig{
 		SegmentationModel: status.SpeakerSegmentationPath,
 		EmbeddingModel:    path,
-		Threads:           2,
+		Threads:           1, // all on the Stream's low-priority thread
 		Stride:            max(1, m.DiarizeStride),
 		ReclusterSeconds:  recluster,
 		Params:            params,

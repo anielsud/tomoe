@@ -5,6 +5,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/sosuke-ai/tomoe-pc/internal/diarize"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 )
 
@@ -20,7 +21,7 @@ import (
 // the returned channel). Reading a.currentSess instead would drop them,
 // or, once the next session has started, apply them to its segments,
 // since segment IDs restart at seg-1 for every coordinator.
-func (a *App) emitSessionSegments(segments, updates <-chan session.Segment, sess *session.Session, md *meetingDiarizer) <-chan struct{} {
+func (a *App) emitSessionSegments(segments, updates <-chan session.Segment, sess *session.Session, md *diarize.SessionDiarizer) <-chan struct{} {
 	done := make(chan struct{})
 	var wg sync.WaitGroup
 	wg.Add(2)
@@ -53,11 +54,11 @@ func (a *App) emitSessionSegments(segments, updates <-chan session.Segment, sess
 // transcript the frontend is now showing.
 //
 // When the session is diarized during the meeting (md non-nil), seg is
-// relabeled from the latest timeline first (see meetingDiarizer).
-func (a *App) applySegment(sess *session.Session, md *meetingDiarizer, seg session.Segment, event string) {
+// relabeled from the latest timeline first (see diarize.SessionDiarizer).
+func (a *App) applySegment(sess *session.Session, md *diarize.SessionDiarizer, seg session.Segment, event string) {
 	a.mu.Lock()
 	if md != nil {
-		md.labelNewLocked(&seg)
+		md.LabelNewLocked(&seg)
 	}
 	sess.UpsertSegment(seg)
 	visible := a.currentSess == nil || a.currentSess == sess

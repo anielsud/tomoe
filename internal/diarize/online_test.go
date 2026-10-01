@@ -36,3 +36,23 @@ func TestTruncateAndEveryNth(t *testing.T) {
 		t.Errorf("EveryNth(2): %d windows, %d embeddings; want 5, 3", len(got.Labels), len(got.Embeddings))
 	}
 }
+
+func TestReclusterSpacingAndThin(t *testing.T) {
+	for n, want := range map[int]int{100: 1, 3000: 1, 6000: 4, 9000: 9} {
+		if got := reclusterSpacing(n); got != want {
+			t.Errorf("reclusterSpacing(%d) = %d, want %d", n, got, want)
+		}
+	}
+	pairs := make([]ChunkSpeaker, 10)
+	embs := make([][]float32, 10)
+	for i := range pairs {
+		pairs[i] = ChunkSpeaker{Chunk: i}
+	}
+	p, e := thin(pairs, embs, 4)
+	if len(p) != 4 || len(e) != 4 || p[0].Chunk != 0 || p[3].Chunk != 7 {
+		t.Errorf("thin to 4: %v", p)
+	}
+	if p, _ := thin(pairs, embs, 20); len(p) != 10 {
+		t.Errorf("thin below the limit changed the count: %d", len(p))
+	}
+}

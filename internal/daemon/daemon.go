@@ -14,6 +14,7 @@ import (
 
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
+	"github.com/sosuke-ai/tomoe-pc/internal/diarize"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
 	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
@@ -376,6 +377,7 @@ func (d *Daemon) stopDictation(ds *streamingDictation) {
 type meetingState struct {
 	coordinator     *live.Coordinator
 	session         *session.Session
+	diar            *diarize.SessionDiarizer // nil unless diarizing during the meeting
 	done            chan struct{}
 	videoHintCancel context.CancelFunc
 }
@@ -436,8 +438,30 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		d.tracker.Reset()
 	}
 
+	// Diarize during the meeting if that's on (see
+	// diarize.SessionDiarizer); mu guards the session from here on.
+	var mu sync.Mutex
+	var diar *diarize.SessionDiarizer
+	if cfg.MonitorCapturer != nil && !cfg.SkipMonitorDiarization && d.modelStatus != nil {
+		diar, err = diarize.NewSessionDiarizer(d.cfg.Meeting, d.modelStatus, lang, &mu, func(changed []session.Segment) {
+			for _, seg := range changed {
+				fmt.Printf("[%s] relabeled: %s\n", formatTimestamp(seg.StartTime), seg.Speaker)
+			}
+		})
+		if err != nil {
+			fmt.Printf("diarize during meeting: %v; diarizing after the meeting instead\n", err)
+			diar = nil
+		} else if diar != nil {
+			cfg.MonitorAudio = diar.Feed
+			fmt.Printf("diarizing during the meeting (%s)\n", diar.Describe())
+		}
+	}
+
 	coordinator := live.New(cfg)
 	if err := coordinator.Start(ctx); err != nil {
+		if diar != nil {
+			diar.Abort()
+		}
 		cfg.MicCapturer.Close()
 		if cfg.MonitorCapturer != nil {
 			cfg.MonitorCapturer.Close()
@@ -473,14 +497,21 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	// same reasoning as internal/live's own closer goroutine: a
 	// refinement queued right at shutdown should still get applied
 	// before this daemon considers the meeting fully stopped.
+	mu.Lock()
+	if diar != nil {
+		diar.SetSessionLocked(sess)
+	}
+	mu.Unlock()
 	done := make(chan struct{})
-	var mu sync.Mutex
 	var drainWG sync.WaitGroup
 	drainWG.Add(2)
 	go func() {
 		defer drainWG.Done()
 		for seg := range coordinator.Segments() {
 			mu.Lock()
+			if diar != nil {
+				diar.LabelNewLocked(&seg)
+			}
 			sess.UpsertSegment(seg)
 			mu.Unlock()
 			if seg.Language != "" {
@@ -496,6 +527,9 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 			// Upsert rather than update in place: a revision can overtake
 			// its segment, which travels on the other channel.
 			mu.Lock()
+			if diar != nil {
+				diar.LabelNewLocked(&seg)
+			}
 			sess.UpsertSegment(seg)
 			mu.Unlock()
 			fmt.Printf("[%s] %s: %s (refined)\n", formatTimestamp(seg.StartTime), seg.Speaker, seg.Text)
@@ -537,6 +571,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	return &meetingState{
 		coordinator:     coordinator,
 		session:         sess,
+		diar:            diar,
 		done:            done,
 		videoHintCancel: videoHintCancel,
 	}, nil
@@ -613,6 +648,22 @@ func (d *Daemon) saveMeetingAsync(ms *meetingState) {
 	// live tracker output; diarization below will refine and re-save them.
 	if err := d.store.Save(ms.session); err != nil {
 		fmt.Printf("Error saving session: %v\n", err)
+	}
+
+	// Diarized during the meeting: its final labels replace the
+	// post-meeting pass (which still runs if that failed).
+	if ms.diar != nil {
+		err := ms.diar.Finish(filepath.Join(config.SessionDir(), ms.session.ID))
+		if err == nil {
+			if err := d.store.Save(ms.session); err != nil {
+				fmt.Printf("Error saving session: %v\n", err)
+			}
+			msg := fmt.Sprintf("Meeting saved — %s", ms.session.Title)
+			_ = d.svc.Notifier.Send("Tomoe", msg)
+			fmt.Println(msg)
+			return
+		}
+		fmt.Printf("diarizing during the meeting failed: %v\n", err)
 	}
 
 	// Refinement: neural diarization in an isolated subprocess so a
