@@ -197,7 +197,76 @@ many speakers the live pass created for the 8 people.
 - None of this reaches the final transcript, which the post-meeting pass
   relabels.
 
+## Utterance length
 
+Each utterance gets one speaker fingerprint and is transcribed on its
+own, so where the speech detector cuts affects both. Two knobs: the pause
+that ends an utterance and the longest one before it's cut
+(`min_silence_duration`, `max_speech_duration`). English-trained model,
+experimental live settings:
+
+| Pause | Max | Live guess | 4–15 words | 16–60 words | Clusters | Text word error |
+|---|---|---|---|---|---|---|
+| 0.3 s | 10 s | 95.9% | 59.8% | 94.8% | 71 | 11.4% |
+| 0.3 s | 30 s | 95.9% | 59.8% | 94.8% | 70 | 11.4% |
+| 0.5 s | 10 s | 96.4% | 57.1% | 94.8% | 45 | 10.5% |
+| 0.5 s | 30 s (current) | 95.9% | 48.0% | 94.8% | 42 | 10.2% |
+| 0.8 s | 10 s | 96.3% | 56.9% | 95.3% | 29 | 10.5% |
+| 0.8 s | 30 s | 93.6% | 47.7% | 83.6% | 25 | 9.8% |
+
+- A 10 s cap helps 4–15 word turns most (people talking back to back with
+  no 0.5 s gap otherwise end up in one utterance under one label), for
+  little text cost.
+- A long pause without the cap merges speakers: 16–60 word turns fall
+  to 83.6%.
+- Shorter utterances cost text accuracy because Parakeet decodes each one
+  without the audio around it, and words at the cuts get clipped. This is
+  the case for separating the speaker timeline from transcription (see
+  [speaker-pipeline-design.md](speaker-pipeline-design.md)).
+- The added delay is the pause itself; processing adds about 80–110 ms
+  here.
+
+## Labeling within an utterance
+
+### Early labels during a long utterance
+
+How soon a long utterance's speaker could be shown and relabeled as more
+audio arrives: the label from just its first N seconds (read-only match,
+`Tracker.Peek`) against the label from all of it. Experimental settings,
+English-trained model; "words" are those in utterances longer than N.
+
+| After | Utterances | Words | From the start | From all of it | Same label |
+|---|---|---|---|---|---|
+| 1 s | 421 | 8659 | 34.7% | 96.3% | 44.2% |
+| 2 s | 379 | 8449 | 80.4% | 96.7% | 83.4% |
+| 3 s | 331 | 8127 | 90.4% | 97.0% | 92.4% |
+| 5 s | 226 | 6858 | 94.2% | 96.9% | 96.0% |
+| 10 s | 84 | 3724 | 95.4% | 96.0% | 97.6% |
+
+A label is usable after about 3 s and nearly final after 5 s. One second
+of audio is too little for a fingerprint.
+
+### Windows within an utterance
+
+Each word labeled from the fingerprint of the window around it (windows
+every 0.5 s within each utterance, matched to known speakers only),
+against one label per utterance. Experimental settings, English-trained
+model. Fingerprint load is all live fingerprinting as a share of meeting
+time.
+
+| Window | Overall | 1–3 words | 4–15 words | 16–60 words | Words relabeled (fixed / broken) | Fingerprint load |
+|---|---|---|---|---|---|---|
+| none (per utterance) | 95.9% | 15.8% | 48.0% | 94.8% | — | 3.2% |
+| 1.5 s | 96.8% | 18.4% | 65.6% | 96.6% | 143 (106 / 24) | 10.0% |
+| 2 s | 97.2% | 15.8% | 66.1% | 97.2% | 173 (138 / 19) | not measured alone |
+| 3 s | 97.2% | 13.2% | 64.8% | 97.4% | 157 (131 / 12) | 13.4% |
+
+Labeling inside utterances brings the live guess to 97.2%, near the
+post-meeting pass (97.7%), and lifts 4–15 word turns from 48% to 66%. It
+catches speaker changes with no pause between them, which one label per
+utterance can't, for three to four times the fingerprint work.
+
+## Speed and processing load
 
 Measured on the same hour of audio, uncached, one run at a time.
 "This Mac" is the performance cores of an Apple Silicon desktop with 4

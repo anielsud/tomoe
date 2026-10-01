@@ -66,6 +66,13 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
 		opts.workers, _ = cmd.Flags().GetInt("workers")
 		opts.timeDiarization, _ = cmd.Flags().GetString("diarization-timing")
+		if on, _ := cmd.Flags().GetBool("online"); on {
+			opts.online = &onlineOptions{params: diarize.DefaultParams()}
+			opts.online.intervals, _ = cmd.Flags().GetFloat64Slice("online-intervals")
+			opts.online.strides, _ = cmd.Flags().GetIntSlice("online-strides")
+			opts.online.params.Threshold, _ = cmd.Flags().GetFloat64("online-threshold")
+			opts.online.params.MergeSimilarity, _ = cmd.Flags().GetFloat64("online-merge")
+		}
 		if sweep, _ := cmd.Flags().GetBool("sweep"); sweep {
 			opts.sweep = &sweepOptions{}
 			opts.sweep.thresholds, _ = cmd.Flags().GetFloat64Slice("sweep-thresholds")
@@ -112,6 +119,11 @@ func init() {
 	evalCmd.Flags().Float64("min-silence", live.DefaultMinSilenceDuration, "Live: the pause (s) that ends an utterance")
 	evalCmd.Flags().Float64("max-speech", live.DefaultMaxSpeechDuration, "Live: the longest utterance (s) before it's cut")
 	evalCmd.Flags().String("embedding-model", "", "Speaker model for every pass, live and diarization: a model ID ("+speakerModelIDs()+") or an .onnx path (default: as configured for English)")
+	evalCmd.Flags().Bool("online", false, "Simulate Tomoe's own diarizer running during the meeting: recluster periodically on the windows finished so far")
+	evalCmd.Flags().Float64Slice("online-intervals", []float64{10, 30, 60}, "Online: seconds between reclusterings")
+	evalCmd.Flags().IntSlice("online-strides", []int{1, 2, 3, 5}, "Online: embed every nth segmentation window")
+	evalCmd.Flags().Float64("online-threshold", 0.6, "Online: clustering threshold")
+	evalCmd.Flags().Float64("online-merge", 0.5, "Online: centroid merge similarity (0 = none)")
 	evalCmd.Flags().Bool("own-diarizer", false, "With --sweep: use Tomoe's step-by-step diarizer (cached segmentation and embeddings; settings cost about a second each)")
 	evalCmd.Flags().Float64Slice("own-thresholds", []float64{0.6, 0.7, 0.8, 0.9, 1.0, 1.1}, "Own diarizer: clustering thresholds to sweep")
 	evalCmd.Flags().Float64Slice("own-merges", []float64{0, 0.5, 0.6, 0.7}, "Own diarizer: centroid merge similarities to sweep (0 = none)")
@@ -131,6 +143,7 @@ type evalOptions struct {
 	noCache         bool
 	sweep           *sweepOptions    // nil unless --sweep
 	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
+	online          *onlineOptions   // set with --online
 	embeddingModel  string           // speaker model override, an ID or a path ("" = as configured)
 	probePrefixes   []float64        // live: early-label prefixes to score (s)
 	windowSize      float64          // live: within-utterance window labels (s)
@@ -343,6 +356,12 @@ func runEval(opts evalOptions) error {
 	outDir := opts.out
 	if outDir == "" {
 		outDir = "eval-" + strings.TrimSuffix(filepath.Base(opts.media), filepath.Ext(opts.media))
+	}
+	if opts.online != nil {
+		if !status.DiarizationReady() {
+			return fmt.Errorf("diarization models not downloaded (run 'tomoe model download')")
+		}
+		return runOnlineSim(opts, cfg, status, samples, ref, cache, outDir)
 	}
 	if opts.sweep != nil {
 		if !status.DiarizationReady() {
