@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react';
+import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { DeviceInfo, AudioSourceView } from '../types';
 
 interface Props {
@@ -23,6 +25,15 @@ export default function SourceSelector({
   devices, monitors, micDevice, monitorDevice,
   onMicChange, onMonitorChange, disabled, systemAudioMode, audioSources,
 }: Props) {
+  // What "Meeting app (automatic)" is capturing in this recording:
+  // everything until a meeting app makes sound, then just that app.
+  const [capturing, setCapturing] = useState('');
+  useEffect(() => {
+    window.go?.backend?.App?.CurrentAudioSource().then(setCapturing).catch(() => {});
+    const offSource = EventsOn('audio:source', (name: string) => setCapturing(name));
+    const offStop = EventsOn('session:stopped', () => setCapturing(''));
+    return () => { offSource(); offStop(); };
+  }, []);
   return (
     <>
       <select
@@ -48,12 +59,14 @@ export default function SourceSelector({
           value={monitorDevice}
           onChange={(e) => onMonitorChange(e.target.value)}
           disabled={disabled}
-          title="System Audio — 'Everything' (the default) captures the whole system's audio; pick a specific app only if other apps' sounds get in the way. Speakers are told apart either way"
+          title="System Audio — 'Meeting app (automatic)' (the default) captures the meeting app (Teams, Zoom, Webex...) once it makes sound, and the whole system until then, so notification sounds stay out of the transcript"
         >
           {/* "none", not "": the backend treats "" as "use the default source". */}
           <option value="none">No System Audio</option>
           {audioSources.map(s => (
-            <option key={s.id} value={s.id}>{s.name}</option>
+            <option key={s.id} value={s.id}>
+              {s.id === 'auto' && capturing ? `${s.name}: ${capturing}` : s.name}
+            </option>
           ))}
         </select>
       ) : (

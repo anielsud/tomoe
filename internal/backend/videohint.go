@@ -12,6 +12,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/diarize"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
+	"github.com/sosuke-ai/tomoe-pc/internal/meetingaudio"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
@@ -335,4 +336,52 @@ func renameLines(sess *session.Session, label, name string) []session.Segment {
 		}
 	}
 	return changed
+}
+
+// followMeetingAudio reports what the automatic system-audio source is
+// capturing, and while it's still the whole system (the call hadn't
+// started making sound yet), checks every few seconds for a meeting app
+// to move to, so notification sounds stay out of the transcript once
+// the call is going. Does nothing for a fixed source (auto nil).
+func (a *App) followMeetingAudio(ctx context.Context, auto *meetingaudio.Auto) {
+	a.videoHintMu.Lock()
+	a.audioSource = ""
+	if auto != nil {
+		a.audioSource = auto.Current()
+	}
+	current := a.audioSource
+	a.videoHintMu.Unlock()
+	if auto == nil {
+		return
+	}
+	wailsRuntime.EventsEmit(a.ctx, "audio:source", current)
+	go func() {
+		t := time.NewTicker(3 * time.Second)
+		defer t.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-t.C:
+				if name, ok := auto.TryMeetingApp(); ok {
+					fmt.Printf("system audio: now capturing %s only\n", name)
+					a.videoHintMu.Lock()
+					a.audioSource = name
+					a.videoHintMu.Unlock()
+					wailsRuntime.EventsEmit(a.ctx, "audio:source", name)
+					return
+				}
+			}
+		}
+	}()
+}
+
+// CurrentAudioSource names what the automatic system-audio source is
+// capturing in the current recording ("Everything" or a meeting app), or
+// "" for a fixed source or no recording.
+func (a *App) CurrentAudioSource() string {
+	a.fixSignals()
+	a.videoHintMu.Lock()
+	defer a.videoHintMu.Unlock()
+	return a.audioSource
 }
