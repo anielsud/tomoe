@@ -324,8 +324,26 @@ into the most-read spelling. Per look on an Apple Silicon desktop: ring
 detection 4 ms, thumbnail 2 ms, full frame 21 ms (when something
 changed), reading a name 16 ms (when needed), plus the capture.
 
-**Not measured yet:** how well names are attributed in a real call, and
-the best look rate, ring lag and vote thresholds. That needs one meeting
+**First recording with Record for tuning** (18 minutes, 1:1 Teams call,
+one remote speaker), from `tomoe tune` without a reference:
+
+| | |
+|---|---|
+| Looks | 3,067: 60% ring read, 40% speaker view (no ring; name read under the main video) |
+| Cost per look, median | capture 14.8 ms, rings 3.3 ms, name read 13.8 ms (when run), look 29.7 ms (90th: 37 ms) |
+| CPU, looks every 0.35 s / 0.7 s / 1 s / 2 s | 7.8% / 3.6% / 2.5% / 1.3% of one core |
+| Labels vs every look, stride 1 | every 1 s: 99.6% the same name; every 2 s: 98.2%; stride 5 at 1 s: 99.6% |
+| Other side's words named | 98.7% |
+
+So checking every second costs about 2.5% of a core and changes almost
+nothing; the learning rate's 7.8% is only paid while someone needs
+naming. It also found two bugs, since fixed: an icon read as text after
+the name ("Kevin Li •.•") won the spelling, and lines no turn covered kept
+provisional labels ("New speaker", "Kevin Li?") in the saved transcript.
+
+**Not measured yet:** how well names are attributed when there's a
+choice between people, the ring's lag (it never moved in a 1:1 call), and
+the vote thresholds. That needs one meeting
 recorded with `record_for_tuning` and a reviewed transcript of it, then
 `tomoe tune` (see macos-video-hints.md, "Tuning the numbers").
 

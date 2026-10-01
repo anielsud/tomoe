@@ -19,6 +19,12 @@ func TestCanonicalNamesFoldsTruncations(t *testing.T) {
 	if got := c["Shafgat Islam"]; got != "Shafqat Islam" {
 		t.Errorf("misread -> %q, want Shafqat Islam", got)
 	}
+	// A longer spelling with junk after the name doesn't beat the name
+	// read most (it wasn't truncated).
+	c = canonicalNames([]string{"Kevin Li", "Kevin Li", "Kevin Li", "Kevin Li x"})
+	if got := c["Kevin Li x"]; got != "Kevin Li" {
+		t.Errorf("junk-extended read -> %q, want Kevin Li", got)
+	}
 	// Different people stay apart.
 	c = canonicalNames([]string{"Alex Atzberger", "Alex Ambrose"})
 	if c["Alex Atzberger"] == c["Alex Ambrose"] {

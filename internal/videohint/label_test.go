@@ -2,6 +2,14 @@ package videohint
 
 import "testing"
 
+func TestCleanOCRNameDropsSymbolScraps(t *testing.T) {
+	for in, want := range map[string]string{"Kevin Li •.•": "Kevin Li", "Kevin Li *•.": "Kevin Li", "Amit Tripathi fo": "Amit Tripathi", "Ana Lopez": "Ana Lopez"} {
+		if got := cleanOCRName(in); got != want {
+			t.Errorf("cleanOCRName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
 func TestLabelRect(t *testing.T) {
 	ring := RingMatch{X: 1386, Y: 97, Width: 130, Height: 130}
 	label := LabelRegion{BottomOffset: 52, Height: 40, MaxWidth: 300}

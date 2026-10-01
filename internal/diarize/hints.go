@@ -61,14 +61,19 @@ func normalizeName(s string) string {
 func canonicalNames(names []string) map[string]string {
 	count := map[string]int{}      // normalized -> reads
 	display := map[string]string{} // normalized -> a spelling as read
+	truncated := map[string]bool{} // normalized -> read with a trailing ellipsis
 	for _, n := range names {
 		k := normalizeName(n)
 		if k == "" {
 			continue
 		}
 		count[k]++
+		t := strings.TrimSpace(n)
+		if strings.HasSuffix(t, "…") || strings.HasSuffix(t, "...") {
+			truncated[k] = true
+		}
 		if cur, ok := display[k]; !ok || len(n) > len(cur) {
-			display[k] = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(n), "…"))
+			display[k] = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(n), "…."))
 		}
 	}
 	keys := make([]string, 0, len(count))
@@ -100,22 +105,27 @@ func canonicalNames(names []string) map[string]string {
 			heads = append(heads, k)
 		}
 	}
-	// A truncated head takes the fullest spelling in its group.
-	best := map[string]string{}
+	// A head that was read truncated ("Nazanin Rame…") takes the fullest
+	// spelling its group was read with; otherwise the most-read spelling
+	// stands (a longer one is more likely OCR junk than the real name).
+	spelling := map[string]string{}
 	for k, h := range head {
-		if b, ok := best[h]; !ok || len(k) > len(b) && strings.HasPrefix(k, h) {
-			best[h] = k
+		if !truncated[h] {
+			continue
+		}
+		if b, ok := spelling[h]; (!ok || len(k) > len(b)) && strings.HasPrefix(k, h) && len(k) > len(h) {
+			spelling[h] = k
 		}
 	}
 	out := map[string]string{}
 	for _, n := range names {
 		if k := normalizeName(n); k != "" {
 			h := head[k]
-			spelling := h
-			if b := best[h]; strings.HasPrefix(b, h) && len(b) > len(h) {
-				spelling = b
+			sp := h
+			if b, ok := spelling[h]; ok {
+				sp = b
 			}
-			out[n] = display[spelling]
+			out[n] = display[sp]
 		}
 	}
 	return out

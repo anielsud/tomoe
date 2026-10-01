@@ -284,7 +284,15 @@ which is why it's recorded at full rate. The reference's clock (Teams
 counts from the meeting's start) is matched to the recording's
 automatically from the text (`--ref-offset` overrides).
 
-Each setting is scored on speaker accuracy and on names: the share of
+Without `--ref`, `tomoe tune` reports what can be measured without an
+answer key: looks by result, per-look cost and CPU, the names read, the
+ring's lag behind the voice (ring moves matched to timeline speaker
+changes), how consistent each speaker's reads are, and how much a slower
+look rate or higher stride changes the labels against every look at
+stride 1. A raw Teams transcript export works as `--ref`: Teams labels
+speakers from each person's own audio, so its speaker names are reliable.
+
+With `--ref`, each setting is scored on speaker accuracy and on names: the share of
 words labeled with the right person's name, a wrong name, or none, ranked
 by right minus twice wrong. Each look records its cost (capture, rings,
 name reading, encoding), so the hint layer's CPU share is reported for
