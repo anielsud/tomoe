@@ -48,7 +48,7 @@ export default function SourceSelector({
           value={monitorDevice}
           onChange={(e) => onMonitorChange(e.target.value)}
           disabled={disabled}
-          title="System Audio — 'Everything' captures the whole system's audio without trying to tell speakers apart; picking a specific app captures just that app's audio, with speaker identification"
+          title="System Audio — 'Everything' (the default) captures the whole system's audio; pick a specific app only if other apps' sounds get in the way. Speakers are told apart either way"
         >
           {/* "none", not "": the backend treats "" as "use the default source". */}
           <option value="none">No System Audio</option>

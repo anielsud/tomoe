@@ -430,7 +430,6 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	}
 	if monCapturer != nil {
 		cfg.MonitorCapturer = monCapturer
-		cfg.SkipMonitorDiarization = d.cfg.Meeting.MonitorDevice == "everything"
 	}
 
 	// Reset speaker tracker
@@ -451,6 +450,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	)
 	learn, check := d.cfg.Meeting.VideoHintTiming()
 	watcher := videohint.NewWatcher(videohint.WatchConfig{
+		Source:        d.cfg.Meeting.VideoHintWindow,
 		LearnInterval: learn,
 		CheckInterval: check,
 		NeedsLearning: func() bool {

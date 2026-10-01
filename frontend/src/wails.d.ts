@@ -34,6 +34,8 @@ interface Window {
         FixTool(id: string): Promise<void>;
         CopyToClipboard(text: string): Promise<void>;
         GetVideoHintLooks(sessionId: string): Promise<any[]>;
+        ListHintWindows(): Promise<any[]>;
+        SetHintWindow(app: string): Promise<void>;
         GetLookThumb(sessionId: string, look: number): Promise<string>;
         SaveLookForAnalysis(sessionId: string, look: number): Promise<string>;
         RenameSpeaker(sessionId: string, label: string, name: string): Promise<void>;

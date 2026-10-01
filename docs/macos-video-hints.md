@@ -188,6 +188,15 @@ safer.
 
 ## Watching (`watcher.go`)
 
+**Which window** (`video_hint_window`, also switchable live from the hint
+timeline): by default the Teams meeting window, found by title as before;
+`none` turns hints off; or any app's name, whose largest window is
+captured. Video is independent of the audio source. An app without a
+rule (only Teams has one) is still captured and every look recorded,
+marked `no_rule`, so pointing the watcher at, say, Zoom collects frames
+to write Zoom's rule from ("Save for analysis"); nothing is read from
+them until then.
+
 The watcher looks at the window on two clocks:
 
 - **Learning**, every `video_hint_learn_interval` (default 0.35 s): while
@@ -317,12 +326,9 @@ emitted after it lands.
 
 ## Still open
 
-- **Window-finding only works for Teams.** Zoom/Meet/Webex/Slack each
-  need their own window-finder before video hints produce anything for
-  them.
-- **"Everything" as the audio source** turns off speaker separation, so
-  hints have no speaker to name. Looks still appear in the timeline.
-  This belongs with making "Everything" a good default.
+- **Rules for other apps.** Zoom, Meet and Webex windows can be watched
+  and their frames collected, but nothing is read from them until each
+  has a rule (ring color and shape, label position, call chrome).
 - **Not measured yet.** The vote thresholds, the 0.5 s ring lag and the
   clustering constraints are reasoned, not tuned: tuning them needs a
   session recorded with Record for tuning and a reviewed transcript of it,

@@ -139,10 +139,12 @@ labels and for app-identity matching (see `isTeamsPID` below).
 platform-agnostic second-audio-source entry point. On macOS,
 `sourceHint` is either:
 
-- `"everything"` — the whole system's audio via
-  `guestaudio.NewSystemCapturer()`, speaker diarization skipped
-  (`live.Config.SkipMonitorDiarization`) since it's not one app's
-  isolated stream — labeled `"System Audio"` rather than clustered.
+- `"everything"` or `""` (the default) — the whole system's audio via
+  `guestaudio.NewSystemCapturer()`. Speakers are separated like any
+  other source: in a meeting the system's audio is mostly the call, and
+  other sounds just become short extra "speakers". (It used to skip
+  diarization and label everything `"System Audio"`; older sessions
+  recorded that way keep those labels.)
 - a decimal PID from `audiosources.ListActive()` — that app's audio via
   a window it owns. Resolved by app identity, not process ancestry:
   `isTeamsPID` checks the source's own name/bundle ID from

@@ -120,6 +120,12 @@ type MeetingConfig struct {
 	// window while a speaker still needs naming or right after a speaker
 	// change, and VideoHintCheckInterval the time between looks that only
 	// confirm known names (seconds; see videohint.Watcher).
+	// VideoHintWindow is which window video hints watch: "" finds the
+	// Teams meeting window, "none" turns them off, anything else is an
+	// app's name (its largest window). An app without a rule is still
+	// captured, for writing one from its saved frames.
+	VideoHintWindow string `toml:"video_hint_window"`
+
 	VideoHintLearnInterval float64 `toml:"video_hint_learn_interval"`
 	VideoHintCheckInterval float64 `toml:"video_hint_check_interval"`
 

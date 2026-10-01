@@ -17,9 +17,11 @@ import (
 // sourceHint (from the frontend's source picker — see
 // internal/audiosources.ListActive and internal/backend's
 // ListAudioSources/StartSession):
-//   - "" (nothing selected) or NoSource: no monitor capture, mic-only.
-//   - "everything": the whole system's audio output, not tied to any
-//     one app (internal/guestaudio.NewSystemCapturer).
+//   - NoSource: no monitor capture, mic-only.
+//   - "everything", or "" (the default): the whole system's audio
+//     output, not tied to any one app
+//     (internal/guestaudio.NewSystemCapturer). Speakers are separated
+//     the same as for one app's audio.
 //   - a decimal PID (e.g. "1234", from ListActive): that specific
 //     app's audio, via a window it owns. Teams (identified by app
 //     name/bundle ID, not process ancestry — see isTeamsPID) resolves
@@ -36,13 +38,13 @@ import (
 // failure here would make meeting mode strictly worse than today for
 // no benefit.
 func NewMonitorSource(sourceHint string) (*audio.StreamCapturer, error) {
-	if sourceHint == "" || sourceHint == NoSource {
+	if sourceHint == NoSource {
 		return nil, nil
 	}
 
 	var capturer audio.Capturer
 
-	if sourceHint == "everything" {
+	if sourceHint == "everything" || sourceHint == "" {
 		capturer = guestaudio.NewSystemCapturer()
 	} else {
 		pid, err := strconv.ParseInt(sourceHint, 10, 32)

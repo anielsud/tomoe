@@ -507,8 +507,8 @@ type AudioSourceView struct {
 }
 
 // ListAudioSources returns macOS's second-audio-source picker options:
-// "Everything" (always first, whole-system audio, no speaker
-// diarization — see live.Config.SkipMonitorDiarization) followed by
+// "Everything" (always first, and the default: whole-system audio, with
+// speakers separated like any other source) followed by
 // every app currently producing audio output
 // (internal/audiosources.ListActive). Empty (not an error) on Linux,
 // where SystemAudioMode() already tells the frontend to use
@@ -606,7 +606,6 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	}
 	if monCapturer != nil {
 		cfg.MonitorCapturer = monCapturer
-		cfg.SkipMonitorDiarization = monitorDevice == "everything"
 	}
 
 	// Reset speaker tracker for new session

@@ -26,6 +26,7 @@ type LookView struct {
 	SessionTime float64               `json:"sessionTime"`
 	Stage       string                `json:"stage"`
 	Detail      string                `json:"detail"`
+	Window      string                `json:"window,omitempty"`
 	Name        string                `json:"name,omitempty"`
 	FromCache   bool                  `json:"fromCache,omitempty"`
 	Usable      bool                  `json:"usable"`
@@ -44,7 +45,7 @@ type LookView struct {
 func toLookView(l videohint.Look, start time.Time, withThumb bool) LookView {
 	v := LookView{
 		ID: l.ID, Time: l.Time.Format(time.RFC3339Nano), SessionTime: l.Time.Sub(start).Seconds(),
-		Stage: string(l.Stage), Detail: l.Detail, Name: l.Name, FromCache: l.FromCache, Usable: l.Usable,
+		Stage: string(l.Stage), Detail: l.Detail, Window: l.Window, Name: l.Name, FromCache: l.FromCache, Usable: l.Usable,
 		Ring: l.Ring, Rings: l.Rings, Candidates: l.Candidates, Width: l.Width, Height: l.Height, ThumbOf: l.ThumbOf,
 	}
 	if withThumb && len(l.Thumb) > 0 {
@@ -68,6 +69,7 @@ func (a *App) newHintWatcher() (*videohint.Watcher, *hintSession) {
 	hs := &hintSession{}
 	learn, check := a.cfg.Meeting.VideoHintTiming()
 	hs.watcher = videohint.NewWatcher(videohint.WatchConfig{
+		Source:        a.cfg.Meeting.VideoHintWindow,
 		LearnInterval: learn,
 		CheckInterval: check,
 		NeedsLearning: func() bool {
@@ -139,6 +141,40 @@ func (a *App) onLook(hs *hintSession, l videohint.Look) {
 	if current {
 		wailsRuntime.EventsEmit(a.ctx, "videohint:look", toLookView(l, hs.sess.CreatedAt, true))
 	}
+}
+
+// ListHintWindows returns the apps with a window on screen that video
+// hints could watch (see SetHintWindow).
+func (a *App) ListHintWindows() ([]videohint.WindowChoice, error) {
+	a.fixSignals()
+	return videohint.Windows()
+}
+
+// SetHintWindow chooses which window video hints watch: "" for the Teams
+// meeting window, "none" for off, or an app's name. Takes effect at once
+// in a recording and is saved for later ones.
+func (a *App) SetHintWindow(app string) error {
+	a.fixSignals()
+	a.mu.Lock()
+	if a.cfg == nil {
+		a.mu.Unlock()
+		return fmt.Errorf("Tomoe is still starting up")
+	}
+	next := *a.cfg
+	next.Meeting.VideoHintWindow = app
+	if err := config.Save(&next, config.Path()); err != nil {
+		a.mu.Unlock()
+		return err
+	}
+	a.cfg = &next
+	a.mu.Unlock()
+	a.videoHintMu.Lock()
+	hs := a.hints
+	a.videoHintMu.Unlock()
+	if hs != nil && hs.watcher != nil {
+		hs.watcher.SetSource(app)
+	}
+	return nil
 }
 
 // GetVideoHintLooks returns a session's looks at the meeting window,
