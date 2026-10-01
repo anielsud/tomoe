@@ -36,6 +36,10 @@ type SpeakerScore struct {
 	Coverage    float64 `json:"coverage"`
 	HypSpeakers int     `json:"hyp_speakers"`
 	RefSpeakers int     `json:"ref_speakers"`
+	// RefSpeakersMatched is how many reference speakers got a hypothesis
+	// speaker of their own in the mapping: the rest were merged into
+	// someone else's (or never heard).
+	RefSpeakersMatched int `json:"ref_speakers_matched"`
 	// OverlapSeconds is time the pass labeled with two or more speakers at
 	// once (only diarization does this).
 	OverlapSeconds float64 `json:"overlap_seconds"`
@@ -134,6 +138,7 @@ func ScoreSpeakers(ref *Reference, hyp []Labeled, collar float64) SpeakerScore {
 	for h, r := range assign {
 		if r >= 0 && co[h][r] > 0 {
 			score.Mapping[hypLabels[h]] = refSpeakers[r]
+			score.RefSpeakersMatched++
 		}
 	}
 

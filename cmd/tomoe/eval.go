@@ -56,6 +56,12 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.runs, _ = cmd.Flags().GetStringSlice("runs")
 		opts.threads, _ = cmd.Flags().GetInt("threads")
 		opts.noCache, _ = cmd.Flags().GetBool("no-cache")
+		if sweep, _ := cmd.Flags().GetBool("sweep"); sweep {
+			opts.sweep = &sweepOptions{}
+			opts.sweep.thresholds, _ = cmd.Flags().GetFloat64Slice("sweep-thresholds")
+			opts.sweep.minOns, _ = cmd.Flags().GetFloat64Slice("sweep-min-on")
+			opts.sweep.merges, _ = cmd.Flags().GetFloat64Slice("sweep-merge")
+		}
 		var err error
 		for name, dst := range map[string]*float64{"from": &opts.from, "to": &opts.to} {
 			v, _ := cmd.Flags().GetString(name)
@@ -77,6 +83,10 @@ func init() {
 	evalCmd.Flags().String("to", "", "Score only up to this point (e.g. 20m)")
 	evalCmd.Flags().Int("threads", 0, "CPU threads per parallel job (default: all cores split between jobs)")
 	evalCmd.Flags().Bool("no-cache", false, "Recompute transcription and diarization instead of reusing earlier results")
+	evalCmd.Flags().Bool("sweep", false, "Score a grid of diarization settings instead of the normal passes (writes sweep.txt)")
+	evalCmd.Flags().Float64Slice("sweep-thresholds", []float64{0.8, 0.95, 1.1, 1.25}, "Clustering thresholds to sweep")
+	evalCmd.Flags().Float64Slice("sweep-min-on", []float64{0.3, 0.1}, "Shortest speech turns (s) to sweep")
+	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
 	_ = evalCmd.MarkFlagRequired("ref")
 	rootCmd.AddCommand(evalCmd)
 }
@@ -89,6 +99,7 @@ type evalOptions struct {
 	from, to        float64 // seconds; to 0 = the end
 	threads         int
 	noCache         bool
+	sweep           *sweepOptions // nil unless --sweep
 }
 
 // evalRun is one pipeline configuration's results.
@@ -228,6 +239,17 @@ func runEval(opts evalOptions) error {
 		}
 	}
 
+	outDir := opts.out
+	if outDir == "" {
+		outDir = "eval-" + strings.TrimSuffix(filepath.Base(opts.media), filepath.Ext(opts.media))
+	}
+	if opts.sweep != nil {
+		if !status.DiarizationReady() {
+			return fmt.Errorf("diarization models not downloaded (run 'tomoe model download')")
+		}
+		return runSweep(opts, cfg, status, samples, ref, cache, outDir)
+	}
+
 	// Every run and the diarization pass are independent, so they run at
 	// once, splitting the CPU between them.
 	jobs := len(runs)
@@ -311,10 +333,6 @@ func runEval(opts evalOptions) error {
 	report.Runs = runs
 	report.WallSecs = time.Since(began).Seconds()
 
-	outDir := opts.out
-	if outDir == "" {
-		outDir = "eval-" + strings.TrimSuffix(filepath.Base(opts.media), filepath.Ext(opts.media))
-	}
 	if err := writeEvalOutputs(outDir, report, ref, initial, refined); err != nil {
 		return err
 	}
