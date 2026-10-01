@@ -325,8 +325,8 @@ emitted after it lands.
   This belongs with making "Everything" a good default.
 - **Not measured yet.** The vote thresholds, the 0.5 s ring lag and the
   clustering constraints are reasoned, not tuned: tuning them needs a
-  session recorded with this (audio plus `looks.jsonl`) and a reviewed
-  transcript of it, replayed in `tomoe eval`.
+  session recorded with Record for tuning and a reviewed transcript of it,
+  replayed with `tomoe tune` (see "Tuning the numbers").
 - **Speaker-view detection** relies on Teams' gallery background
   brightness and the label's position, calibrated on one display.
 - **Truncated names.** Teams' tiles often truncate long names; the

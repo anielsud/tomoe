@@ -140,7 +140,7 @@ diarize_stride = 2                 # with it on: fingerprint every Nth analysis 
 diarize_recluster = 10             # with it on: seconds between label updates
 video_hint_learn_interval = 0.35   # macOS: seconds between looks at the meeting window while a speaker needs naming
 video_hint_check_interval = 1.0    # macOS: seconds between looks once everyone speaking has a name
-record_for_tuning = false          # record meetings at full detail for `tomoe eval --session` (more CPU, ~250 MB/hour)
+record_for_tuning = false          # record meetings at full detail for `tomoe tune` (more CPU, ~250 MB/hour)
 ```
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`

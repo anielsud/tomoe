@@ -304,6 +304,31 @@ The built version (`diarize_during_meeting`, `tomoe eval
 replay) reproduces the simulation: every 2nd window, recluster every 10 s,
 **97.6% final**, 7/8 people, 356 reclusters.
 
+## Video hints (macOS)
+
+Teams' active-speaker ring and name label, read from the meeting window,
+are a second signal for who's speaking; the design and the attribution
+rules are in [macos-video-hints.md](macos-video-hints.md).
+
+**Ring detection on 22 saved frames that had failed:**
+
+| Failure | Frames | Cause | After the fixes |
+|---|---|---|---|
+| No ring found | 7 | Speaker view: Teams draws no ring | Speaker view recognized in all 7, name read under the main video |
+| Several rings, filmstrip | 10 | Real: Teams lights every tile making sound (two conference rooms) | All lit tiles' names read, resolved by elimination |
+| Several rings, gallery | 5 | A purple virtual background passing the color test (8–13 candidates) | Border-shape test: 4 of 5 frames now one ring; the fifth has 3 really lit tiles |
+
+Names read correctly on all three frame types once icon scraps after a
+name ("… fo") were stripped; one-letter misreads ("Shafgat") are folded
+into the most-read spelling. Per look on an Apple Silicon desktop: ring
+detection 4 ms, thumbnail 2 ms, full frame 21 ms (when something
+changed), reading a name 16 ms (when needed), plus the capture.
+
+**Not measured yet:** how well names are attributed in a real call, and
+the best look rate, ring lag and vote thresholds. That needs one meeting
+recorded with `record_for_tuning` and a reviewed transcript of it, then
+`tomoe tune` (see macos-video-hints.md, "Tuning the numbers").
+
 ## Speed and processing load
 
 Measured on the same hour of audio, uncached, one run at a time.
