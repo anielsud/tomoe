@@ -86,14 +86,15 @@ type sourceState struct {
 // session for one source. Returns nil if the VAD can't be created.
 func (c *Coordinator) newSourceState(source SourceType) *sourceState {
 	// Create a VAD instance for this source
+	minSilence, maxSpeech := c.cfg.utteranceBounds()
 	vadConfig := &sherpa.VadModelConfig{
 		SileroVad: sherpa.SileroVadModelConfig{
 			Model:              c.cfg.VADPath,
 			Threshold:          0.5,
-			MinSilenceDuration: 0.5,
+			MinSilenceDuration: float32(minSilence),
 			MinSpeechDuration:  0.25,
 			WindowSize:         vadWindowSize,
-			MaxSpeechDuration:  30.0,
+			MaxSpeechDuration:  float32(maxSpeech),
 		},
 		SampleRate: vadSampleRate,
 		NumThreads: 1,
@@ -316,7 +317,7 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 	if !wasLive {
 		id = c.nextSegID()
 	}
-	spk, decision := c.assignSpeaker(source, samples)
+	spk, decision := c.assignSpeaker(source, samples, startTime)
 	live.reset()
 
 	seg := session.Segment{
@@ -402,7 +403,7 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 
 	// Only after the text check: a segment that decodes to nothing (noise,
 	// a cough) must not create or move a speaker centroid.
-	spk, decision := c.assignSpeaker(source, samples)
+	spk, decision := c.assignSpeaker(source, samples, startTime)
 
 	seg := session.Segment{
 		ID:        c.nextSegID(),
@@ -436,7 +437,7 @@ func (c *Coordinator) finishLive(source SourceType, live *liveState) {
 	if text == "" {
 		text = live.shown
 	}
-	spk, decision := c.assignSpeaker(source, live.audio)
+	spk, decision := c.assignSpeaker(source, live.audio, live.startTime)
 	c.refineCh <- refinementJob{
 		id: live.id, samples: live.audio, speaker: spk, decision: decision,
 		startTime: live.startTime, endTime: c.elapsed(), source: source,
@@ -525,8 +526,27 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 
 // assignSpeaker determines the speaker label for a segment, and which
 // rule inside speaker.Tracker.Assign produced it (see speakerLabel).
-func (c *Coordinator) assignSpeaker(source SourceType, samples []float32) (string, speaker.AssignDecision) {
+func (c *Coordinator) assignSpeaker(source SourceType, samples []float32, startTime float64) (string, speaker.AssignDecision) {
+	c.probePrefixes(source, samples, startTime)
 	return c.speakerLabel(source, c.speakerEmbedding(source, samples), sampleDuration(samples))
+}
+
+// probePrefixes records Config.ProbePrefixes labels for an utterance.
+func (c *Coordinator) probePrefixes(source SourceType, samples []float32, startTime float64) {
+	if len(c.cfg.ProbePrefixes) == 0 || c.cfg.Probes == nil {
+		return
+	}
+	var labels []ProbeLabel
+	for _, p := range c.cfg.ProbePrefixes {
+		n := int(p * vadSampleRate)
+		if n >= len(samples) {
+			continue
+		}
+		if emb := c.speakerEmbedding(source, samples[:n]); len(emb) > 0 {
+			labels = append(labels, ProbeLabel{Prefix: p, Speaker: c.cfg.Tracker.Peek(emb)})
+		}
+	}
+	c.cfg.Probes.add(startTime, labels)
 }
 
 // sampleDuration is how long samples (at vadSampleRate) plays for.

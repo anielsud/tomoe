@@ -58,6 +58,9 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.threads, _ = cmd.Flags().GetInt("threads")
 		opts.noCache, _ = cmd.Flags().GetBool("no-cache")
 		opts.embeddingModel, _ = cmd.Flags().GetString("embedding-model")
+		opts.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
+		opts.probePrefixes, _ = cmd.Flags().GetFloat64Slice("probe-prefixes")
+		opts.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
 		opts.workers, _ = cmd.Flags().GetInt("workers")
 		opts.timeDiarization, _ = cmd.Flags().GetString("diarization-timing")
 		if sweep, _ := cmd.Flags().GetBool("sweep"); sweep {
@@ -100,6 +103,9 @@ func init() {
 	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
 	evalCmd.Flags().String("diarization-timing", "", "Only time post-meeting diarization (sherpa or own) at --threads/--workers, with nothing else running")
 	evalCmd.Flags().Int("workers", 0, "Own diarizer: parallel workers for segmentation and embeddings (default: cores / --threads)")
+	evalCmd.Flags().Float64Slice("probe-prefixes", nil, "Live: also label each utterance from just its first N seconds, for each N (e.g. 1,5,10,20), and score those early labels")
+	evalCmd.Flags().Float64("min-silence", live.DefaultMinSilenceDuration, "Live: the pause (s) that ends an utterance")
+	evalCmd.Flags().Float64("max-speech", live.DefaultMaxSpeechDuration, "Live: the longest utterance (s) before it's cut")
 	evalCmd.Flags().String("embedding-model", "", "Speaker model for every pass, live and diarization: a model ID ("+speakerModelIDs()+") or an .onnx path (default: as configured for English)")
 	evalCmd.Flags().Bool("own-diarizer", false, "With --sweep: use Tomoe's step-by-step diarizer (cached segmentation and embeddings; settings cost about a second each)")
 	evalCmd.Flags().Float64Slice("own-thresholds", []float64{0.6, 0.7, 0.8, 0.9, 1.0, 1.1}, "Own diarizer: clustering thresholds to sweep")
@@ -121,7 +127,10 @@ type evalOptions struct {
 	sweep           *sweepOptions    // nil unless --sweep
 	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
 	embeddingModel  string           // speaker model override, an ID or a path ("" = as configured)
-	diarThreshold   float64          // post-meeting diarization settings for the speaker model
+	probePrefixes   []float64        // live: early-label prefixes to score (s)
+	minSilence      float64          // live utterance bounds (s)
+	maxSpeech       float64
+	diarThreshold   float64 // post-meeting diarization settings for the speaker model
 	diarMerge       float64
 	workers         int    // own diarizer: parallel workers (0 = cores / threads)
 	timeDiarization string // "sherpa" or "own": only time post-meeting diarization
@@ -133,7 +142,11 @@ type evalRun struct {
 	TwoPass bool   `json:"two_pass"`
 	Tuning  string `json:"tuning"`
 
-	tuning speaker.Tuning // live speaker clustering settings
+	tuning        speaker.Tuning // live speaker clustering settings
+	probePrefixes []float64
+
+	MinSilence float64 `json:"min_silence_seconds"` // utterance bounds
+	MaxSpeech  float64 `json:"max_speech_seconds"`
 
 	Detection eval.DetectionScore `json:"speech_detection"`
 
@@ -168,6 +181,10 @@ type evalRun struct {
 	Seconds float64 `json:"run_seconds"`
 	// Timings is where the run's pipeline spent its time, by stage.
 	Timings *live.Timings `json:"timings"`
+	// Probes and EarlyLabels: labels from the start of each utterance
+	// (see --probe-prefixes), and their scores.
+	Probes      *live.Probes      `json:"-"`
+	EarlyLabels []earlyLabelScore `json:"early_labels,omitempty"`
 
 	segs               []session.Segment   // the run's final segments, with word timings
 	align              *eval.WordAlignment // the run's words matched to the reference
@@ -291,6 +308,16 @@ func runEval(opts evalOptions) error {
 	runs, err := evalRuns(opts.runs)
 	if err != nil {
 		return err
+	}
+	for _, r := range runs {
+		r.MinSilence, r.MaxSpeech = opts.minSilence, opts.maxSpeech
+		if len(opts.probePrefixes) > 0 {
+			r.Probes = &live.Probes{}
+			r.probePrefixes = opts.probePrefixes
+		}
+		if r.MinSilence != live.DefaultMinSilenceDuration || r.MaxSpeech != live.DefaultMaxSpeechDuration {
+			r.Tuning += fmt.Sprintf("; utterances end after a %vs pause, at most %vs", r.MinSilence, r.MaxSpeech)
+		}
 	}
 
 	var cache *evalCache
@@ -436,6 +463,8 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 	fmt.Printf("Running %s pipeline (%s)...\n", run.Name, run.Tuning)
 	began := time.Now()
 	lc := pipe.liveConfig(run.tuning, run.TwoPass)
+	lc.MinSilenceDuration, lc.MaxSpeechDuration = run.MinSilence, run.MaxSpeech
+	lc.ProbePrefixes, lc.Probes = run.probePrefixes, run.Probes
 	run.Timings = &live.Timings{}
 	lc.Timings = run.Timings
 	res, err := live.ReplayDetailed(lc, nil, samples)
@@ -582,6 +611,7 @@ func scoreRun(run *evalRun, ref *eval.Reference, refWords []string, collar float
 		run.TextPass1 = &p1
 	}
 	run.SpeakersLive = eval.ScoreSpeakers(ref, run.live, collar)
+	defer func() { run.EarlyLabels = scoreEarlyLabels(run) }()
 	run.WhoSaidWhatLive = eval.SpeakerAttributedErrors(ref, run.live, run.SpeakersLive.Mapping)
 	run.ExchangesLive = eval.ScoreQuickExchanges(ref, run.live, run.SpeakersLive.Mapping, 8, 6, 3)
 	run.OverlapsLive = eval.ScoreAnnotatedOverlaps(ref, run.live, run.SpeakersLive.Mapping, 3)
@@ -741,7 +771,10 @@ func formatEvalReport(r *evalReport) string {
 			}
 		}
 		if run.Timings != nil {
-			b.WriteString(formatTimings(run.Timings, r.AudioSecs))
+			b.WriteString(formatTimings(run.Timings, r.AudioSecs, run.MinSilence))
+		}
+		if len(run.EarlyLabels) > 0 {
+			b.WriteString(formatEarlyLabels(run.EarlyLabels))
 		}
 		fmt.Fprintln(&b, "Video-hint names   not scored (no hints in an offline eval yet)")
 		fmt.Fprintf(&b, "Run time           pipeline %s", formatDuration(run.Seconds))
@@ -887,7 +920,10 @@ func parseSeconds(v string) (float64, error) {
 // time per call, and load (processing time as a share of the audio's
 // duration: live use needs it well under 100%), plus how long each
 // utterance took from the end of its speech to its final label.
-func formatTimings(t *live.Timings, audioSecs float64) string {
+func formatTimings(t *live.Timings, audioSecs, minSilence float64) string {
+	if minSilence <= 0 {
+		minSilence = live.DefaultMinSilenceDuration
+	}
 	var b strings.Builder
 	fmt.Fprintln(&b, "Processing         stage           total      per call      load (share of audio time)")
 	for _, s := range []struct {
@@ -904,7 +940,7 @@ func formatTimings(t *live.Timings, audioSecs float64) string {
 		sort.Float64s(u)
 		q := func(p float64) float64 { return u[min(n-1, int(p*float64(n)))] }
 		fmt.Fprintf(&b, "Per utterance      end of speech to final label: median %.0fms, 90th %.0fms, 99th %.0fms, max %.0fms (%d utterances; plus the %.1fs of silence the detector waits for)\n",
-			1000*q(0.5), 1000*q(0.9), 1000*q(0.99), 1000*u[n-1], n, 0.5)
+			1000*q(0.5), 1000*q(0.9), 1000*q(0.99), 1000*u[n-1], n, minSilence)
 	}
 	return b.String()
 }
@@ -953,4 +989,67 @@ func speakerModelIDs() string {
 		ids = append(ids, m.ID)
 	}
 	return strings.Join(ids, ", ")
+}
+
+// earlyLabelScore scores labeling utterances from just their first Prefix
+// seconds, over the utterances longer than that.
+type earlyLabelScore struct {
+	Prefix     float64               `json:"prefix_seconds"`
+	Utterances int                   `json:"utterances"`
+	Early      eval.WordSpeakerScore `json:"early"` // label from the prefix
+	Full       eval.WordSpeakerScore `json:"full"`  // label from the whole utterance
+	Agree      int                   `json:"agree_with_full"`
+}
+
+// scoreEarlyLabels scores run's probe labels, with the clusters mapped to
+// people as for the live labels.
+func scoreEarlyLabels(run *evalRun) []earlyLabelScore {
+	if run.Probes == nil || run.align == nil {
+		return nil
+	}
+	var out []earlyLabelScore
+	for _, p := range run.probePrefixes {
+		sc := earlyLabelScore{Prefix: p}
+		var early [][]string
+		var keep []bool
+		for _, s := range run.segs {
+			label := ""
+			for _, pl := range run.Probes.ByStart[s.StartTime] {
+				if pl.Prefix == p {
+					label = pl.Speaker
+				}
+			}
+			if label != "" {
+				sc.Utterances++
+				if label == s.Speaker {
+					sc.Agree++
+				}
+			}
+			for range s.Words {
+				early = append(early, []string{label})
+				keep = append(keep, label != "")
+			}
+		}
+		in := func(w int) bool { return w < len(keep) && keep[w] }
+		mapping := run.SpeakersLive.Mapping
+		sc.Early = run.align.ScoreWhere(early, mapping, in)
+		sc.Full = run.align.ScoreWhere(segmentSpeakers(run.segs), mapping, in)
+		out = append(out, sc)
+	}
+	return out
+}
+
+func formatEarlyLabels(scores []earlyLabelScore) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "Early labels       speaker from just the start of each longer utterance vs from all of it (right speaker by word)")
+	fmt.Fprintln(&b, "                   after   utterances  words   from start  from all  same label")
+	for _, s := range scores {
+		agree := 0.0
+		if s.Utterances > 0 {
+			agree = float64(s.Agree) / float64(s.Utterances)
+		}
+		fmt.Fprintf(&b, "                   %4.0fs   %6d     %6d   %s     %s   %s\n",
+			s.Prefix, s.Utterances, s.Early.Words, pct(s.Early.Accuracy()), pct(s.Full.Accuracy()), pct(agree))
+	}
+	return b.String()
 }

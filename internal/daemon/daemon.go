@@ -387,11 +387,13 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	}
 
 	cfg := live.Config{
-		Engine:            d.engines.Get(lang),
-		Embedder:          d.meetingEmbedder(lang),
-		Tracker:           d.tracker,
-		VADPath:           vadPath,
-		SegmentBufferSize: 64,
+		Engine:             d.engines.Get(lang),
+		Embedder:           d.meetingEmbedder(lang),
+		MinSilenceDuration: d.cfg.Meeting.MinSilenceDuration,
+		MaxSpeechDuration:  d.cfg.Meeting.MaxSpeechDuration,
+		Tracker:            d.tracker,
+		VADPath:            vadPath,
+		SegmentBufferSize:  64,
 	}
 	// Realtime pass is English-only (see internal/transcribe's
 	// StreamingEngine); other languages keep today's single-pass path.

@@ -564,11 +564,13 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	status := bundle.modelMgr.Check()
 
 	cfg := live.Config{
-		Engine:            bundle.engines.Get(lang),
-		Embedder:          meetingEmbedder(a.cfg, status, bundle.embedders, lang),
-		Tracker:           a.tracker,
-		VADPath:           status.VADPath,
-		SegmentBufferSize: 64,
+		Engine:             bundle.engines.Get(lang),
+		Embedder:           meetingEmbedder(a.cfg, status, bundle.embedders, lang),
+		MinSilenceDuration: a.cfg.Meeting.MinSilenceDuration,
+		MaxSpeechDuration:  a.cfg.Meeting.MaxSpeechDuration,
+		Tracker:            a.tracker,
+		VADPath:            status.VADPath,
+		SegmentBufferSize:  64,
 	}
 	// Realtime pass is English-only (see internal/transcribe's
 	// StreamingEngine); other languages keep today's single-pass path.

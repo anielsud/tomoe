@@ -124,8 +124,8 @@ silence_timeout = 5.0
 default_sources = 'both'
 monitor_device = ''       # '' = default monitor source, 'none' = mic only
 speaker_threshold = 0.65           # cosine similarity for a confident speaker match
-max_speech_duration = 30.0
-min_silence_duration = 0.5
+max_speech_duration = 30.0         # longest utterance (s) before it's cut; each utterance gets one speaker label
+min_silence_duration = 0.5         # pause (s) that ends an utterance
 auto_save = true
 auto_detect = true
 sticky_grace_window = 3.0          # seconds a near-miss can still join the last speaker

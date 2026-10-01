@@ -508,9 +508,15 @@ func NewWordAlignment(ref *Reference, texts []string) *WordAlignment {
 // aligned to. Transcribed words that align to no reference word aren't
 // scored.
 func (a *WordAlignment) Score(speakers [][]string, mapping map[string]string) WordSpeakerScore {
+	return a.ScoreWhere(speakers, mapping, nil)
+}
+
+// ScoreWhere is Score counting only the transcribed words keep accepts
+// (all of them if keep is nil).
+func (a *WordAlignment) ScoreWhere(speakers [][]string, mapping map[string]string, keep func(word int) bool) WordSpeakerScore {
 	s := WordSpeakerScore{RefWords: a.refTokens, Buckets: DefaultTurnBuckets()}
 	for k, turn := range a.tokenTurn {
-		if turn < 0 {
+		if turn < 0 || (keep != nil && !keep(a.tokenWord[k])) {
 			continue
 		}
 		want := a.ref.Turns[turn].Speaker
