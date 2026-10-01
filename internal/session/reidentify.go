@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"sort"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
@@ -178,6 +179,9 @@ func MergeSimilarSpeakers(segments []DiarizeSegment, speakerMap map[int]string,
 	for spk := range clusterEmbeddings {
 		speakers = append(speakers, spk)
 	}
+	// Merging is greedy, so the order matters: sort for the same result
+	// every run (map order is random).
+	sort.Ints(speakers)
 
 	for i := 0; i < len(speakers); i++ {
 		if _, merged := mergeMap[speakers[i]]; merged {
