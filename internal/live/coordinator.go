@@ -73,6 +73,13 @@ type Config struct {
 	// per prefix.
 	ProbePrefixes []float64
 	Probes        *Probes
+
+	// WindowSize and WindowStep (seconds), for measurement only, also
+	// match overlapping windows within each utterance longer than
+	// WindowSize against the known speakers (speaker.Tracker.PeekMatch),
+	// recording them in Probes: whether labeling within an utterance
+	// catches speaker changes that have no pause. 0 = off.
+	WindowSize, WindowStep float64
 }
 
 // Default utterance boundaries (see Config.MinSilenceDuration).

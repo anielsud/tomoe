@@ -528,12 +528,13 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 // rule inside speaker.Tracker.Assign produced it (see speakerLabel).
 func (c *Coordinator) assignSpeaker(source SourceType, samples []float32, startTime float64) (string, speaker.AssignDecision) {
 	c.probePrefixes(source, samples, startTime)
+	c.probeWindows(source, samples, startTime)
 	return c.speakerLabel(source, c.speakerEmbedding(source, samples), sampleDuration(samples))
 }
 
 // probePrefixes records Config.ProbePrefixes labels for an utterance.
 func (c *Coordinator) probePrefixes(source SourceType, samples []float32, startTime float64) {
-	if len(c.cfg.ProbePrefixes) == 0 || c.cfg.Probes == nil {
+	if len(c.cfg.ProbePrefixes) == 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
 		return
 	}
 	var labels []ProbeLabel
@@ -547,6 +548,36 @@ func (c *Coordinator) probePrefixes(source SourceType, samples []float32, startT
 		}
 	}
 	c.cfg.Probes.add(startTime, labels)
+}
+
+// probeWindows records Config.WindowSize labels for an utterance.
+func (c *Coordinator) probeWindows(source SourceType, samples []float32, startTime float64) {
+	size, step := c.cfg.WindowSize, c.cfg.WindowStep
+	if size <= 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
+		return
+	}
+	if step <= 0 {
+		step = size / 2
+	}
+	n, hop := int(size*vadSampleRate), int(step*vadSampleRate)
+	if len(samples) <= n {
+		return
+	}
+	var labels []WindowLabel
+	for from := 0; from+n <= len(samples); from += hop {
+		emb := c.speakerEmbedding(source, samples[from:from+n])
+		if len(emb) == 0 {
+			continue
+		}
+		if label, ok := c.cfg.Tracker.PeekMatch(emb); ok {
+			labels = append(labels, WindowLabel{
+				Start:   startTime + float64(from)/vadSampleRate,
+				End:     startTime + float64(from+n)/vadSampleRate,
+				Speaker: label,
+			})
+		}
+	}
+	c.cfg.Probes.addWindows(startTime, labels)
 }
 
 // sampleDuration is how long samples (at vadSampleRate) plays for.

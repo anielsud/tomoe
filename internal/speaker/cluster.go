@@ -559,6 +559,24 @@ func (t *Tracker) Peek(embedding []float32) string {
 	return fmt.Sprintf("Person %d", len(t.centroids)+1)
 }
 
+// PeekMatch is the existing speaker embedding confidently matches (at or
+// above the threshold), without changing anything; ok is false if none
+// does.
+func (t *Tracker) PeekMatch(embedding []float32) (label string, ok bool) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	bestIdx, bestSim := -1, 0.0
+	for i, centroid := range t.centroids {
+		if sim := CosineSimilarity(embedding, centroid); sim > bestSim {
+			bestIdx, bestSim = i, sim
+		}
+	}
+	if bestIdx < 0 || bestSim < t.tuning.Threshold {
+		return "", false
+	}
+	return t.label(t.canonical(bestIdx)), true
+}
+
 // updateCentroid updates a centroid with a new embedding using running average.
 func (t *Tracker) updateCentroid(idx int, embedding []float32) {
 	count := float32(t.counts[idx])

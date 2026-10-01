@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,6 +61,8 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.embeddingModel, _ = cmd.Flags().GetString("embedding-model")
 		opts.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
 		opts.probePrefixes, _ = cmd.Flags().GetFloat64Slice("probe-prefixes")
+		opts.windowSize, _ = cmd.Flags().GetFloat64("window-size")
+		opts.windowStep, _ = cmd.Flags().GetFloat64("window-step")
 		opts.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
 		opts.workers, _ = cmd.Flags().GetInt("workers")
 		opts.timeDiarization, _ = cmd.Flags().GetString("diarization-timing")
@@ -104,6 +107,8 @@ func init() {
 	evalCmd.Flags().String("diarization-timing", "", "Only time post-meeting diarization (sherpa or own) at --threads/--workers, with nothing else running")
 	evalCmd.Flags().Int("workers", 0, "Own diarizer: parallel workers for segmentation and embeddings (default: cores / --threads)")
 	evalCmd.Flags().Float64Slice("probe-prefixes", nil, "Live: also label each utterance from just its first N seconds, for each N (e.g. 1,5,10,20), and score those early labels")
+	evalCmd.Flags().Float64("window-size", 0, "Live: also label words from overlapping windows of this many seconds within each longer utterance, and score that (0 = off)")
+	evalCmd.Flags().Float64("window-step", 0, "Live: step between those windows (s; default half the window)")
 	evalCmd.Flags().Float64("min-silence", live.DefaultMinSilenceDuration, "Live: the pause (s) that ends an utterance")
 	evalCmd.Flags().Float64("max-speech", live.DefaultMaxSpeechDuration, "Live: the longest utterance (s) before it's cut")
 	evalCmd.Flags().String("embedding-model", "", "Speaker model for every pass, live and diarization: a model ID ("+speakerModelIDs()+") or an .onnx path (default: as configured for English)")
@@ -128,7 +133,9 @@ type evalOptions struct {
 	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
 	embeddingModel  string           // speaker model override, an ID or a path ("" = as configured)
 	probePrefixes   []float64        // live: early-label prefixes to score (s)
-	minSilence      float64          // live utterance bounds (s)
+	windowSize      float64          // live: within-utterance window labels (s)
+	windowStep      float64
+	minSilence      float64 // live utterance bounds (s)
 	maxSpeech       float64
 	diarThreshold   float64 // post-meeting diarization settings for the speaker model
 	diarMerge       float64
@@ -142,8 +149,9 @@ type evalRun struct {
 	TwoPass bool   `json:"two_pass"`
 	Tuning  string `json:"tuning"`
 
-	tuning        speaker.Tuning // live speaker clustering settings
-	probePrefixes []float64
+	tuning                 speaker.Tuning // live speaker clustering settings
+	probePrefixes          []float64
+	windowSize, windowStep float64
 
 	MinSilence float64 `json:"min_silence_seconds"` // utterance bounds
 	MaxSpeech  float64 `json:"max_speech_seconds"`
@@ -185,6 +193,7 @@ type evalRun struct {
 	// (see --probe-prefixes), and their scores.
 	Probes      *live.Probes      `json:"-"`
 	EarlyLabels []earlyLabelScore `json:"early_labels,omitempty"`
+	Windowed    *windowedScore    `json:"windowed_labels,omitempty"`
 
 	segs               []session.Segment   // the run's final segments, with word timings
 	align              *eval.WordAlignment // the run's words matched to the reference
@@ -311,9 +320,10 @@ func runEval(opts evalOptions) error {
 	}
 	for _, r := range runs {
 		r.MinSilence, r.MaxSpeech = opts.minSilence, opts.maxSpeech
-		if len(opts.probePrefixes) > 0 {
+		if len(opts.probePrefixes) > 0 || opts.windowSize > 0 {
 			r.Probes = &live.Probes{}
 			r.probePrefixes = opts.probePrefixes
+			r.windowSize, r.windowStep = opts.windowSize, opts.windowStep
 		}
 		if r.MinSilence != live.DefaultMinSilenceDuration || r.MaxSpeech != live.DefaultMaxSpeechDuration {
 			r.Tuning += fmt.Sprintf("; utterances end after a %vs pause, at most %vs", r.MinSilence, r.MaxSpeech)
@@ -465,6 +475,7 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 	lc := pipe.liveConfig(run.tuning, run.TwoPass)
 	lc.MinSilenceDuration, lc.MaxSpeechDuration = run.MinSilence, run.MaxSpeech
 	lc.ProbePrefixes, lc.Probes = run.probePrefixes, run.Probes
+	lc.WindowSize, lc.WindowStep = run.windowSize, run.windowStep
 	run.Timings = &live.Timings{}
 	lc.Timings = run.Timings
 	res, err := live.ReplayDetailed(lc, nil, samples)
@@ -611,7 +622,10 @@ func scoreRun(run *evalRun, ref *eval.Reference, refWords []string, collar float
 		run.TextPass1 = &p1
 	}
 	run.SpeakersLive = eval.ScoreSpeakers(ref, run.live, collar)
-	defer func() { run.EarlyLabels = scoreEarlyLabels(run) }()
+	defer func() {
+		run.EarlyLabels = scoreEarlyLabels(run)
+		run.Windowed = scoreWindowed(run)
+	}()
 	run.WhoSaidWhatLive = eval.SpeakerAttributedErrors(ref, run.live, run.SpeakersLive.Mapping)
 	run.ExchangesLive = eval.ScoreQuickExchanges(ref, run.live, run.SpeakersLive.Mapping, 8, 6, 3)
 	run.OverlapsLive = eval.ScoreAnnotatedOverlaps(ref, run.live, run.SpeakersLive.Mapping, 3)
@@ -775,6 +789,9 @@ func formatEvalReport(r *evalReport) string {
 		}
 		if len(run.EarlyLabels) > 0 {
 			b.WriteString(formatEarlyLabels(run.EarlyLabels))
+		}
+		if run.Windowed != nil {
+			b.WriteString(formatWindowed(run.Windowed))
 		}
 		fmt.Fprintln(&b, "Video-hint names   not scored (no hints in an offline eval yet)")
 		fmt.Fprintf(&b, "Run time           pipeline %s", formatDuration(run.Seconds))
@@ -1051,5 +1068,82 @@ func formatEarlyLabels(scores []earlyLabelScore) string {
 		fmt.Fprintf(&b, "                   %4.0fs   %6d     %6d   %s     %s   %s\n",
 			s.Prefix, s.Utterances, s.Early.Words, pct(s.Early.Accuracy()), pct(s.Full.Accuracy()), pct(agree))
 	}
+	return b.String()
+}
+
+// windowedScore compares labeling each word from the window around it
+// (see --window-size) with one label per utterance.
+type windowedScore struct {
+	Size, Step float64
+	Windowed   eval.WordSpeakerScore `json:"windowed"`
+	Utterance  eval.WordSpeakerScore `json:"utterance"`
+	Relabeled  int                   `json:"words_relabeled"`
+	Fixed      int                   `json:"relabels_fixed"` // wrong per utterance, right per window
+	Broken     int                   `json:"relabels_broken"`
+}
+
+// scoreWindowed labels each word from the matched window whose center is
+// nearest the word, keeping the utterance's label where no window matched.
+func scoreWindowed(run *evalRun) *windowedScore {
+	if run.Probes == nil || run.windowSize <= 0 || run.align == nil {
+		return nil
+	}
+	ws := &windowedScore{Size: run.windowSize, Step: run.windowStep}
+	if ws.Step <= 0 {
+		ws.Step = ws.Size / 2
+	}
+	var windowed [][]string
+	for _, s := range run.segs {
+		wins := run.Probes.Windows[s.StartTime]
+		for _, w := range s.Words {
+			label, best := s.Speaker, math.Inf(1)
+			mid := (w.Start + w.End) / 2
+			for _, win := range wins {
+				if mid < win.Start || mid > win.End {
+					continue
+				}
+				if d := math.Abs(mid - (win.Start+win.End)/2); d < best {
+					label, best = win.Speaker, d
+				}
+			}
+			windowed = append(windowed, []string{label})
+		}
+	}
+	mapping := run.SpeakersLive.Mapping
+	whole := segmentSpeakers(run.segs)
+	ws.Windowed = run.align.Score(windowed, mapping)
+	ws.Utterance = run.align.Score(whole, mapping)
+	for i := range windowed {
+		if windowed[i][0] == whole[i][0] {
+			continue
+		}
+		ws.Relabeled++
+		one := func(w int) bool { return w == i }
+		right := run.align.ScoreWhere(windowed, mapping, one).Correct > 0
+		wasRight := run.align.ScoreWhere(whole, mapping, one).Correct > 0
+		switch {
+		case right && !wasRight:
+			ws.Fixed++
+		case wasRight && !right:
+			ws.Broken++
+		}
+	}
+	return ws
+}
+
+func formatWindowed(ws *windowedScore) string {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Window labels      each word labeled from %.1fs windows (every %.1fs) within its utterance vs one label per utterance\n", ws.Size, ws.Step)
+	fmt.Fprintln(&b, "                              overall  1-3      4-15     16-60    61+")
+	row := func(name string, s eval.WordSpeakerScore) {
+		fmt.Fprintf(&b, "                   %-10s %s", name, pct(s.Accuracy()))
+		for _, bk := range s.Buckets {
+			fmt.Fprintf(&b, "   %s", pct(bk.Accuracy()))
+		}
+		fmt.Fprintln(&b)
+	}
+	row("windows", ws.Windowed)
+	row("utterance", ws.Utterance)
+	fmt.Fprintf(&b, "                   %d words relabeled: %d fixed, %d broken\n", ws.Relabeled, ws.Fixed, ws.Broken)
 	return b.String()
 }
