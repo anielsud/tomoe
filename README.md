@@ -133,6 +133,7 @@ sticky_threshold_margin = 0        # how near a near-miss must be; 0 = sticky ru
 min_assign_duration = 0            # segments shorter than this (s) join the last speaker; 0 = off (experimental)
 short_segment_grace_window = 15.0  # seconds after the last speaker that rule applies
 split_on_speaker_change = false    # after a meeting, split lines where the speaker changes mid-line (experimental)
+speaker_model = 'auto'             # voice model: 'auto' (English-trained for English, base otherwise), 'eres2net-en', 'eres2net-base'
 ```
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"time"
 
@@ -95,6 +96,12 @@ type MeetingConfig struct {
 	// (`tomoe eval` scores both).
 	SplitOnSpeakerChange bool `toml:"split_on_speaker_change"`
 
+	// SpeakerModel is the speaker embedding model used to tell voices
+	// apart, live and after the meeting: a models.SpeakerModels ID, or
+	// "auto" for the English-trained model in English meetings and the
+	// base model otherwise.
+	SpeakerModel string `toml:"speaker_model"`
+
 	// VideoHintPollInterval/VideoHintTriggerDebounce mirror
 	// videohint.Poll's interval/trigger-debounce parameters (seconds).
 	VideoHintPollInterval    float64 `toml:"video_hint_poll_interval"`
@@ -156,6 +163,7 @@ func DefaultConfig() *Config {
 			MinSilenceDuration: 0.5,
 			AutoSave:           true,
 			AutoDetect:         true,
+			SpeakerModel:       "auto",
 
 			// The sticky-speaker and short-segment rules are off (margin
 			// and duration 0), matching main's clustering, until they're
@@ -336,4 +344,18 @@ func Save(cfg *Config, path string) error {
 	}
 
 	return nil
+}
+
+// MeetingLanguages lists the languages a meeting can be recorded in:
+// English, plus the chosen languages when multilingual is on.
+func (c *Config) MeetingLanguages() []string {
+	langs := []string{"en"}
+	if c.Multilingual.Enabled {
+		for _, l := range c.Multilingual.Languages {
+			if !slices.Contains(langs, l) {
+				langs = append(langs, l)
+			}
+		}
+	}
+	return langs
 }

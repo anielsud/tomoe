@@ -10,6 +10,7 @@ import (
 
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
+	"github.com/sosuke-ai/tomoe-pc/internal/models"
 )
 
 // supportedLanguages are the session languages an engine exists for (see
@@ -164,7 +165,8 @@ func planApply(old, next *config.Config) applyPlan {
 
 	p.reloadEngines = !reflect.DeepEqual(ot, nt) ||
 		om.Enabled != nm.Enabled || om.DefaultLang != nm.DefaultLang ||
-		!slices.Equal(om.Languages, nm.Languages)
+		!slices.Equal(om.Languages, nm.Languages) ||
+		old.Meeting.SpeakerModel != next.Meeting.SpeakerModel
 	p.restartDetector = old.Meeting.AutoDetect != next.Meeting.AutoDetect
 	// The hotkey loops capture the default language and the detector's
 	// event channel when they start.
@@ -242,6 +244,9 @@ func validateSettings(c *config.Config) error {
 	}
 
 	mt := c.Meeting
+	if _, ok := models.SpeakerModelByID(mt.SpeakerModel); !ok && mt.SpeakerModel != models.SpeakerModelAuto && mt.SpeakerModel != "" {
+		return fmt.Errorf("unknown speaker model %q", mt.SpeakerModel)
+	}
 	if mt.SpeakerThreshold <= 0 || mt.SpeakerThreshold > 1 {
 		return fmt.Errorf("speaker threshold must be above 0 and at most 1")
 	}

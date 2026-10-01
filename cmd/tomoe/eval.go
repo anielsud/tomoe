@@ -100,7 +100,7 @@ func init() {
 	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
 	evalCmd.Flags().String("diarization-timing", "", "Only time post-meeting diarization (sherpa or own) at --threads/--workers, with nothing else running")
 	evalCmd.Flags().Int("workers", 0, "Own diarizer: parallel workers for segmentation and embeddings (default: cores / --threads)")
-	evalCmd.Flags().String("embedding-model", "", "Own diarizer: speaker embedding model (.onnx) to diarize with instead of the installed one")
+	evalCmd.Flags().String("embedding-model", "", "Speaker model for every pass, live and diarization: a model ID ("+speakerModelIDs()+") or an .onnx path (default: as configured for English)")
 	evalCmd.Flags().Bool("own-diarizer", false, "With --sweep: use Tomoe's step-by-step diarizer (cached segmentation and embeddings; settings cost about a second each)")
 	evalCmd.Flags().Float64Slice("own-thresholds", []float64{0.6, 0.7, 0.8, 0.9, 1.0, 1.1}, "Own diarizer: clustering thresholds to sweep")
 	evalCmd.Flags().Float64Slice("own-merges", []float64{0, 0.5, 0.6, 0.7}, "Own diarizer: centroid merge similarities to sweep (0 = none)")
@@ -120,7 +120,9 @@ type evalOptions struct {
 	noCache         bool
 	sweep           *sweepOptions    // nil unless --sweep
 	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
-	embeddingModel  string           // diarization embedding model override ("" = the installed one)
+	embeddingModel  string           // speaker model override, an ID or a path ("" = as configured)
+	diarThreshold   float64          // post-meeting diarization settings for the speaker model
+	diarMerge       float64
 	workers         int              // own diarizer: parallel workers (0 = cores / threads)
 	timeDiarization string           // "sherpa" or "own": only time post-meeting diarization
 }
@@ -213,6 +215,26 @@ func runEval(opts evalOptions) error {
 	if !opts.skipDiarization && !status.DiarizationReady() {
 		return fmt.Errorf("diarization models not downloaded (run 'tomoe model download', or pass --skip-diarization)")
 	}
+	// Every pass uses one speaker model, with the diarization settings
+	// tuned for it.
+	sm, smPath, fellBack := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, "en")
+	if fellBack {
+		fmt.Printf("Note: the configured speaker model isn't downloaded; using %s\n", sm.Name)
+	}
+	if opts.embeddingModel != "" {
+		if m, ok := models.SpeakerModelByID(opts.embeddingModel); ok {
+			sm, smPath = m, status.SpeakerModelPath(m)
+		} else {
+			sm, smPath = models.SpeakerModels[0], opts.embeddingModel
+			sm.Name = filepath.Base(opts.embeddingModel)
+		}
+		if _, err := os.Stat(smPath); err != nil {
+			return fmt.Errorf("speaker model: %w", err)
+		}
+	}
+	status.SpeakerEmbeddingPath, opts.embeddingModel = smPath, smPath
+	opts.diarThreshold, opts.diarMerge = sm.DiarizeThreshold, sm.DiarizeMerge
+	fmt.Printf("Speaker model: %s (diarization threshold %v, merge %v)\n", sm.Name, sm.DiarizeThreshold, sm.DiarizeMerge)
 
 	fmt.Printf("Decoding %s...\n", filepath.Base(opts.media))
 	samples, err := session.DecodeToFloat32(opts.media)
@@ -313,7 +335,7 @@ func runEval(opts evalOptions) error {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			d, secs, err := runDiarization(cfg, status, samples, threads, cache)
+			d, secs, err := runDiarization(cfg, status, samples, opts.diarThreshold, opts.diarMerge, threads, cache)
 			if err != nil {
 				errs <- fmt.Errorf("diarization: %w", err)
 				return
@@ -435,8 +457,7 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 
 // runDiarization runs the post-meeting diarization pass (initial, then
 // merged), or loads it from the cache.
-func runDiarization(cfg *config.Config, status *models.Status, samples []float32, threads int, cache *evalCache) (*cachedDiarization, float64, error) {
-	const threshold, merge = 1.1, 0.55 // the post-save diarization's settings (cmd/tomoe/diarize.go)
+func runDiarization(cfg *config.Config, status *models.Status, samples []float32, threshold, merge float64, threads int, cache *evalCache) (*cachedDiarization, float64, error) {
 	key := fmt.Sprintf("%s|%s|%v|%v", status.SpeakerSegmentationPath, status.SpeakerEmbeddingPath, threshold, merge)
 	if cache != nil {
 		if d, ok := cache.loadDiarization(key); ok {
@@ -449,7 +470,7 @@ func runDiarization(cfg *config.Config, status *models.Status, samples []float32
 	raw, rawMap, err := session.Diarize(samples, session.DiarizeConfig{
 		SegmentationModelPath: status.SpeakerSegmentationPath,
 		EmbeddingModelPath:    status.SpeakerEmbeddingPath,
-		Threshold:             threshold,
+		Threshold:             float32(threshold),
 		UseGPU:                cfg.Transcription.GPUEnabled,
 		NumThreads:            threads,
 	})
@@ -827,8 +848,8 @@ func formatTimings(t *live.Timings, audioSecs float64) string {
 }
 
 // timeDiarizationOnly measures post-meeting diarization alone: sherpa-onnx's
-// (as the app runs it today: threshold 1.1, then the similar-speaker
-// merge) or Tomoe's own step-by-step diarizer, uncached.
+// (as the app runs it: the speaker model's threshold, then the
+// similar-speaker merge) or Tomoe's own step-by-step diarizer, uncached.
 func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.Status, samples []float32) error {
 	threads := max(1, opts.threads)
 	audio := float64(len(samples)) / 16000
@@ -837,7 +858,7 @@ func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.St
 	case "sherpa":
 		segs, m, err := session.Diarize(samples, session.DiarizeConfig{
 			SegmentationModelPath: status.SpeakerSegmentationPath, EmbeddingModelPath: status.SpeakerEmbeddingPath,
-			Threshold: 1.1, MergeThreshold: 0.55, NumThreads: threads,
+			Threshold: float32(opts.diarThreshold), MergeThreshold: opts.diarMerge, NumThreads: threads,
 		})
 		if err != nil {
 			return err
@@ -846,9 +867,6 @@ func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.St
 	case "own":
 		workers := max(1, opts.workers)
 		embModel := status.SpeakerEmbeddingPath
-		if opts.embeddingModel != "" {
-			embModel = opts.embeddingModel
-		}
 		p, err := diarize.Prepare(samples, status.SpeakerSegmentationPath, embModel, workers, threads)
 		if err != nil {
 			return err
@@ -864,4 +882,13 @@ func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.St
 	secs := time.Since(began).Seconds()
 	fmt.Printf("total %.1fs for %.1f min of audio (%.1f%% of audio time)\n", secs, audio/60, 100*secs/audio)
 	return nil
+}
+
+// speakerModelIDs lists the speaker model IDs, for help text.
+func speakerModelIDs() string {
+	var ids []string
+	for _, m := range models.SpeakerModels {
+		ids = append(ids, m.ID)
+	}
+	return strings.Join(ids, ", ")
 }

@@ -299,6 +299,13 @@ export default function SettingsPanel() {
           }
         >
           {!mac && <Row label="Auto-detect meetings" hint="Start recording when a call starts">{toggle('Meeting', 'AutoDetect')}</Row>}
+          <Row label="Speaker voice model" hint="Tells voices apart, live and after the meeting. Downloads from Tools if missing">
+            <select className="setting-input" value={draft.Meeting.SpeakerModel || 'auto'} onChange={e => set('Meeting', 'SpeakerModel', e.target.value)}>
+              <option value="auto">Automatic (English-trained for English, base for other languages)</option>
+              <option value="eres2net-en">ERes2Net, English-trained (VoxCeleb)</option>
+              <option value="eres2net-base">ERes2Net base, Mandarin-trained (3D-Speaker)</option>
+            </select>
+          </Row>
           <Row label="Speaker match threshold" hint="Higher splits voices into more speakers (0–1)">{num('Meeting', 'SpeakerThreshold', 0.01)}</Row>
           <Row label="Sticky-speaker margin" hint="Near-misses joining the last speaker; 0 = off">{num('Meeting', 'StickyThresholdMargin', 0.01)}</Row>
           <Row label="Sticky-speaker window (seconds)">{num('Meeting', 'StickyGraceWindow', 0.5)}</Row>

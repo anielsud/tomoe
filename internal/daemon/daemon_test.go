@@ -124,8 +124,8 @@ func TestNewWithNilOpts(t *testing.T) {
 	if d.meetingHotkey != nil {
 		t.Error("New(nil opts) meetingHotkey should be nil")
 	}
-	if d.embedder != nil {
-		t.Error("New(nil opts) embedder should be nil")
+	if d.embedders != nil {
+		t.Error("New(nil opts) embedders should be nil")
 	}
 	if d.tracker != nil {
 		t.Error("New(nil opts) tracker should be nil")
@@ -164,8 +164,8 @@ func TestNewWithMeetingOpts(t *testing.T) {
 	if d.meetingHotkey != nil {
 		t.Error("New(opts) meetingHotkey should be nil when not provided in opts")
 	}
-	if d.embedder != nil {
-		t.Error("New(opts) embedder should be nil when not provided in opts")
+	if d.embedders != nil {
+		t.Error("New(opts) embedders should be nil when not provided in opts")
 	}
 	if d.tracker != nil {
 		t.Error("New(opts) tracker should be nil when not provided in opts")

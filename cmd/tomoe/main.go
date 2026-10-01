@@ -139,40 +139,47 @@ func runStart(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "Warning: meeting hotkey %q: %v\n", meetingBinding, err)
 	}
 
-	// Create speaker embedder (optional — only if model available)
-	if status.SpeakerEmbeddingReady {
-		if emb, err := speaker.NewEmbedder(status.SpeakerEmbeddingPath); err == nil {
-			opts.Embedder = emb
-			threshold := speaker.DefaultThreshold
-			if cfg.Meeting.SpeakerThreshold > 0 {
-				threshold = cfg.Meeting.SpeakerThreshold
+	// Load the speaker model each meeting language uses (optional — only
+	// if downloaded; see models.ResolveSpeakerModel)
+	embedders := speaker.NewEmbedderSet()
+	for _, lang := range cfg.MeetingLanguages() {
+		if m, path, _ := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, lang); status.SpeakerModelReady(m) {
+			if _, err := embedders.Get(path); err != nil {
+				fmt.Fprintf(os.Stderr, "Warning: speaker model %s: %v\n", m.Name, err)
 			}
-			tracker := speaker.NewTracker(threshold)
-			tracker.SetTuning(speaker.TuningFromSeconds(
-				cfg.Meeting.SpeakerThreshold,
-				cfg.Meeting.StickyGraceWindow,
-				cfg.Meeting.StickyThresholdMargin,
-				cfg.Meeting.MinAssignDuration,
-				cfg.Meeting.ShortSegmentGraceWindow,
-			))
-			opts.Tracker = tracker
-			defer emb.Close()
-
-			// Watch config.toml so clustering tuning can be retuned
-			// live -- no rebuild, no relaunch. See MeetingConfig's doc
-			// comment for why this exists.
-			stopConfigWatch := config.Watch(config.Path(), 2*time.Second, func(newCfg *config.Config) {
-				tracker.SetTuning(speaker.TuningFromSeconds(
-					newCfg.Meeting.SpeakerThreshold,
-					newCfg.Meeting.StickyGraceWindow,
-					newCfg.Meeting.StickyThresholdMargin,
-					newCfg.Meeting.MinAssignDuration,
-					newCfg.Meeting.ShortSegmentGraceWindow,
-				))
-				fmt.Printf("config: reloaded speaker clustering tuning: %+v\n", tracker.Tuning())
-			})
-			defer stopConfigWatch()
 		}
+	}
+	if embedders.Len() > 0 {
+		opts.Embedders = embedders
+		threshold := speaker.DefaultThreshold
+		if cfg.Meeting.SpeakerThreshold > 0 {
+			threshold = cfg.Meeting.SpeakerThreshold
+		}
+		tracker := speaker.NewTracker(threshold)
+		tracker.SetTuning(speaker.TuningFromSeconds(
+			cfg.Meeting.SpeakerThreshold,
+			cfg.Meeting.StickyGraceWindow,
+			cfg.Meeting.StickyThresholdMargin,
+			cfg.Meeting.MinAssignDuration,
+			cfg.Meeting.ShortSegmentGraceWindow,
+		))
+		opts.Tracker = tracker
+		defer embedders.Close()
+
+		// Watch config.toml so clustering tuning can be retuned
+		// live -- no rebuild, no relaunch. See MeetingConfig's doc
+		// comment for why this exists.
+		stopConfigWatch := config.Watch(config.Path(), 2*time.Second, func(newCfg *config.Config) {
+			tracker.SetTuning(speaker.TuningFromSeconds(
+				newCfg.Meeting.SpeakerThreshold,
+				newCfg.Meeting.StickyGraceWindow,
+				newCfg.Meeting.StickyThresholdMargin,
+				newCfg.Meeting.MinAssignDuration,
+				newCfg.Meeting.ShortSegmentGraceWindow,
+			))
+			fmt.Printf("config: reloaded speaker clustering tuning: %+v\n", tracker.Tuning())
+		})
+		defer stopConfigWatch()
 	}
 
 	// Create meeting auto-detector (optional)
@@ -374,11 +381,16 @@ var modelDownloadCmd = &cobra.Command{
 		// requested, and the streaming model if two-pass is on or
 		// --streaming asks for it.
 		streaming, _ := cmd.Flags().GetBool("streaming")
+		speakerCfg := config.DefaultConfig()
 		if config.Exists() {
 			if cfg, err := config.Load(config.Path()); err == nil {
 				multilingual = multilingual || cfg.Multilingual.Enabled
 				streaming = streaming || cfg.Transcription.TwoPass
+				speakerCfg = cfg
 			}
+		}
+		if err := mgr.DownloadSpeakerModels(speakerCfg.Meeting.SpeakerModel, speakerCfg.MeetingLanguages(), force, cliDownloadProgress()); err != nil {
+			return err
 		}
 		if streaming {
 			if err := mgr.DownloadEnglishStreaming(force, cliDownloadProgress()); err != nil {
@@ -473,7 +485,7 @@ var transcribeCmd = &cobra.Command{
 
 		// If diarization models are available, transcribe with speaker labels
 		if status.DiarizationReady() {
-			return transcribeWithSpeakers(engine, filePath, status, useGPU)
+			return transcribeWithSpeakers(engine, filePath, status, cfg.Meeting.SpeakerModel, useGPU)
 		}
 
 		// Fallback: plain transcription without speaker identification
@@ -500,7 +512,7 @@ var transcribeCmd = &cobra.Command{
 }
 
 // transcribeWithSpeakers runs diarization then transcribes each speaker segment.
-func transcribeWithSpeakers(engine transcribe.Engine, filePath string, status *models.Status, useGPU bool) error {
+func transcribeWithSpeakers(engine transcribe.Engine, filePath string, status *models.Status, speakerModel string, useGPU bool) error {
 	// Decode audio to float32 for diarization
 	samples, err := session.DecodeToFloat32(filePath)
 	if err != nil {
@@ -510,12 +522,13 @@ func transcribeWithSpeakers(engine transcribe.Engine, filePath string, status *m
 	duration := float64(len(samples)) / 16000.0
 	fmt.Fprintf(os.Stderr, "Identifying speakers in %.1fs of audio...\n", duration)
 
-	// Run diarization
+	// Run diarization (the default engine is English)
+	sm, smPath, _ := status.SpeakerModelFor(speakerModel, "en")
 	diarSegments, speakerMap, err := session.Diarize(samples, session.DiarizeConfig{
 		SegmentationModelPath: status.SpeakerSegmentationPath,
-		EmbeddingModelPath:    status.SpeakerEmbeddingPath,
-		Threshold:             1.1,
-		MergeThreshold:        0.55,
+		EmbeddingModelPath:    smPath,
+		Threshold:             float32(sm.DiarizeThreshold),
+		MergeThreshold:        sm.DiarizeMerge,
 		UseGPU:                useGPU,
 	})
 	if err != nil {
@@ -644,11 +657,16 @@ var sessionRetranscribeCmd = &cobra.Command{
 
 		// Step 1: Diarize to identify speakers
 		fmt.Printf("Identifying speakers in %q...\n", sess.Title)
+		cfg, err := config.Load(config.Path())
+		if err != nil {
+			cfg = config.DefaultConfig()
+		}
+		sm, smPath, _ := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, sess.Language)
 		count, err := session.ReidentifyByDiarization(sess, session.DiarizeConfig{
 			SegmentationModelPath: status.SpeakerSegmentationPath,
-			EmbeddingModelPath:    status.SpeakerEmbeddingPath,
-			Threshold:             1.1,
-			MergeThreshold:        0.55,
+			EmbeddingModelPath:    smPath,
+			Threshold:             float32(sm.DiarizeThreshold),
+			MergeThreshold:        sm.DiarizeMerge,
 			UseGPU:                useGPU,
 			Verbose:               verbose,
 		})
