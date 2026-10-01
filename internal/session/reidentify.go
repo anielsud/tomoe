@@ -332,6 +332,18 @@ func diarizable(seg Segment) bool {
 	return seg.Source != "mic" && live != "You" && live != "System Audio"
 }
 
+// Diarizable reports whether seg's speaker comes from diarization (see
+// diarizable).
+func Diarizable(seg Segment) bool { return diarizable(seg) }
+
+// HintName is the video-hint name in a live label "Person N (Name)", or "".
+func HintName(label string) string {
+	if m := hintLabel.FindStringSubmatch(label); m != nil {
+		return m[1]
+	}
+	return ""
+}
+
 // hintLabel matches a live speaker label with a video-hint name attached,
 // "Person N (Name)" (see speaker.Tracker).
 var hintLabel = regexp.MustCompile(`^Person \d+ \((.+)\)$`)

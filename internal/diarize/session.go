@@ -158,8 +158,8 @@ func (d *SessionDiarizer) relabelLocked() []session.Segment {
 // LabelNewLocked relabels a line arriving from the live pass (or a
 // revision of one) before it's stored: the timeline's speaker if the
 // timeline already covers it, else whichever timeline speaker its live
-// label has mapped to so far, so new lines don't show the live pass's own
-// numbering.
+// label has mapped to so far, else NewSpeakerLabel, so new lines never
+// show the live pass's own numbering once timeline labels are showing.
 func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 	if d.timeline == nil {
 		return
@@ -169,10 +169,26 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 		seg.LiveSpeaker, seg.Speaker = seg.LiveLabel(), labels[assigned[0]]
 		return
 	}
-	if label, ok := d.liveTo[seg.LiveLabel()]; ok && label != "" && label != seg.Speaker {
-		seg.LiveSpeaker, seg.Speaker = seg.LiveLabel(), label
+	if !session.Diarizable(*seg) {
+		return
 	}
+	live := seg.LiveLabel()
+	label, ok := d.liveTo[live]
+	if !ok || label == "" {
+		// A voice the timeline hasn't placed yet. The live pass numbers
+		// speakers its own way, so its "Person 5" may be a different
+		// person from the timeline's: show a neutral label until the next
+		// recluster places it.
+		label = NewSpeakerLabel
+		if name := session.HintName(live); name != "" {
+			label += " (" + name + ")"
+		}
+	}
+	seg.LiveSpeaker, seg.Speaker = live, label
 }
+
+// NewSpeakerLabel labels a line whose voice the timeline hasn't placed yet.
+const NewSpeakerLabel = "New speaker"
 
 // Finish waits for the stream to catch up, applies the final timeline to
 // the session (splitting lines at speaker changes if that's on), and saves
