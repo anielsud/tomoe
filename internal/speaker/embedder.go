@@ -2,6 +2,7 @@ package speaker
 
 import (
 	"fmt"
+	"sync"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
@@ -71,5 +72,49 @@ func (e *Embedder) Close() {
 	if e.extractor != nil {
 		sherpa.DeleteSpeakerEmbeddingExtractor(e.extractor)
 		e.extractor = nil
+	}
+}
+
+// EmbedderSet holds an Embedder per model file, loaded on first use, so
+// each meeting can use the speaker model chosen for its language.
+type EmbedderSet struct {
+	mu     sync.Mutex
+	byPath map[string]*Embedder
+}
+
+// NewEmbedderSet returns an empty set.
+func NewEmbedderSet() *EmbedderSet {
+	return &EmbedderSet{byPath: map[string]*Embedder{}}
+}
+
+// Get returns the Embedder for modelPath, loading it if needed.
+func (s *EmbedderSet) Get(modelPath string) (*Embedder, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if e, ok := s.byPath[modelPath]; ok {
+		return e, nil
+	}
+	e, err := NewEmbedder(modelPath)
+	if err != nil {
+		return nil, err
+	}
+	s.byPath[modelPath] = e
+	return e, nil
+}
+
+// Len is how many models are loaded.
+func (s *EmbedderSet) Len() int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return len(s.byPath)
+}
+
+// Close releases every loaded Embedder.
+func (s *EmbedderSet) Close() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for p, e := range s.byPath {
+		e.Close()
+		delete(s.byPath, p)
 	}
 }

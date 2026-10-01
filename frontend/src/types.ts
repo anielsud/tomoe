@@ -103,6 +103,9 @@ export interface Config {
     VideoHintPollInterval: number;
     VideoHintTriggerDebounce: number;
     SplitOnSpeakerChange: boolean;
+    // "auto" (English-trained for English, base otherwise) or a
+    // models.SpeakerModels ID.
+    SpeakerModel: string;
   };
 }
 

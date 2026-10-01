@@ -56,6 +56,8 @@ type Config struct {
 	// meaningful there the way it is for one app's own audio. Defaults
 	// to false (diarize), unchanged from before this field existed.
 	SkipMonitorDiarization bool
+	// Timings, if set, collects per-stage processing time (see Timings).
+	Timings *Timings
 }
 
 // Stats holds runtime statistics about the coordinator.

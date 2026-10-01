@@ -79,7 +79,7 @@ func runSweep(opts evalOptions, cfg *config.Config, status *models.Status, sampl
 		len(raws), len(sw.merges), len(raws)*len(sw.merges), workers, threads)
 
 	var wg sync.WaitGroup
-	run := &evalRun{Name: "default", Tuning: "single-pass; threshold 0.65, sticky and short-segment rules off"}
+	run, _ := evalRunNamed("default")
 	var pipeErr error
 	wg.Add(1)
 	go func() {
@@ -217,7 +217,7 @@ func sweepMerged(status *models.Status, samples []float32, raw *cachedDiarizatio
 	if merge == 0 {
 		return &cachedDiarization{Raw: raw.Raw, RawMap: raw.RawMap, Merged: raw.Raw, MergedMap: raw.RawMap}, nil
 	}
-	key := fmt.Sprintf("%s|merge=%v", sweepRawKey(status, threshold, minOn), merge)
+	key := fmt.Sprintf("%s|merge-sorted=%v", sweepRawKey(status, threshold, minOn), merge)
 	if cache != nil {
 		if d, ok := cache.loadDiarization(key); ok {
 			return d, nil

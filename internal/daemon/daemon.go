@@ -35,7 +35,7 @@ type Daemon struct {
 
 	// Meeting mode dependencies (optional — nil disables meeting mode)
 	meetingHotkey hotkey.Listener
-	embedder      *speaker.Embedder
+	embedders     *speaker.EmbedderSet
 	tracker       *speaker.Tracker
 	store         *session.Store
 	modelStatus   *models.Status
@@ -59,7 +59,7 @@ const saveQueueDepth = 16
 // MeetingOpts holds optional dependencies for meeting recording mode.
 type MeetingOpts struct {
 	MeetingHotkey   hotkey.Listener
-	Embedder        *speaker.Embedder
+	Embedders       *speaker.EmbedderSet // speaker models by file; nil if none
 	Tracker         *speaker.Tracker
 	Store           *session.Store
 	ModelStatus     *models.Status
@@ -76,7 +76,7 @@ func New(cfg *config.Config, engines *transcribe.EngineSet, svc *platform.Servic
 	}
 	if opts != nil {
 		d.meetingHotkey = opts.MeetingHotkey
-		d.embedder = opts.Embedder
+		d.embedders = opts.Embedders
 		d.tracker = opts.Tracker
 		d.store = opts.Store
 		d.modelStatus = opts.ModelStatus
@@ -388,7 +388,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 
 	cfg := live.Config{
 		Engine:            d.engines.Get(lang),
-		Embedder:          d.embedder,
+		Embedder:          d.meetingEmbedder(lang),
 		Tracker:           d.tracker,
 		VADPath:           vadPath,
 		SegmentBufferSize: 64,
@@ -635,4 +635,22 @@ func formatTimestamp(seconds float64) string {
 	m := int(d.Minutes())
 	s := int(d.Seconds()) % 60
 	return fmt.Sprintf("%02d:%02d", m, s)
+}
+
+// meetingEmbedder is the speaker embedder for a meeting in lang (see
+// models.Status.SpeakerModelFor), or nil if no speaker model is loaded.
+func (d *Daemon) meetingEmbedder(lang string) *speaker.Embedder {
+	if d.embedders == nil || d.modelStatus == nil {
+		return nil
+	}
+	m, path, _ := d.modelStatus.SpeakerModelFor(d.cfg.Meeting.SpeakerModel, lang)
+	if !d.modelStatus.SpeakerModelReady(m) {
+		return nil
+	}
+	e, err := d.embedders.Get(path)
+	if err != nil {
+		fmt.Printf("Warning: speaker model %s: %v\n", m.Name, err)
+		return nil
+	}
+	return e
 }

@@ -273,7 +273,9 @@ type engineBundle struct {
 	// English-only today, so only wired into live.Config when the
 	// selected session language is "en" — see StartSession.
 	streamingEngine transcribe.StreamingEngine
-	embedder        *speaker.Embedder
+	// embedders holds the speaker models meetings use, one per model
+	// (see models.ResolveSpeakerModel); nil if none is downloaded.
+	embedders *speaker.EmbedderSet
 }
 
 // buildEngines builds an engineBundle for cfg. Anything whose models
@@ -321,14 +323,20 @@ func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
 		}
 	}
 
-	// Create speaker embedder if available
-	if status.SpeakerEmbeddingReady {
-		built, err := speaker.NewEmbedder(status.SpeakerEmbeddingPath)
-		if err == nil {
-			b.embedder = built
-		} else {
-			fmt.Printf("Warning: failed to load speaker embedding model: %v\n", err)
+	// Load the speaker model each meeting language uses, if downloaded.
+	set := speaker.NewEmbedderSet()
+	loaded := false
+	for _, lang := range cfg.MeetingLanguages() {
+		if m, path, _ := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, lang); status.SpeakerModelReady(m) {
+			if _, err := set.Get(path); err == nil {
+				loaded = true
+			} else {
+				fmt.Printf("Warning: failed to load speaker embedding model: %v\n", err)
+			}
 		}
+	}
+	if loaded {
+		b.embedders = set
 	}
 	return b
 }
@@ -342,9 +350,27 @@ func (b engineBundle) close() {
 	if b.streamingEngine != nil {
 		b.streamingEngine.Close()
 	}
-	if b.embedder != nil {
-		b.embedder.Close()
+	if b.embedders != nil {
+		b.embedders.Close()
 	}
+}
+
+// meetingEmbedder is the speaker embedder for a meeting in lang (see
+// models.Status.SpeakerModelFor), or nil if no speaker model is available.
+func meetingEmbedder(cfg *config.Config, status *models.Status, set *speaker.EmbedderSet, lang string) *speaker.Embedder {
+	m, path, fellBack := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, lang)
+	if set == nil || !status.SpeakerModelReady(m) {
+		return nil
+	}
+	if fellBack {
+		fmt.Printf("Speaker model %s isn't downloaded; using %s\n", models.ResolveSpeakerModel(cfg.Meeting.SpeakerModel, lang).Name, m.Name)
+	}
+	e, err := set.Get(path)
+	if err != nil {
+		fmt.Printf("Warning: failed to load speaker model %s: %v\n", m.Name, err)
+		return nil
+	}
+	return e
 }
 
 // tuningFromConfig is the speaker clustering tuning cfg asks for.
@@ -539,7 +565,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 
 	cfg := live.Config{
 		Engine:            bundle.engines.Get(lang),
-		Embedder:          bundle.embedder,
+		Embedder:          meetingEmbedder(a.cfg, status, bundle.embedders, lang),
 		Tracker:           a.tracker,
 		VADPath:           status.VADPath,
 		SegmentBufferSize: 64,

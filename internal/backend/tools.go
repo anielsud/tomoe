@@ -162,6 +162,9 @@ func (a *App) downloadModels(id string) (string, error) {
 	if err := mgr.Download(false, progress); err != nil {
 		return "", err
 	}
+	if err := mgr.DownloadSpeakerModels(cfg.Meeting.SpeakerModel, cfg.MeetingLanguages(), false, progress); err != nil {
+		return "", err
+	}
 	if cfg.Transcription.TwoPass {
 		if err := mgr.DownloadEnglishStreaming(false, progress); err != nil {
 			return "", err
@@ -218,10 +221,27 @@ func (a *App) swapEngines(cfg *config.Config) []string {
 	if bundle.engines == nil {
 		warnings = append(warnings, fmt.Sprintf("No transcription models in %s: open Tools to download them.", cfg.Transcription.ModelPath))
 	}
+	for _, sm := range models.SpeakerModelsNeeded(cfg.Meeting.SpeakerModel, cfg.MeetingLanguages()) {
+		if !status.SpeakerModelReady(sm) {
+			warnings = append(warnings, fmt.Sprintf("The speaker model %s isn't downloaded, so meetings use the base model until it is: open Tools to download it.", sm.Name))
+		}
+	}
 	if cfg.Transcription.TwoPass && bundle.streamingEngine == nil {
 		warnings = append(warnings, "Two-pass is on, but the English streaming model isn't available: open Tools to download it.")
 	}
 	return warnings
+}
+
+// speakerModelUse names the meeting languages cfg uses sm for, e.g.
+// "English".
+func speakerModelUse(cfg *config.Config, sm models.SpeakerModel) string {
+	var names []string
+	for _, l := range cfg.MeetingLanguages() {
+		if models.ResolveSpeakerModel(cfg.Meeting.SpeakerModel, l).ID == sm.ID {
+			names = append(names, languageName(l))
+		}
+	}
+	return strings.Join(names, " and ")
 }
 
 func wantsBengali(cfg *config.Config) bool {
@@ -309,9 +329,16 @@ func modelStatuses(cfg *config.Config) []ToolStatus {
 		parakeet,
 		entry("model-vad", "Silero VAD", "Detecting when someone is speaking", true, s.VADReady),
 		streaming,
-		entry("model-speaker", "Speaker embedding", "Telling remote speakers apart in meetings", false, s.SpeakerEmbeddingReady),
-		entry("model-segmentation", "Speaker segmentation", "Relabeling speakers after a meeting is saved", false, s.SpeakerSegmentationReady),
+		entry("model-speaker", "Speaker embedding: "+models.SpeakerModels[0].Name, "Telling remote speakers apart in meetings", false, s.SpeakerEmbeddingReady),
 	}
+	for _, sm := range models.SpeakerModelsNeeded(cfg.Meeting.SpeakerModel, cfg.MeetingLanguages()) {
+		if sm.ID != models.SpeakerModels[0].ID {
+			list = append(list, entry("model-speaker-"+sm.ID, "Speaker embedding: "+sm.Name, "Telling speakers apart in "+speakerModelUse(cfg, sm)+" meetings (Settings, Speaker model)", false, s.SpeakerModelReady(sm)))
+		}
+	}
+	list = append(list,
+		entry("model-segmentation", "Speaker segmentation", "Relabeling speakers after a meeting is saved", false, s.SpeakerSegmentationReady),
+	)
 	if wantsBengali(cfg) {
 		list = append(list, entry("model-bengali", "Bengali Zipformer", "Bengali transcription", false, s.BengaliReady))
 	}
@@ -324,4 +351,15 @@ func modelStatuses(cfg *config.Config) []ToolStatus {
 // commandFix is a fix the user runs in a terminal.
 func commandFix(label, command string) *ToolFix {
 	return &ToolFix{Kind: "command", Label: label, Command: command}
+}
+
+// languageName is lang's English name, for messages.
+func languageName(lang string) string {
+	switch lang {
+	case "en":
+		return "English"
+	case "bn":
+		return "Bengali"
+	}
+	return lang
 }
