@@ -71,6 +71,9 @@ func (a *App) newHintWatcher() (*videohint.Watcher, *hintSession) {
 		LearnInterval: learn,
 		CheckInterval: check,
 		NeedsLearning: func() bool {
+			if a.cfg.Meeting.RecordForTuning {
+				return true // look at the learning rate throughout
+			}
 			if hs.diar != nil {
 				return hs.diar.NeedsNames()
 			}
@@ -78,6 +81,13 @@ func (a *App) newHintWatcher() (*videohint.Watcher, *hintSession) {
 		},
 		OnLook: func(l videohint.Look) { a.onLook(hs, l) },
 	})
+	if a.cfg.Meeting.RecordForTuning {
+		hs.watcher.SetOnFullFrame(func(id int, jpeg []byte) {
+			if err := hs.log.WriteFull(id, jpeg); err != nil {
+				fmt.Printf("videohint: saving frame %d: %v\n", id, err)
+			}
+		})
+	}
 	return hs.watcher, hs
 }
 

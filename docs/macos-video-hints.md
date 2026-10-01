@@ -255,6 +255,36 @@ untagged member going to the nearer name's voice. Clusters whose tags
 are mostly one name merge if their voices are at least the merge
 similarity minus 0.2 alike.
 
+## Tuning the numbers (`tomoe tune`)
+
+The vote rules, the ring lag, the look rate, the fingerprint stride and
+the clustering constraints are tuned from one recorded meeting:
+
+1. Turn on **Record for tuning** (`record_for_tuning = true`) and record a
+   real meeting. Hints look at the learning rate throughout and save every
+   distinct full frame; diarization fingerprints every window. It costs
+   more CPU and about 250 MB an hour. Turn it off afterwards.
+2. Export the meeting's Teams transcript and review it, as for `tomoe eval`.
+3. Run `tomoe tune <session-id> --ref <reviewed.txt>`.
+
+Everything replays from what the session saved: its transcript with word
+timings, its fingerprints (`diarization.gob`, with `diarization.json`
+holding the start offset and settings) and its looks (`looks.jsonl`).
+Sparser look rates and strides are simulated by thinning the recording,
+which is why it's recorded at full rate. The reference's clock (Teams
+counts from the meeting's start) is matched to the recording's
+automatically from the text (`--ref-offset` overrides).
+
+Each setting is scored on speaker accuracy and on names: the share of
+words labeled with the right person's name, a wrong name, or none, ranked
+by right minus twice wrong. Each look records its cost (capture, rings,
+name reading, encoding), so the hint layer's CPU share is reported for
+each look rate. Every look also records the shape measurements of every
+ring-colored region near the detection thresholds, and the saved full
+frames feed `frames_test.go`, for tuning detection itself. Only final
+labels are scored; how labels look while the meeting is still going is
+`tomoe eval --online`'s job.
+
 ## Diagnostics pane (frontend `DiagnosticsPane.tsx`)
 
 A real-time, separate view into *how* each transcript line got its

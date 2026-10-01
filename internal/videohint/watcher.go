@@ -22,6 +22,10 @@ type WatchConfig struct {
 	NeedsLearning func() bool
 	// OnLook receives every look, on the Watcher's goroutine.
 	OnLook func(Look)
+	// OnFullFrame, if set, receives the full-resolution JPEG of every look
+	// with its own thumbnail (Record for tuning), on the Watcher's
+	// goroutine.
+	OnFullFrame func(id int, jpeg []byte)
 }
 
 // Default look intervals.
@@ -96,6 +100,9 @@ func NewWatcher(cfg WatchConfig) *Watcher {
 	return &Watcher{cfg: cfg, wake: make(chan struct{}, 1)}
 }
 
+// SetOnFullFrame sets WatchConfig.OnFullFrame; call before Run.
+func (w *Watcher) SetOnFullFrame(f func(id int, jpeg []byte)) { w.cfg.OnFullFrame = f }
+
 // Burst reports a likely speaker change (speech starting after a pause,
 // a voice change found by diarization): look now, and keep learning for
 // a few seconds. Safe from any goroutine; never blocks.
@@ -166,11 +173,14 @@ func (w *Watcher) look(learning bool) {
 	w.nextID++
 	l := Look{ID: w.nextID, Time: time.Now()}
 	fr, stage, detail := captureMeetingWindow()
+	l.Cost.Capture = msSince(l.Time)
 	l.Stage, l.Detail = stage, detail
 	if fr != nil {
 		l.Width, l.Height = fr.width, fr.height
 		w.analyze(&l, fr, learning)
+		began := time.Now()
 		w.keepThumb(&l, fr)
+		l.Cost.Encode = msSince(began)
 	}
 	w.last = &l
 	if w.cfg.OnLook != nil {
@@ -191,7 +201,16 @@ func (w *Watcher) analyze(l *Look, fr *frame, learning bool) {
 		l.Stage, l.Detail = StageNotACall, "no active-call chrome (Leave button not found): likely not a live call"
 		return
 	}
-	rings := DetectRings(fr.pix, fr.width, fr.height, rule.Ring)
+	began := time.Now()
+	rings, shapes := DetectRingsWithStats(fr.pix, fr.width, fr.height, rule.Ring)
+	l.Shapes = shapes
+	l.Cost.Detect = msSince(began)
+	ocrBegan := time.Now()
+	defer func() {
+		if !l.FromCache {
+			l.Cost.OCR = msSince(ocrBegan)
+		}
+	}()
 	switch len(rings) {
 	case 0:
 		// Speaker view draws no ring: the main video is the active
@@ -282,6 +301,9 @@ func (w *Watcher) keepThumb(l *Look, fr *frame) {
 	if err != nil {
 		return
 	}
+	if w.cfg.OnFullFrame != nil {
+		w.cfg.OnFullFrame(l.ID, full)
+	}
 	w.mu.Lock()
 	w.frames = append(w.frames, keptFrame{id: l.ID, at: l.Time, jpeg: full})
 	cut := 0
@@ -360,3 +382,5 @@ func speakerView(fr *frame) bool {
 
 // stageBackground is the brightness of Teams' dark stage background.
 const stageBackground = 29.0
+
+func msSince(t time.Time) float64 { return float64(time.Since(t).Microseconds()) / 1000 }

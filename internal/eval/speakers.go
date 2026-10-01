@@ -502,6 +502,20 @@ func NewWordAlignment(ref *Reference, texts []string) *WordAlignment {
 	return a
 }
 
+// RefTurn returns the reference turn transcribed word i aligned to (the
+// first of its tokens that aligned), or -1.
+func (a *WordAlignment) RefTurn(word int) int {
+	for k, w := range a.tokenWord {
+		if w == word && a.tokenTurn[k] >= 0 {
+			return a.tokenTurn[k]
+		}
+		if w > word {
+			break
+		}
+	}
+	return -1
+}
+
 // Score scores one pass: speakers[i] are the labels the pass gives
 // transcribed word i (as passed to NewWordAlignment). A word is right if
 // any label maps (via mapping) to the speaker of the reference turn it

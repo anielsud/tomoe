@@ -122,6 +122,13 @@ type MeetingConfig struct {
 	// confirm known names (seconds; see videohint.Watcher).
 	VideoHintLearnInterval float64 `toml:"video_hint_learn_interval"`
 	VideoHintCheckInterval float64 `toml:"video_hint_check_interval"`
+
+	// RecordForTuning records meetings at full detail for working out
+	// the best settings offline (`tomoe eval --session`): video hints
+	// look at the learning rate throughout and keep every distinct full
+	// frame (about 250 MB an hour), and diarization fingerprints every
+	// window. Off by default; costs more CPU and disk while on.
+	RecordForTuning bool `toml:"record_for_tuning"`
 }
 
 // VideoHintTiming is VideoHintLearnInterval and VideoHintCheckInterval

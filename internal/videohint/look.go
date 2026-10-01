@@ -29,6 +29,12 @@ type Look struct {
 	// them is speaking.
 	Rings      []RingMatch `json:"rings,omitempty"`
 	Candidates []string    `json:"candidates,omitempty"`
+	// Shapes are the measurements of every ring-colored region near the
+	// detection thresholds, for tuning them offline.
+	Shapes []RingStat `json:"shapes,omitempty"`
+	// Cost is what this look took, for measuring the hint layer's CPU
+	// use from a recording.
+	Cost LookCost `json:"cost"`
 	// Name is the active speaker's name: read this look, or remembered
 	// from an earlier read of the same tile (FromCache).
 	Name      string `json:"name,omitempty"`
@@ -43,6 +49,16 @@ type Look struct {
 	// same as look ThumbOf's (same result a moment earlier).
 	Thumb   []byte `json:"-"`
 	ThumbOf int    `json:"thumb_of,omitempty"`
+}
+
+// LookCost is a look's processing time in milliseconds: capturing the
+// window, finding rings, reading names (0 when a known tile's name was
+// reused), and encoding images.
+type LookCost struct {
+	Capture float64 `json:"capture_ms"`
+	Detect  float64 `json:"detect_ms"`
+	OCR     float64 `json:"ocr_ms"`
+	Encode  float64 `json:"encode_ms"`
 }
 
 // thumbWidth is how wide look thumbnails are, in pixels.
@@ -113,6 +129,14 @@ func (l *LookLog) Write(look Look) error {
 	defer f.Close()
 	_, err = f.Write(append(line, '\n'))
 	return err
+}
+
+// WriteFull saves look id's full-resolution frame (Record for tuning).
+func (l *LookLog) WriteFull(id int, jpeg []byte) error {
+	if err := os.MkdirAll(filepath.Join(l.dir, "looks"), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(l.dir, "looks", fmt.Sprintf("%d-full.jpg", id)), jpeg, 0o644)
 }
 
 // ReadLooks returns the looks recorded in dir (without thumbnails), in

@@ -18,15 +18,30 @@ type Hint struct {
 	Candidates []string
 }
 
+// NameParams are the rules for naming speakers from hints (tuned with
+// `tomoe tune`).
+type NameParams struct {
+	// Lag shifts a hint back to when the voice it belongs to was heard:
+	// the ring lights a moment after someone starts talking and lingers
+	// after they stop (seconds).
+	Lag float64
+	// Reads of a name within one Bucket (seconds) count as one.
+	Bucket float64
+	// A speaker is named once its top name has at least MinReads
+	// independent reads and at least MinShare of all of them.
+	MinReads int
+	MinShare float64
+}
+
+// DefaultNameParams are the naming rules the app uses.
+func DefaultNameParams() NameParams {
+	return NameParams{Lag: 0.5, Bucket: 5, MinReads: 2, MinShare: 0.6}
+}
+
+// hintLag and minNameReads are the defaults' values, used where a
+// NameParams isn't passed.
 const (
-	// hintLag shifts a hint back to when the voice it belongs to was
-	// heard: the ring lights a moment after someone starts talking and
-	// lingers after they stop.
-	hintLag = 0.5
-	// Reads of a name within one hintBucket count as one independent read.
-	hintBucket = 5.0
-	// A speaker is named once its top name has at least minNameReads
-	// independent reads and at least minNameShare of all of them.
+	hintLag      = 0.5
 	minNameReads = 2
 	minNameShare = 0.6
 )
@@ -106,6 +121,10 @@ func canonicalNames(names []string) map[string]string {
 	return out
 }
 
+// SameName reports whether two names as read or written are one
+// person's (see sameName).
+func SameName(a, b string) bool { return sameName(normalizeName(a), normalizeName(b)) }
+
 // sameName reports whether two normalized names are one person's: a
 // prefix of the other (at least 4 characters) or within an edit or two.
 func sameName(a, b string) bool {
@@ -162,6 +181,11 @@ func activeAt(turns []session.DiarizeSegment, t float64) []int {
 // least minNameReads independent reads and minNameShare of the speaker's
 // reads. Hints after through (not yet covered) are ignored.
 func nameSpeakers(turns []session.DiarizeSegment, hints []Hint, through float64) map[int]string {
+	return NameSpeakers(DefaultNameParams(), turns, hints, through)
+}
+
+// NameSpeakers is nameSpeakers with rules p.
+func NameSpeakers(p NameParams, turns []session.DiarizeSegment, hints []Hint, through float64) map[int]string {
 	var all []string
 	for _, h := range hints {
 		all = append(all, h.Name)
@@ -176,10 +200,10 @@ func nameSpeakers(turns []session.DiarizeSegment, hints []Hint, through float64)
 		if reads[spk][name] == nil {
 			reads[spk][name] = map[int]bool{}
 		}
-		reads[spk][name][int(math.Floor(t/hintBucket))] = true
+		reads[spk][name][int(math.Floor(t/p.Bucket))] = true
 	}
 	speakerAt := func(h Hint) (int, float64, bool) {
-		t := h.T - hintLag
+		t := h.T - p.Lag
 		if t > through {
 			return 0, t, false
 		}
@@ -199,7 +223,7 @@ func nameSpeakers(turns []session.DiarizeSegment, hints []Hint, through float64)
 	// Several lit tiles: the speaker heard then is one of them. A speaker
 	// whose name is among them is confirmed; otherwise names other
 	// speakers already have are ruled out, and a single name left votes.
-	names := decideNames(reads)
+	names := decideNames(reads, p)
 	for _, h := range hints {
 		if len(h.Candidates) < 2 {
 			continue
@@ -236,12 +260,12 @@ func nameSpeakers(turns []session.DiarizeSegment, hints []Hint, through float64)
 			vote(spk, left[0], t)
 		}
 	}
-	return decideNames(reads)
+	return decideNames(reads, p)
 }
 
 // decideNames gives each speaker its top name if it has at least
-// minNameReads independent reads and minNameShare of the speaker's reads.
-func decideNames(reads map[int]map[string]map[int]bool) map[int]string {
+// p.MinReads independent reads and p.MinShare of the speaker's reads.
+func decideNames(reads map[int]map[string]map[int]bool, p NameParams) map[int]string {
 	out := map[int]string{}
 	for spk, byName := range reads {
 		best, bestN, total := "", 0, 0
@@ -252,11 +276,21 @@ func decideNames(reads map[int]map[string]map[int]bool) map[int]string {
 				best, bestN = name, n
 			}
 		}
-		if bestN >= minNameReads && float64(bestN) >= minNameShare*float64(total) {
+		if bestN >= p.MinReads && float64(bestN) >= p.MinShare*float64(total) {
 			out[spk] = best
 		}
 	}
 	return out
+}
+
+// HintedPairs is hintedPairs with lag (seconds) for the ring's delay.
+func HintedPairs(p *Prepared, hints []Hint, lag float64) map[int]string {
+	return hintedPairsLag(p, hints, lag)
+}
+
+// ApplyHintConstraints exposes applyHintConstraints for tuning.
+func ApplyHintConstraints(embs [][]float32, clusters []int, named map[int]string, relaxedMerge float64) []int {
+	return applyHintConstraints(embs, clusters, named, relaxedMerge)
 }
 
 // hintedPairs maps hints (in stream time) to the window-speakers they
@@ -264,6 +298,10 @@ func decideNames(reads map[int]map[string]map[int]bool) map[int]string {
 // alone at that frame, if it has an embedding. A window-speaker named
 // two different things is left unnamed.
 func hintedPairs(p *Prepared, hints []Hint) map[int]string {
+	return hintedPairsLag(p, hints, hintLag)
+}
+
+func hintedPairsLag(p *Prepared, hints []Hint, lag float64) map[int]string {
 	m := p.Meta
 	index := make(map[ChunkSpeaker]int, len(p.Pairs))
 	for i, pr := range p.Pairs {
@@ -283,7 +321,7 @@ func hintedPairs(p *Prepared, hints []Hint) map[int]string {
 		if name == "" {
 			continue
 		}
-		at := (h.T - hintLag) * sr // sample
+		at := (h.T - lag) * sr // sample
 		if at < 0 {
 			continue
 		}

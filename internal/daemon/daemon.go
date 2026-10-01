@@ -454,6 +454,9 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		LearnInterval: learn,
 		CheckInterval: check,
 		NeedsLearning: func() bool {
+			if d.cfg.Meeting.RecordForTuning {
+				return true
+			}
 			if diar != nil {
 				return diar.NeedsNames()
 			}
@@ -479,6 +482,9 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		},
 	})
 	cfg.OnMonitorSpeechStart = watcher.Burst
+	if d.cfg.Meeting.RecordForTuning {
+		watcher.SetOnFullFrame(func(id int, jpeg []byte) { _ = lookLog.WriteFull(id, jpeg) })
+	}
 
 	// Diarize during the meeting if that's on (see
 	// diarize.SessionDiarizer); mu guards the session from here on.

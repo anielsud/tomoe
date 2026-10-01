@@ -130,6 +130,7 @@ export interface Config {
     DiarizeDuringMeeting: boolean;
     DiarizeStride: number;
     DiarizeRecluster: number;
+    RecordForTuning: boolean;
   };
 }
 

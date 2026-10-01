@@ -2,6 +2,7 @@ package diarize
 
 import (
 	"encoding/gob"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -359,7 +360,23 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	if err := gob.NewEncoder(f).Encode(d.stream.Prepared()); err != nil {
 		fmt.Printf("session %s: couldn't save fingerprints: %v\n", id, err)
 	}
+	// What replaying the fingerprints needs besides them: where the
+	// stream's audio starts in session time, and the settings used.
+	info, _ := json.MarshalIndent(StreamInfo{
+		Offset: d.offset, Stride: d.stream.cfg.Stride, ReclusterSeconds: d.stream.cfg.ReclusterSeconds, Params: d.stream.cfg.Params,
+	}, "", "  ")
+	_ = os.WriteFile(filepath.Join(dir, "diarization.json"), info, 0o644)
 	return nil
+}
+
+// StreamInfo is saved next to a session's fingerprints
+// (diarization.json): the session time the diarized audio starts at, and
+// the settings it was diarized with.
+type StreamInfo struct {
+	Offset           float64 `json:"offset_seconds"`
+	Stride           int     `json:"stride"`
+	ReclusterSeconds float64 `json:"recluster_seconds"`
+	Params           Params  `json:"params"`
 }
 
 // Abort stops without using the result (the session never started).

@@ -1,5 +1,7 @@
 package videohint
 
+import "sort"
+
 // RingMatch describes one detected ring/border candidate's bounding box
 // within the frame it was found in.
 type RingMatch struct {
@@ -47,10 +49,38 @@ func DetectRing(pix []byte, width, height int, cfg RingConfig) (match *RingMatch
 	}
 }
 
+// RingStat is one ring-colored region's shape measurements, recorded
+// with each look so the detection thresholds can be tuned offline: its
+// box, its share of the frame, hollowness, border share and edge cover
+// (see borderShape), and whether it passed as a ring.
+type RingStat struct {
+	Box    RingMatch `json:"box"`
+	Area   float64   `json:"area"`
+	Hollow float64   `json:"hollow"`
+	Border float64   `json:"border"`
+	Cover  float64   `json:"cover"`
+	Ring   bool      `json:"ring"`
+}
+
+// maxRingStats caps how many regions a look records (largest first).
+const maxRingStats = 20
+
 // ringCandidates finds every component that passes DetectRing's tests.
 func ringCandidates(pix []byte, width, height int, cfg RingConfig) []RingMatch {
+	rings, _ := ringCandidatesStats(pix, width, height, cfg)
+	return rings
+}
+
+// DetectRingsWithStats is DetectRings plus the shape measurements of every
+// region near the thresholds (half the minimum area up to twice the
+// maximum, at least somewhat hollow), rings included.
+func DetectRingsWithStats(pix []byte, width, height int, cfg RingConfig) ([]RingMatch, []RingStat) {
+	return ringCandidatesStats(pix, width, height, cfg)
+}
+
+func ringCandidatesStats(pix []byte, width, height int, cfg RingConfig) ([]RingMatch, []RingStat) {
 	if !cfg.configured() || width <= 0 || height <= 0 || len(pix) < width*height*3 {
-		return nil
+		return nil, nil
 	}
 
 	mask := make([]bool, width*height)
@@ -65,11 +95,12 @@ func ringCandidates(pix []byte, width, height int, cfg RingConfig) []RingMatch {
 
 	labels, numComponents := connectedComponents(mask, width, height)
 	if numComponents == 0 {
-		return nil
+		return nil, nil
 	}
 
 	frameArea := float64(width * height)
 	var candidates []RingMatch
+	var stats []RingStat
 
 	for ci, st := range componentStats(labels, width, numComponents) {
 		minX, minY, maxX, maxY, count := st.minX, st.minY, st.maxX, st.maxY, st.count
@@ -78,27 +109,34 @@ func ringCandidates(pix []byte, width, height int, cfg RingConfig) []RingMatch {
 		}
 
 		areaFrac := float64(count) / frameArea
-		if areaFrac < cfg.MinAreaFraction || areaFrac > cfg.MaxAreaFraction {
+		if areaFrac < cfg.MinAreaFraction/2 || areaFrac > cfg.MaxAreaFraction*2 {
 			continue
 		}
-
 		bw, bh := maxX-minX+1, maxY-minY+1
 		fullArea := float64(bw * bh)
 		hollowness := 1.0 - float64(count)/fullArea
-		if hollowness < hollownessFloor {
+		if hollowness < hollownessFloor/2 {
 			continue
 		}
+		box := RingMatch{X: minX, Y: minY, Width: bw, Height: bh, Confidence: hollowness}
+		stat := RingStat{Box: box, Area: areaFrac, Hollow: hollowness}
 		// A ring is a thin border around a tile: nearly all its pixels
 		// hug the box's edges, and it runs along all four of them. Patches
 		// of a ring-colored virtual background are hollow-ish blobs that
 		// fail one or the other.
-		if share, cover := borderShape(labels, width, ci+1, st); share < minBorderShare || cover < minEdgeCover {
-			continue
+		stat.Border, stat.Cover = borderShape(labels, width, ci+1, st)
+		stat.Ring = areaFrac >= cfg.MinAreaFraction && areaFrac <= cfg.MaxAreaFraction &&
+			hollowness >= hollownessFloor && stat.Border >= minBorderShare && stat.Cover >= minEdgeCover
+		stats = append(stats, stat)
+		if stat.Ring {
+			candidates = append(candidates, box)
 		}
-
-		candidates = append(candidates, RingMatch{X: minX, Y: minY, Width: bw, Height: bh, Confidence: hollowness})
 	}
-	return candidates
+	sort.Slice(stats, func(i, j int) bool { return stats[i].Area > stats[j].Area })
+	if len(stats) > maxRingStats {
+		stats = stats[:maxRingStats]
+	}
+	return candidates, stats
 }
 
 // DetectRings returns every plausible ring candidate in the frame (see

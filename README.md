@@ -76,6 +76,7 @@ tomoe model status                    # Show model info + integrity check
 tomoe session list                    # List all saved sessions
 tomoe session re-transcribe <id>      # Re-process a session's audio (re-identify speakers)
 tomoe session replay <id>             # Compare the default pipeline with your config on a session's audio
+tomoe tune <id> --ref <transcript>    # Find the best speaker-naming settings from a session recorded for tuning
 tomoe devices                         # List audio input devices
 tomoe config                          # Print current config
 ```
@@ -139,6 +140,7 @@ diarize_stride = 2                 # with it on: fingerprint every Nth analysis 
 diarize_recluster = 10             # with it on: seconds between label updates
 video_hint_learn_interval = 0.35   # macOS: seconds between looks at the meeting window while a speaker needs naming
 video_hint_check_interval = 1.0    # macOS: seconds between looks once everyone speaking has a name
+record_for_tuning = false          # record meetings at full detail for `tomoe eval --session` (more CPU, ~250 MB/hour)
 ```
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`
