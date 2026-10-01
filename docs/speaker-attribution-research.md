@@ -266,6 +266,39 @@ post-meeting pass (97.7%), and lifts 4–15 word turns from 48% to 66%. It
 catches speaker changes with no pause between them, which one label per
 utterance can't, for three to four times the fingerprint work.
 
+## Diarizing during the meeting (simulated)
+
+The design in [speaker-pipeline-design.md](speaker-pipeline-design.md):
+Tomoe's own diarizer run during the meeting, reclustering every interval
+on the windows finished so far, with speaker numbers kept stable across
+reclusters (`tomoe eval --online`). English-trained model, threshold 0.6,
+merge 0.5. Words take the timeline's speaker, and words in a gap their
+line's. *First shown* is the label a word got from the first recluster
+covering it; *relabeled* is the share of words whose label changed after
+that; *delay* is from the end of a word to its first label.
+
+| Fingerprint every | Recluster every | Final | 4–15 words (final) | First shown | Relabeled | Delay median / 90th | Slowest recluster | All reclusters |
+|---|---|---|---|---|---|---|---|---|
+| window | 10 s | 97.9% | 77.5% | 96.8% | 1.9% | 5 / 9 s | 2.41 s | 242 s |
+| window | 30 s | 97.9% | 77.5% | 97.3% | 1.0% | 15 / 27 s | 2.50 s | 85 s |
+| 2nd window | 10 s | 97.6% | 75.8% | 96.9% | 2.2% | 5 / 9 s | 0.64 s | 66 s |
+| 2nd window | 30 s | 97.6% | 75.8% | 97.5% | 1.1% | 15 / 27 s | 0.70 s | 23 s |
+| 3rd window | 10 s | 97.7% | 75.3% | 87.9% | 10.9% | 5 / 9 s | 0.29 s | 29 s |
+| 5th window | 10 s | 97.2% | 73.1% | 96.1% | 2.0% | 5 / 9 s | 0.11 s | 11 s |
+| 5th window | 30 s | 97.2% | 73.1% | 96.6% | 1.1% | 15 / 27 s | 0.11 s | 4 s |
+
+- **The final result equals the post-meeting run** (97.9% at full
+  depth), but it's ready seconds after the meeting ends.
+- **Labels as first shown (96–97.5%) beat every live approach measured**
+  (best: windows within utterances, 97.2%), and only 1–2% of words
+  change afterwards.
+- **Every 2nd window costs 0.3 points** for half the fingerprint work;
+  every 5th costs 0.7 points for a fifth.
+- Every 3rd window is an unexplained outlier: its final score is normal
+  but first-shown labels are much worse and relabel 11% of words. To
+  investigate before relying on any stride.
+- Without the gap rule (timeline only) final scores drop to 94–94.6%.
+
 ## Speed and processing load
 
 Measured on the same hour of audio, uncached, one run at a time.

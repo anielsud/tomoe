@@ -1,7 +1,10 @@
 # Speaker pipeline: a simpler design
 
-Status: proposal, being measured. Nothing here ships until it beats the
-current pipeline on more than one reviewed meeting. Measurements are in
+Status: proposal. Simulated on one reviewed meeting it matches the
+post-meeting pass's accuracy (97.9%) with final labels ready when the
+meeting ends, and labels as first shown (96.8–97.5%) beat every live
+approach measured. Nothing here ships until it holds on more than one
+reviewed meeting and is measured on a business-class machine. Measurements are in
 [speaker-attribution-research.md](speaker-attribution-research.md).
 
 ## Why change it
@@ -52,8 +55,11 @@ algorithm; transcription independent of it.
    with cluster numbers matched to the previous run so a speaker keeps
    their number. The end of the meeting is the same step once more; there
    is no separate post-meeting pass.
-5. **Each word takes the timeline's speaker at its time.** Speaker
-   changes mid-line split the line as a consequence, not as a step. A
+5. **Each word takes the timeline's speaker at its time**, and a word in
+   a gap where the timeline has nobody speaking takes its line's speaker
+   (what line splitting does today). Without that rule about 4.5% of
+   words land in gaps and go unlabeled. Speaker changes mid-line split the
+   line as a consequence, not as a step. A
    word too recent for the timeline (about 10 s, plus the recluster
    interval) shows a provisional label from the latest speaker averages
    and is relabeled when the timeline catches up.
@@ -86,8 +92,9 @@ fingerprint stride (CPU budget) and the recluster interval.
 - **Relabels.** A word's label can change after it's shown. Measured as
   the share of words relabeled; stable numbering keeps the rest steady.
 - **Long meetings.** Clustering compares every fingerprint with every
-  other: an hour (about 5,000 at full depth) clusters in well under a
-  second, but a three-hour meeting's comparison table is about 450 MB.
+  other: by the end of an hour (about 4,800 at full depth) one recluster
+  takes 2.4 s here, 0.7 s at every 2nd window, and a three-hour meeting's
+  comparison table is about 450 MB.
   Periodic reclusters need a cap (cluster recent windows, fold older ones
   into speaker averages) or a larger stride.
 - **It depends on Tomoe's own diarizer** (`internal/diarize`), which
@@ -100,12 +107,12 @@ fingerprint stride (CPU budget) and the recluster interval.
 
 ## Open questions to measure
 
-1. Accuracy of labels when first shown and at the end, relabel rate and
-   label delay, by recluster interval (10, 30, 60 s): `tomoe eval
-   --online`.
-2. Accuracy against fingerprint stride (1, 2, 3, 5): the CPU budget.
-3. Clustering time per recluster as the meeting grows.
-4. The provisional label for the newest ~10 s (from the latest speaker
+1. ~~Accuracy when first shown and at the end, relabel rate, delay, by
+   recluster interval~~ and ~~fingerprint stride~~ and ~~clustering
+   time~~: measured, see the research doc. Every 2nd window with a 10–30 s
+   recluster looks like the starting point.
+2. Why every 3rd window relabels so much more than every 2nd or 5th.
+3. The provisional label for the newest ~10 s (from the latest speaker
    averages) and how often it's wrong.
-5. CPU load on a business-class machine with a call running.
-6. All of it on a second reviewed meeting.
+4. CPU load on a business-class machine with a call running.
+5. All of it on a second reviewed meeting.
