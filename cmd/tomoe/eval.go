@@ -89,7 +89,7 @@ func init() {
 	evalCmd.Flags().String("out", "", "Output directory (default: eval-<media name> in the current directory)")
 	evalCmd.Flags().Float64("collar", 1.0, "Seconds around each reference speaker change not scored (Teams timestamps are to the second)")
 	evalCmd.Flags().Bool("skip-diarization", false, "Skip the post-meeting diarization passes (much faster)")
-	evalCmd.Flags().StringSlice("runs", []string{"default", "experimental"}, "Pipeline settings to run: default, experimental")
+	evalCmd.Flags().StringSlice("runs", []string{"default", "experimental"}, "Pipeline settings to run: default, experimental, one setting changed (+two-pass, +threshold, +sticky, +short added to default; -two-pass, -threshold, -sticky, -short removed from experimental), or ablation for all of them")
 	evalCmd.Flags().String("from", "", "Score only from this point (e.g. 10m, 90s, 1h5m)")
 	evalCmd.Flags().String("to", "", "Score only up to this point (e.g. 20m)")
 	evalCmd.Flags().Int("threads", 0, "CPU threads per parallel job (default: all cores split between jobs)")
@@ -123,8 +123,8 @@ type evalOptions struct {
 	embeddingModel  string           // speaker model override, an ID or a path ("" = as configured)
 	diarThreshold   float64          // post-meeting diarization settings for the speaker model
 	diarMerge       float64
-	workers         int              // own diarizer: parallel workers (0 = cores / threads)
-	timeDiarization string           // "sherpa" or "own": only time post-meeting diarization
+	workers         int    // own diarizer: parallel workers (0 = cores / threads)
+	timeDiarization string // "sherpa" or "own": only time post-meeting diarization
 }
 
 // evalRun is one pipeline configuration's results.
@@ -132,6 +132,8 @@ type evalRun struct {
 	Name    string `json:"name"`
 	TwoPass bool   `json:"two_pass"`
 	Tuning  string `json:"tuning"`
+
+	tuning speaker.Tuning // live speaker clustering settings
 
 	Detection eval.DetectionScore `json:"speech_detection"`
 
@@ -433,7 +435,7 @@ func runPipeline(run *evalRun, cfg *config.Config, status *models.Status, sample
 	}
 	fmt.Printf("Running %s pipeline (%s)...\n", run.Name, run.Tuning)
 	began := time.Now()
-	lc := pipe.liveConfig(tuningFor(run.Name), run.TwoPass)
+	lc := pipe.liveConfig(run.tuning, run.TwoPass)
 	run.Timings = &live.Timings{}
 	lc.Timings = run.Timings
 	res, err := live.ReplayDetailed(lc, nil, samples)
@@ -491,25 +493,85 @@ func runDiarization(cfg *config.Config, status *models.Status, samples []float32
 
 // evalRuns turns --runs names into runs.
 func evalRuns(names []string) ([]*evalRun, error) {
-	var runs []*evalRun
+	var expanded []string
 	for _, n := range names {
-		switch n {
-		case "default":
-			runs = append(runs, &evalRun{Name: n, Tuning: "single-pass; threshold 0.65, sticky and short-segment rules off"})
-		case "experimental":
-			runs = append(runs, &evalRun{Name: n, TwoPass: true, Tuning: "two-pass; threshold 0.55, sticky 0.15, short-segment 0.7s"})
-		default:
-			return nil, fmt.Errorf("unknown run %q (want default or experimental)", n)
+		if n == "ablation" {
+			expanded = append(expanded, "default", "+two-pass", "+threshold", "+sticky", "+short",
+				"experimental", "-two-pass", "-threshold", "-sticky", "-short")
+		} else {
+			expanded = append(expanded, n)
 		}
+	}
+	var runs []*evalRun
+	for _, n := range expanded {
+		run, err := evalRunNamed(n)
+		if err != nil {
+			return nil, err
+		}
+		runs = append(runs, run)
 	}
 	return runs, nil
 }
 
-func tuningFor(run string) speaker.Tuning {
-	if run == "experimental" {
-		return speaker.ExperimentalTuning()
+// evalRunNamed is the run called name: default, experimental, or one of
+// them with a single setting changed ("+x" turns x on over default, "-x"
+// turns it off from experimental), to measure each setting's effect.
+func evalRunNamed(name string) (*evalRun, error) {
+	base, on := speaker.DefaultTuning(), false
+	setting := ""
+	switch {
+	case name == "default":
+	case name == "experimental":
+		base, on = speaker.ExperimentalTuning(), true
+	case strings.HasPrefix(name, "+"):
+		setting = name[1:]
+	case strings.HasPrefix(name, "-"):
+		base, on = speaker.ExperimentalTuning(), true
+		setting = name[1:]
+	default:
+		return nil, fmt.Errorf("unknown run %q", name)
 	}
-	return speaker.DefaultTuning()
+	run := &evalRun{Name: name, TwoPass: on, tuning: base}
+	def, exp := speaker.DefaultTuning(), speaker.ExperimentalTuning()
+	switch setting {
+	case "":
+	case "two-pass":
+		run.TwoPass = !on
+	case "threshold":
+		run.tuning.Threshold = map[bool]float64{true: def.Threshold, false: exp.Threshold}[on]
+	case "sticky":
+		if on {
+			run.tuning.StickyThresholdMargin = 0
+		} else {
+			run.tuning.StickyThresholdMargin, run.tuning.StickyGraceWindow = exp.StickyThresholdMargin, exp.StickyGraceWindow
+		}
+	case "short":
+		if on {
+			run.tuning.MinAssignDuration = 0
+		} else {
+			run.tuning.MinAssignDuration, run.tuning.ShortSegmentGraceWindow = exp.MinAssignDuration, exp.ShortSegmentGraceWindow
+		}
+	default:
+		return nil, fmt.Errorf("unknown setting in run %q (want two-pass, threshold, sticky or short)", name)
+	}
+	run.Tuning = describeTuning(run.TwoPass, run.tuning)
+	return run, nil
+}
+
+// describeTuning summarizes live settings for the report.
+func describeTuning(twoPass bool, t speaker.Tuning) string {
+	pass := "single-pass"
+	if twoPass {
+		pass = "two-pass"
+	}
+	sticky, short := "sticky off", "short-segment off"
+	if t.StickyThresholdMargin > 0 {
+		sticky = fmt.Sprintf("sticky %v", t.StickyThresholdMargin)
+	}
+	if t.MinAssignDuration > 0 {
+		short = fmt.Sprintf("short-segment %v", t.MinAssignDuration)
+	}
+	return fmt.Sprintf("%s; threshold %v, %s, %s", pass, t.Threshold, sticky, short)
 }
 
 func scoreRun(run *evalRun, ref *eval.Reference, refWords []string, collar float64) {

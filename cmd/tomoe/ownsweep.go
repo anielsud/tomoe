@@ -60,7 +60,7 @@ func runOwnSweep(opts evalOptions, cfg *config.Config, status *models.Status, sa
 	}
 
 	var wg sync.WaitGroup
-	run := &evalRun{Name: "default", Tuning: "single-pass; threshold 0.65, sticky and short-segment rules off"}
+	run, _ := evalRunNamed("default")
 	var pipeErr error
 	wg.Add(1)
 	go func() {
