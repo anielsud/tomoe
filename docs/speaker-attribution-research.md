@@ -299,6 +299,11 @@ that; *delay* is from the end of a word to its first label.
   investigate before relying on any stride.
 - Without the gap rule (timeline only) final scores drop to 94–94.6%.
 
+The built version (`diarize_during_meeting`, `tomoe eval
+--stream-diarizer`, running the real `diarize.Stream` through the live
+replay) reproduces the simulation: every 2nd window, recluster every 10 s,
+**97.6% final**, 7/8 people, 356 reclusters.
+
 ## Speed and processing load
 
 Measured on the same hour of audio, uncached, one run at a time.

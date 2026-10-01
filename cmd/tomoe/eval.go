@@ -114,7 +114,7 @@ func init() {
 	evalCmd.Flags().Float64Slice("sweep-thresholds", []float64{0.8, 0.95, 1.1, 1.25}, "Clustering thresholds to sweep")
 	evalCmd.Flags().Float64Slice("sweep-min-on", []float64{0.3, 0.1}, "Shortest speech turns (s) to sweep")
 	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
-	evalCmd.Flags().String("diarization-timing", "", "Only time post-meeting diarization (sherpa or own) at --threads/--workers, with nothing else running")
+	evalCmd.Flags().String("diarization-timing", "", "Only time diarization, with nothing else running: sherpa or own (post-meeting, at --threads/--workers) or stream (during the meeting, as the app runs it, at --stream-stride)")
 	evalCmd.Flags().Int("workers", 0, "Own diarizer: parallel workers for segmentation and embeddings (default: cores / --threads)")
 	evalCmd.Flags().Float64Slice("probe-prefixes", nil, "Live: also label each utterance from just its first N seconds, for each N (e.g. 1,5,10,20), and score those early labels")
 	evalCmd.Flags().Bool("stream-diarizer", false, "Also diarize each run during the replay, as diarize_during_meeting does in the app, and score its labels")
@@ -1076,8 +1076,31 @@ func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.St
 		segs, m := p.Diarize(diarize.Params{Threshold: 0.7, MergeSimilarity: 0.6, SpeakerCountRounding: 0.5, MinDurationOn: 0.3, MinDurationOff: 0.5})
 		fmt.Printf("own diarization (%d workers x %d threads, %s): prepare %.1fs, cluster+reconstruct %.2fs; %d speakers, %d turns\n",
 			workers, threads, filepath.Base(embModel), prepared, time.Since(cb).Seconds(), len(m), len(segs))
+	case "stream":
+		m := cfg.Meeting
+		m.DiarizeStride, m.DiarizeRecluster = opts.streamStride, opts.streamRecluster
+		sc, err := diarize.StreamConfigFor(m, status, "en")
+		if err != nil {
+			return err
+		}
+		reclusters := 0
+		sc.OnTimeline = func(diarize.Timeline) { reclusters++ }
+		st, err := diarize.NewStream(sc)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		for i := 0; i < len(samples); i += 512 {
+			st.Feed(samples[i:min(i+512, len(samples))])
+		}
+		tl, err := st.Finish()
+		if err != nil {
+			return err
+		}
+		fmt.Printf("streaming diarizer (one low-priority thread, every %d windows, recluster every %.0fs): %d reclusters, %d speakers\n",
+			sc.Stride, sc.ReclusterSeconds, reclusters, len(tl.Labels))
 	default:
-		return fmt.Errorf("--diarization-timing must be sherpa or own")
+		return fmt.Errorf("--diarization-timing must be sherpa, own or stream")
 	}
 	secs := time.Since(began).Seconds()
 	fmt.Printf("total %.1fs for %.1f min of audio (%.1f%% of audio time)\n", secs, audio/60, 100*secs/audio)
