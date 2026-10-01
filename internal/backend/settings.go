@@ -188,8 +188,8 @@ func planApply(old, next *config.Config) applyPlan {
 		old.Meeting.DiarizeRecluster != next.Meeting.DiarizeRecluster {
 		p.later = append(p.later, "Diarizing during the meeting")
 	}
-	if old.Meeting.VideoHintPollInterval != next.Meeting.VideoHintPollInterval ||
-		old.Meeting.VideoHintTriggerDebounce != next.Meeting.VideoHintTriggerDebounce {
+	if old.Meeting.VideoHintLearnInterval != next.Meeting.VideoHintLearnInterval ||
+		old.Meeting.VideoHintCheckInterval != next.Meeting.VideoHintCheckInterval {
 		p.later = append(p.later, "Video hint timing")
 	}
 	return p
@@ -256,11 +256,10 @@ func validateSettings(c *config.Config) error {
 		return fmt.Errorf("speaker threshold must be above 0 and at most 1")
 	}
 	for name, v := range map[string]float64{
-		"Sticky grace window":         mt.StickyGraceWindow,
-		"Sticky threshold margin":     mt.StickyThresholdMargin,
-		"Minimum assign duration":     mt.MinAssignDuration,
-		"Short-segment grace window":  mt.ShortSegmentGraceWindow,
-		"Video hint trigger debounce": mt.VideoHintTriggerDebounce,
+		"Sticky grace window":        mt.StickyGraceWindow,
+		"Sticky threshold margin":    mt.StickyThresholdMargin,
+		"Minimum assign duration":    mt.MinAssignDuration,
+		"Short-segment grace window": mt.ShortSegmentGraceWindow,
 	} {
 		if v < 0 {
 			return fmt.Errorf("%s can't be negative", name)
@@ -272,8 +271,8 @@ func validateSettings(c *config.Config) error {
 	if mt.DiarizeRecluster <= 0 {
 		return fmt.Errorf("recluster interval must be above 0")
 	}
-	if mt.VideoHintPollInterval <= 0 {
-		return fmt.Errorf("video hint poll interval must be above 0")
+	if mt.VideoHintLearnInterval <= 0 || mt.VideoHintCheckInterval <= 0 {
+		return fmt.Errorf("video hint look intervals must be above 0")
 	}
 	return nil
 }

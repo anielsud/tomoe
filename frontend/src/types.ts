@@ -20,13 +20,31 @@ export interface Segment {
   decision?: string;
 }
 
-export interface VideoHintActivityEntry {
+// One look at the meeting window (backend.LookView).
+export interface RingBox {
+  X: number;
+  Y: number;
+  Width: number;
+  Height: number;
+  Confidence: number;
+}
+
+export interface LookView {
+  id: number;
   time: string;
-  platform: string;
+  sessionTime: number; // seconds into the session
   stage: string;
   detail: string;
   name?: string;
-  thumbnail?: string; // data URI, only set for stage "ocr_hit"
+  fromCache?: boolean;
+  usable: boolean;
+  ring?: RingBox;
+  rings?: RingBox[];
+  candidates?: string[]; // names under each lit tile, when several were lit
+  width: number;
+  height: number;
+  thumb?: string; // data URI, on live looks with their own thumbnail
+  thumbOf?: number; // the look whose thumbnail this one shares
 }
 
 export interface Session {
@@ -101,8 +119,8 @@ export interface Config {
     StickyThresholdMargin: number;
     MinAssignDuration: number;
     ShortSegmentGraceWindow: number;
-    VideoHintPollInterval: number;
-    VideoHintTriggerDebounce: number;
+    VideoHintLearnInterval: number;
+    VideoHintCheckInterval: number;
     SplitOnSpeakerChange: boolean;
     // "auto" (English-trained for English, base otherwise) or a
     // models.SpeakerModels ID.

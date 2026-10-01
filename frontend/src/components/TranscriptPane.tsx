@@ -1,9 +1,11 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Segment } from '../types';
 
 interface Props {
   segments: Segment[];
   isRecording?: boolean;
+  // Renames the speaker labeled label (click a speaker to rename).
+  onRename?: (label: string, name: string) => void;
 }
 
 function formatTime(seconds: number): string {
@@ -24,8 +26,16 @@ function speakerClass(speaker: string): string {
   return 'other';
 }
 
-export default function TranscriptPane({ segments, isRecording }: Props) {
+export default function TranscriptPane({ segments, isRecording, onRename }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
+  const [renaming, setRenaming] = useState<{ id: string; label: string; name: string } | null>(null);
+
+  function finishRename() {
+    if (renaming && onRename && renaming.name.trim() && renaming.name.trim() !== renaming.label) {
+      onRename(renaming.label, renaming.name.trim());
+    }
+    setRenaming(null);
+  }
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -48,9 +58,31 @@ export default function TranscriptPane({ segments, isRecording }: Props) {
       {segments.map((seg) => (
         <div key={seg.id} className={`segment ${seg.status ? 'segment-pending' : ''}`}>
           <span className="timestamp">[{formatTime(seg.start_time)}]</span>
-          <span className={`speaker ${speakerClass(seg.speaker)}`}>
-            {seg.speaker}:
-          </span>
+          {renaming?.id === seg.id ? (
+            <input
+              className="speaker-rename"
+              value={renaming.name}
+              autoFocus
+              onChange={e => setRenaming({ ...renaming, name: e.target.value })}
+              onKeyDown={e => {
+                if (e.key === 'Enter') finishRename();
+                if (e.key === 'Escape') setRenaming(null);
+              }}
+              onBlur={finishRename}
+            />
+          ) : (
+            <span
+              className={`speaker ${speakerClass(seg.speaker)} ${onRename && seg.speaker !== 'You' ? 'speaker-renamable' : ''}`}
+              title={onRename && seg.speaker !== 'You' ? 'Click to name this speaker' : undefined}
+              onClick={() => {
+                if (onRename && seg.speaker !== 'You') {
+                  setRenaming({ id: seg.id, label: seg.speaker, name: '' });
+                }
+              }}
+            >
+              {seg.speaker}:
+            </span>
+          )}
           {seg.language && seg.language !== 'en' && (
             <span className="lang-badge">{seg.language.toUpperCase()}</span>
           )}

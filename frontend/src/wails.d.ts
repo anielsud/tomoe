@@ -33,11 +33,10 @@ interface Window {
         GetTools(): Promise<any[]>;
         FixTool(id: string): Promise<void>;
         CopyToClipboard(text: string): Promise<void>;
-        GetVideoHintActivity(): Promise<any[]>;
-        ListPendingVideoHints(): Promise<any[]>;
-        GetVideoHintImage(id: string): Promise<string>;
-        ApproveVideoHint(id: string): Promise<void>;
-        DiscardVideoHint(id: string): Promise<void>;
+        GetVideoHintLooks(sessionId: string): Promise<any[]>;
+        GetLookThumb(sessionId: string, look: number): Promise<string>;
+        SaveLookForAnalysis(sessionId: string, look: number): Promise<string>;
+        RenameSpeaker(sessionId: string, label: string, name: string): Promise<void>;
       };
     };
   };

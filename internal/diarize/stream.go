@@ -26,6 +26,15 @@ type StreamConfig struct {
 	// OnTimeline, if set, receives each recluster's timeline. Called on
 	// the Stream's own goroutine; it must not call back into the Stream.
 	OnTimeline func(Timeline)
+	// Hints, if set, returns the meeting window's name reads so far, in
+	// stream time; reclusters split and merge clusters by them (see
+	// applyHintConstraints).
+	Hints func() []Hint
+	// OnSpeakerChange, if set, is called when a window shows a voice
+	// starting that wasn't talking just before: a cheap, early speaker
+	// change signal, before any clustering. On the Stream's goroutine;
+	// must return quickly.
+	OnSpeakerChange func()
 }
 
 // Timeline is who spoke when, as of a recluster. Speakers are stable IDs
@@ -187,6 +196,9 @@ func (s *Stream) processWindow(window []float32) {
 		fmt.Printf("diarize: window %d: %v\n", c, err)
 	}
 	s.labels = append(s.labels, lab[0])
+	if lab[0] != nil && s.cfg.OnSpeakerChange != nil && newVoiceAtEnd(lab[0], float64(s.meta.WindowSize)/float64(s.meta.SampleRate)) {
+		s.cfg.OnSpeakerChange()
+	}
 	if lab[0] == nil || c%s.cfg.Stride != 0 {
 		return
 	}
@@ -282,6 +294,12 @@ func (s *Stream) recluster(final bool) Timeline {
 		if s.cfg.Params.MergeSimilarity > 0 {
 			clusters = p.MergeClusters(clusters, s.cfg.Params.MergeSimilarity)
 		}
+		if s.cfg.Hints != nil {
+			if hints := s.cfg.Hints(); len(hints) > 0 {
+				relaxed := max(0.2, s.cfg.Params.MergeSimilarity-0.2)
+				clusters = applyHintConstraints(embs, clusters, hintedPairs(p, hints), relaxed)
+			}
+		}
 		ids := s.stable.Assign(pairs, clusters)
 		for _, t := range p.ReconstructClusters(clusters, s.cfg.Params) {
 			t.Speaker = ids[t.Speaker]
@@ -293,4 +311,30 @@ func (s *Stream) recluster(final bool) Timeline {
 		s.cfg.OnTimeline(tl)
 	}
 	return tl
+}
+
+// newVoiceAtEnd reports whether a local speaker talks in the last second
+// of a window (frames: one window's segmentation, windowSecs long) for at
+// least a quarter second but didn't in the two seconds before: a voice
+// just started.
+func newVoiceAtEnd(frames [][]int8, windowSecs float64) bool {
+	n := len(frames)
+	perSec := int(float64(n) / windowSecs)
+	if perSec < 4 || len(frames[0]) == 0 {
+		return false
+	}
+	minFrames := perSec / 4
+	for spk := range frames[0] {
+		tail, before := 0, 0
+		for f := n - perSec; f < n; f++ {
+			tail += int(frames[f][spk])
+		}
+		for f := max(0, n-3*perSec); f < n-perSec; f++ {
+			before += int(frames[f][spk])
+		}
+		if tail >= minFrames && before == 0 {
+			return true
+		}
+	}
+	return false
 }

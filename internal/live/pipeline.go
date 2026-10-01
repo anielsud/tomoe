@@ -80,6 +80,10 @@ type sourceState struct {
 	vad        *sherpa.VoiceActivityDetector
 	streamSess transcribe.StreamingSession
 	live       liveState
+	// speaking is whether the last window was speech; silentFor how long
+	// (seconds) it's been quiet before that (see Config.OnMonitorSpeechStart).
+	speaking  bool
+	silentFor float64
 }
 
 // newSourceState creates the VAD and (if configured) pass-1 streaming
@@ -196,6 +200,18 @@ func (c *Coordinator) processWindow(st *sourceState, window []float32) {
 					c.emitLivePartial(st.source, &st.live, text)
 				}
 			}
+		}
+
+		if st.source == SourceMonitor && c.cfg.OnMonitorSpeechStart != nil {
+			if isSpeech && !st.speaking && st.silentFor >= speechStartPause {
+				c.cfg.OnMonitorSpeechStart()
+			}
+			if isSpeech {
+				st.silentFor = 0
+			} else {
+				st.silentFor += float64(vadWindowSize) / vadSampleRate
+			}
+			st.speaking = isSpeech
 		}
 
 		// Signal activity when VAD detects ongoing speech

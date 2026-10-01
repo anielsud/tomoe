@@ -438,15 +438,59 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		d.tracker.Reset()
 	}
 
+	// Screen-based speaker-name hints (macOS only; a no-op on Linux):
+	// the watcher looks at the meeting window, more often while a speaker
+	// needs naming and right after a speaker change. Its looks go to sess,
+	// coordinator and diar, set below before it runs.
+	var (
+		sess        *session.Session
+		coordinator *live.Coordinator
+		diar        *diarize.SessionDiarizer
+		lookLog     *videohint.LookLog
+		lastLook    videohint.Look
+	)
+	learn, check := d.cfg.Meeting.VideoHintTiming()
+	watcher := videohint.NewWatcher(videohint.WatchConfig{
+		LearnInterval: learn,
+		CheckInterval: check,
+		NeedsLearning: func() bool {
+			if diar != nil {
+				return diar.NeedsNames()
+			}
+			return d.tracker == nil || d.tracker.HasUnnamedSpeakers()
+		},
+		OnLook: func(l videohint.Look) {
+			_ = lookLog.Write(l)
+			if l.Stage != lastLook.Stage || l.Name != lastLook.Name {
+				fmt.Printf("[videohint] %s: %s\n", l.Stage, l.Detail)
+			}
+			lastLook = l
+			if diar != nil && len(l.Candidates) > 1 {
+				diar.AddCandidates(coordinator.SessionTime(l.Time), l.Candidates)
+			}
+			if !l.Usable || l.Name == "" {
+				return
+			}
+			if diar != nil {
+				diar.AddHint(coordinator.SessionTime(l.Time), l.Name)
+			} else if d.tracker != nil {
+				d.tracker.SetHintForRecent(l.Name, videohint.HintAttachMaxAge)
+			}
+		},
+	})
+	cfg.OnMonitorSpeechStart = watcher.Burst
+
 	// Diarize during the meeting if that's on (see
 	// diarize.SessionDiarizer); mu guards the session from here on.
 	var mu sync.Mutex
-	var diar *diarize.SessionDiarizer
 	if cfg.MonitorCapturer != nil && !cfg.SkipMonitorDiarization && d.modelStatus != nil {
-		diar, err = diarize.NewSessionDiarizer(d.cfg.Meeting, d.modelStatus, lang, &mu, func(changed []session.Segment) {
-			for _, seg := range changed {
-				fmt.Printf("[%s] relabeled: %s\n", formatTimestamp(seg.StartTime), seg.Speaker)
-			}
+		diar, err = diarize.NewSessionDiarizer(d.cfg.Meeting, d.modelStatus, lang, &mu, diarize.SessionOptions{
+			OnChanged: func(changed []session.Segment) {
+				for _, seg := range changed {
+					fmt.Printf("[%s] relabeled: %s\n", formatTimestamp(seg.StartTime), seg.Speaker)
+				}
+			},
+			OnSpeakerChange: watcher.Burst,
 		})
 		if err != nil {
 			fmt.Printf("diarize during meeting: %v; diarizing after the meeting instead\n", err)
@@ -457,7 +501,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		}
 	}
 
-	coordinator := live.New(cfg)
+	coordinator = live.New(cfg)
 	if err := coordinator.Start(ctx); err != nil {
 		if diar != nil {
 			diar.Abort()
@@ -484,7 +528,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		title = fmt.Sprintf("%s Meeting %s", platform, time.Now().Format("2006-01-02 15:04"))
 	}
 
-	sess := &session.Session{
+	sess = &session.Session{
 		ID:        uuid.New().String(),
 		Title:     title,
 		Platform:  platform,
@@ -546,24 +590,15 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	// not when the daemon exits — same reasoning as streamingDictation's
 	// cancel field elsewhere in this file.
 	videoHintCtx, videoHintCancel := context.WithCancel(ctx)
-	videoHintEvents := make(chan videohint.Event, 32)
-	pollInterval, triggerDebounce := d.cfg.Meeting.VideoHintTiming()
-	go videohint.Poll(videoHintCtx, pollInterval, triggerDebounce, coordinator.HintNeeded(), videoHintEvents)
+	lookLog = videohint.NewLookLog(filepath.Join(config.SessionDir(), sess.ID))
+	go watcher.Run(videoHintCtx)
 	go func() {
 		for {
 			select {
 			case <-videoHintCtx.Done():
 				return
-			case ev, ok := <-videoHintEvents:
-				if !ok {
-					return
-				}
-				fmt.Printf("[videohint] %s: %s\n", ev.Stage, ev.Detail)
-				if ev.Stage == videohint.StageOCRHit && ev.Name != "" && d.tracker != nil {
-					if !d.tracker.SetHintForRecent(ev.Name, videohint.HintAttachMaxAge) {
-						fmt.Printf("[videohint] hint %q had no recent enough speaker to attach to\n", ev.Name)
-					}
-				}
+			case <-coordinator.HintNeeded():
+				watcher.Burst()
 			}
 		}
 	}()

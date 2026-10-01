@@ -79,12 +79,13 @@ type App struct {
 	// down. nil if no tracker/embedder was created.
 	configWatchStop func()
 
-	// videoHintMu guards videoHintActivity, a short ring buffer of the
-	// current session's videohint.Event trace — separate from mu since
-	// emitVideoHintEvents runs concurrently with the rest of the session
-	// lifecycle and has no reason to contend with it.
-	videoHintMu       sync.Mutex
-	videoHintActivity []videohint.Event
+	// videoHintMu guards hints, the current (or last) recording's
+	// meeting-window watcher, and videoLooks, its looks so far (without
+	// thumbnails) — separate from mu since looks arrive concurrently with
+	// the rest of the session lifecycle.
+	videoHintMu sync.Mutex
+	hints       *hintSession
+	videoLooks  []videohint.Look
 
 	// trayDictCh is signalled by the tray "Start/Stop Dictation" menu item.
 	// Carries language code; "" = stop.
@@ -613,9 +614,15 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		a.tracker.Reset()
 	}
 
+	// Screen-based speaker-name hints (macOS only; a no-op on Linux): the
+	// watcher looks at the meeting window, more often while a speaker
+	// needs naming and right after a speaker change.
+	watcher, hs := a.newHintWatcher()
+	cfg.OnMonitorSpeechStart = watcher.Burst
+
 	var md *diarize.SessionDiarizer
 	if cfg.MonitorCapturer != nil && !cfg.SkipMonitorDiarization {
-		if md = newMeetingDiarizer(a, a.cfg, status, lang); md != nil {
+		if md = newMeetingDiarizer(a, a.cfg, status, lang, watcher.Burst); md != nil {
 			cfg.MonitorAudio = md.Feed
 		}
 	}
@@ -675,13 +682,8 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	// reasoning as dictCancel above.
 	videoHintCtx, videoHintCancel := context.WithCancel(a.ctx)
 	a.videoHintCancel = videoHintCancel
-	a.videoHintMu.Lock()
-	a.videoHintActivity = nil
-	a.videoHintMu.Unlock()
-	videoHintEvents := make(chan videohint.Event, 32)
-	pollInterval, triggerDebounce := a.cfg.Meeting.VideoHintTiming()
-	go videohint.Poll(videoHintCtx, pollInterval, triggerDebounce, coordinator.HintNeeded(), videoHintEvents)
-	go a.emitVideoHintEvents(videoHintCtx, videoHintEvents)
+	hs.sess, hs.coordinator, hs.diar = a.currentSess, coordinator, md
+	a.startHintWatcher(videoHintCtx, hs)
 
 	// Start emitting segments to frontend
 	a.segmentsDone = a.emitSessionSegments(coordinator.Segments(), coordinator.SegmentUpdates(), a.currentSess, md)

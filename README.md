@@ -137,6 +137,8 @@ speaker_model = 'auto'             # voice model: 'auto' (English-trained for En
 diarize_during_meeting = true      # work out who spoke when while recording; false = the previous pass after the meeting
 diarize_stride = 2                 # with it on: fingerprint every Nth analysis window; sets CPU use during the call (higher = less)
 diarize_recluster = 10             # with it on: seconds between label updates
+video_hint_learn_interval = 0.35   # macOS: seconds between looks at the meeting window while a speaker needs naming
+video_hint_check_interval = 1.0    # macOS: seconds between looks once everyone speaking has a name
 ```
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`

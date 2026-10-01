@@ -32,9 +32,7 @@ type SessionDiarizer struct {
 	stream *Stream
 	lock   sync.Locker
 	split  bool
-	// onChanged, if set, gets lines a recluster relabeled, after lock is
-	// released.
-	onChanged func([]session.Segment)
+	opts   SessionOptions
 
 	// Set on the pipeline goroutine's first window: the session time the
 	// stream's audio starts at.
@@ -47,12 +45,28 @@ type SessionDiarizer struct {
 	// liveTo maps a live label to the timeline label its lines got, for
 	// labeling new lines the timeline doesn't cover yet.
 	liveTo map[string]string
+	// hints are the meeting window's name reads (session time); names the
+	// timeline speakers they name (see nameSpeakers); renames the names
+	// the user gave, which beat both.
+	hints   []Hint
+	names   map[int]string
+	renames map[int]string
+}
+
+// SessionOptions are a SessionDiarizer's callbacks; any may be nil.
+type SessionOptions struct {
+	// OnChanged gets lines a recluster relabeled, after the lock is
+	// released.
+	OnChanged func([]session.Segment)
+	// OnSpeakerChange is called when a voice starts that wasn't talking
+	// just before (see StreamConfig.OnSpeakerChange).
+	OnSpeakerChange func()
 }
 
 // NewSessionDiarizer starts diarizing a meeting in lang, or returns nil and
 // why if it's off or can't run (the caller then diarizes after the
 // meeting as before). Call SetSessionLocked once the session exists.
-func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang string, lock sync.Locker, onChanged func([]session.Segment)) (*SessionDiarizer, error) {
+func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang string, lock sync.Locker, opts SessionOptions) (*SessionDiarizer, error) {
 	if !m.DiarizeDuringMeeting {
 		return nil, nil
 	}
@@ -60,8 +74,10 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	if err != nil {
 		return nil, err
 	}
-	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, onChanged: onChanged, liveTo: map[string]string{}}
+	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
+	sc.Hints = d.streamHints
+	sc.OnSpeakerChange = opts.OnSpeakerChange
 	if d.stream, err = NewStream(sc); err != nil {
 		return nil, err
 	}
@@ -100,8 +116,8 @@ func (d *SessionDiarizer) apply(tl Timeline) {
 	d.timeline = &tl
 	changed := d.relabelLocked()
 	d.lock.Unlock()
-	if d.onChanged != nil && len(changed) > 0 {
-		d.onChanged(changed)
+	if d.opts.OnChanged != nil && len(changed) > 0 {
+		d.opts.OnChanged(changed)
 	}
 }
 
@@ -121,8 +137,8 @@ func (d *SessionDiarizer) shift(tl Timeline) []session.DiarizeSegment {
 func (d *SessionDiarizer) relabelLocked() []session.Segment {
 	tl := d.timeline
 	segs := d.sess.Segments
-	assigned, labels := session.DiarizationLabels(segs, tl.Turns, tl.Labels)
 	through := tl.Through + d.offset
+	assigned, labels := session.DiarizationLabels(segs, tl.Turns, d.labelsLocked(through))
 	liveTime := map[string]map[string]float64{}
 	var changed []session.Segment
 	for i := range segs {
@@ -165,7 +181,7 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 		return
 	}
 	probe := []session.Segment{*seg}
-	if assigned, labels := session.DiarizationLabels(probe, d.timeline.Turns, d.timeline.Labels); assigned[0] >= 0 && seg.EndTime <= d.timeline.Through+d.offset {
+	if assigned, labels := session.DiarizationLabels(probe, d.timeline.Turns, d.labelsLocked(d.timeline.Through+d.offset)); assigned[0] >= 0 && seg.EndTime <= d.timeline.Through+d.offset {
 		seg.LiveSpeaker, seg.Speaker = seg.LiveLabel(), labels[assigned[0]]
 		return
 	}
@@ -184,7 +200,124 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 			label += " (" + name + ")"
 		}
 	}
+	// The meeting window may already say who it is: show that,
+	// provisionally, until the timeline confirms or corrects it.
+	if name := d.hintDuringLocked(seg.StartTime, seg.EndTime); name != "" && session.HintName(label) == "" && !d.isRenamedLabel(label) {
+		if label == NewSpeakerLabel {
+			label = name + "?"
+		} else {
+			label += " (" + name + "?)"
+		}
+	}
 	seg.LiveSpeaker, seg.Speaker = live, label
+}
+
+// labelsLocked labels the timeline's speakers: the user's rename, else
+// "Person N (Name)" for a speaker hints have named by the time through,
+// else "Person N".
+func (d *SessionDiarizer) labelsLocked(through float64) map[int]string {
+	d.names = nameSpeakers(d.timeline.Turns, d.hints, through)
+	out := make(map[int]string, len(d.timeline.Labels))
+	for k := range d.timeline.Labels {
+		out[k] = d.labelFor(k)
+	}
+	return out
+}
+
+func (d *SessionDiarizer) labelFor(k int) string {
+	if name := d.renames[k]; name != "" {
+		return name
+	}
+	if name := d.names[k]; name != "" {
+		return fmt.Sprintf("Person %d (%s)", k+1, name)
+	}
+	return fmt.Sprintf("Person %d", k+1)
+}
+
+func (d *SessionDiarizer) isRenamedLabel(label string) bool {
+	for _, name := range d.renames {
+		if name == label {
+			return true
+		}
+	}
+	return false
+}
+
+// hintDuringLocked is the last name read while a line from start to end
+// was spoken, or "".
+func (d *SessionDiarizer) hintDuringLocked(start, end float64) string {
+	for i := len(d.hints) - 1; i >= 0; i-- {
+		h := d.hints[i]
+		if t := h.T - hintLag; h.Name != "" && t >= start && t <= end {
+			return h.Name
+		}
+	}
+	return ""
+}
+
+// AddHint records that the meeting window showed name under the ring at
+// session time t. Takes the lock.
+func (d *SessionDiarizer) AddHint(t float64, name string) {
+	d.lock.Lock()
+	d.hints = append(d.hints, Hint{T: t, Name: name})
+	d.lock.Unlock()
+}
+
+// AddCandidates records that several tiles were lit at session time t
+// with these names (all read): one of them is speaking. Takes the lock.
+func (d *SessionDiarizer) AddCandidates(t float64, names []string) {
+	d.lock.Lock()
+	d.hints = append(d.hints, Hint{T: t, Candidates: append([]string(nil), names...)})
+	d.lock.Unlock()
+}
+
+// streamHints is StreamConfig.Hints: the single-name hints in stream time
+// (clustering constraints need to know who, not who-of-several).
+func (d *SessionDiarizer) streamHints() []Hint {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	out := make([]Hint, 0, len(d.hints))
+	for _, h := range d.hints {
+		if h.Name != "" {
+			out = append(out, Hint{T: h.T - d.offset, Name: h.Name})
+		}
+	}
+	return out
+}
+
+// NeedsNames reports whether anyone who spoke in the last minute has no
+// name yet (or there's no timeline yet), so the meeting window should be
+// watched closely. Takes the lock.
+func (d *SessionDiarizer) NeedsNames() bool {
+	d.lock.Lock()
+	defer d.lock.Unlock()
+	if d.timeline == nil {
+		return true
+	}
+	through := d.timeline.Through + d.offset
+	for _, t := range d.timeline.Turns {
+		if t.End >= through-60 && d.renames[t.Speaker] == "" && d.names[t.Speaker] == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// RenameLocked gives the timeline speaker currently labeled label the
+// name name, which then beats any name the meeting window suggests, and
+// relabels their lines, returning the ones that changed. False if no
+// timeline speaker has that label.
+func (d *SessionDiarizer) RenameLocked(label, name string) ([]session.Segment, bool) {
+	if d.timeline == nil || name == "" {
+		return nil, false
+	}
+	for k := range d.timeline.Labels {
+		if d.labelFor(k) == label {
+			d.renames[k] = name
+			return d.relabelLocked(), true
+		}
+	}
+	return nil, false
 }
 
 // NewSpeakerLabel labels a line whose voice the timeline hasn't placed yet.
@@ -204,11 +337,11 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	}
 	tl.Turns = d.shift(tl)
 	d.lock.Lock()
+	tl.Through = 1e18 // everything
+	d.timeline = &tl
 	if d.split {
-		d.sess.Segments, _ = session.SplitByDiarization(d.sess.Segments, tl.Turns, tl.Labels)
+		d.sess.Segments, _ = session.SplitByDiarization(d.sess.Segments, tl.Turns, d.labelsLocked(tl.Through))
 	} else {
-		tl.Through = 1e18 // everything
-		d.timeline = &tl
 		d.relabelLocked()
 	}
 	id := d.sess.ID

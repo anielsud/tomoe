@@ -36,8 +36,21 @@ const hollownessFloor = 0.3
 // box's full area — a filled blob wouldn't be) and within
 // cfg.MinAreaFraction/MaxAreaFraction of the whole frame.
 func DetectRing(pix []byte, width, height int, cfg RingConfig) (match *RingMatch, found bool, ambiguous bool) {
-	if !cfg.configured() || width <= 0 || height <= 0 || len(pix) < width*height*3 {
+	candidates := ringCandidates(pix, width, height, cfg)
+	switch len(candidates) {
+	case 0:
 		return nil, false, false
+	case 1:
+		return &candidates[0], true, false
+	default:
+		return nil, false, true
+	}
+}
+
+// ringCandidates finds every component that passes DetectRing's tests.
+func ringCandidates(pix []byte, width, height int, cfg RingConfig) []RingMatch {
+	if !cfg.configured() || width <= 0 || height <= 0 || len(pix) < width*height*3 {
+		return nil
 	}
 
 	mask := make([]bool, width*height)
@@ -52,13 +65,13 @@ func DetectRing(pix []byte, width, height int, cfg RingConfig) (match *RingMatch
 
 	labels, numComponents := connectedComponents(mask, width, height)
 	if numComponents == 0 {
-		return nil, false, false
+		return nil
 	}
 
 	frameArea := float64(width * height)
 	var candidates []RingMatch
 
-	for _, st := range componentStats(labels, width, numComponents) {
+	for ci, st := range componentStats(labels, width, numComponents) {
 		minX, minY, maxX, maxY, count := st.minX, st.minY, st.maxX, st.maxY, st.count
 		if count == 0 {
 			continue
@@ -75,18 +88,23 @@ func DetectRing(pix []byte, width, height int, cfg RingConfig) (match *RingMatch
 		if hollowness < hollownessFloor {
 			continue
 		}
+		// A ring is a thin border around a tile: nearly all its pixels
+		// hug the box's edges, and it runs along all four of them. Patches
+		// of a ring-colored virtual background are hollow-ish blobs that
+		// fail one or the other.
+		if share, cover := borderShape(labels, width, ci+1, st); share < minBorderShare || cover < minEdgeCover {
+			continue
+		}
 
 		candidates = append(candidates, RingMatch{X: minX, Y: minY, Width: bw, Height: bh, Confidence: hollowness})
 	}
+	return candidates
+}
 
-	switch len(candidates) {
-	case 0:
-		return nil, false, false
-	case 1:
-		return &candidates[0], true, false
-	default:
-		return nil, false, true
-	}
+// DetectRings returns every plausible ring candidate in the frame (see
+// DetectRing): one is the active speaker, more is ambiguous.
+func DetectRings(pix []byte, width, height int, cfg RingConfig) []RingMatch {
+	return ringCandidates(pix, width, height, cfg)
 }
 
 // connectedComponents labels each true pixel in mask with its
@@ -126,6 +144,64 @@ func connectedComponents(mask []bool, width, height int) (labels []int, numCompo
 		}
 	}
 	return labels, numComponents
+}
+
+// A ring's pixels must be at least minBorderShare within the border band
+// of their bounding box, and cover at least minEdgeCover of each edge
+// (rounded corners leave the ends of each edge empty).
+const (
+	minBorderShare = 0.9
+	minEdgeCover   = 0.7
+)
+
+// borderShape measures how much component id (bounding box st) looks like
+// a thin rectangular border: share is the fraction of its pixels within a
+// few pixels of the box's edges, cover the least-covered edge's fraction.
+func borderShape(labels []int, width, id int, st componentBox) (share, cover float64) {
+	bw, bh := st.maxX-st.minX+1, st.maxY-st.minY+1
+	band := max(4, min(bw, bh)/25)
+	inBand := 0
+	top := make([]bool, bw)
+	bottom := make([]bool, bw)
+	left := make([]bool, bh)
+	right := make([]bool, bh)
+	for y := st.minY; y <= st.maxY; y++ {
+		row := labels[y*width : (y+1)*width]
+		for x := st.minX; x <= st.maxX; x++ {
+			if row[x] != id {
+				continue
+			}
+			dx, dy := x-st.minX, y-st.minY
+			nearL, nearR := dx < band, st.maxX-x < band
+			nearT, nearB := dy < band, st.maxY-y < band
+			if nearL || nearR || nearT || nearB {
+				inBand++
+			}
+			if nearT {
+				top[dx] = true
+			}
+			if nearB {
+				bottom[dx] = true
+			}
+			if nearL {
+				left[dy] = true
+			}
+			if nearR {
+				right[dy] = true
+			}
+		}
+	}
+	frac := func(v []bool) float64 {
+		n := 0
+		for _, b := range v {
+			if b {
+				n++
+			}
+		}
+		return float64(n) / float64(len(v))
+	}
+	cover = min(frac(top), frac(bottom), frac(left), frac(right))
+	return float64(inBand) / float64(st.count), cover
 }
 
 // componentBox is one connected component's bounding box and pixel count.

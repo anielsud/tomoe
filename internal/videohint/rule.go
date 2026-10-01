@@ -1,19 +1,15 @@
 // Package videohint reads a meeting app's on-screen active-speaker UI
 // (a colored ring/border around whichever tile is talking, plus that
-// tile's name label) and turns it into a naming hint for
-// internal/speaker's audio-only clustering — the "label cluster ID with
-// name if a fresh hint is available" step described in
-// docs/macos-support.md's architecture section, which that doc already
-// flags as "the only new logic; it hasn't been built yet."
+// tile's name label) and turns it into timestamped naming hints.
 //
-// This package ships in three stages, each its own PR:
-//   - Rule table + ring detection + an escalation snapshot library for
-//     UIs the rule table doesn't recognize yet (this file and
-//     ring.go/snapshot.go/poller_*.go).
-//   - Vision.framework OCR for the name label itself (a ring alone has
-//     no name to attach).
-//   - Wiring a successful ring+OCR result into actually relabeling an
-//     internal/speaker.Tracker cluster during a live session.
+// Watcher captures the meeting window and finds the ring and the name
+// (watcher.go, ring.go, label.go), more often while a speaker still needs
+// a name and right after a speaker change; every look is recorded with
+// the session (look.go) and shown in the app's hint timeline. The names
+// are attributed by time against the diarization timeline in
+// internal/diarize (or, with diarize_during_meeting off, attached to the
+// live speaker.Tracker's most recent speaker, as before). See
+// docs/macos-video-hints.md.
 package videohint
 
 import "github.com/sosuke-ai/tomoe-pc/internal/meeting"
@@ -94,12 +90,10 @@ type Rule struct {
 	Label  LabelRegion
 }
 
-// rules is the platform rule table. It starts intentionally EMPTY, not
-// with placeholder/guessed values: verifying real ring color/shape
-// thresholds requires either live access to an active multi-participant
-// call in each app, or reviewing captured examples from the escalation
-// snapshot library (CaptureSnapshot/config.UnrecognizedUIDir) once it
-// has real data in it. Guessing thresholds now would risk confidently
+// rules is the platform rule table. It holds only calibrated entries,
+// not placeholder/guessed values: verifying real ring color/shape
+// thresholds requires live access to an active multi-participant call in
+// each app, or frames saved from the hint timeline ("Save for analysis"). Guessing thresholds now would risk confidently
 // mislabeling a real meeting from an unverified rule, which is worse
 // than the honest "Person N" fallback every cluster without a hint
 // already gets.
@@ -111,29 +105,25 @@ type Rule struct {
 // border, and the participant's name label sits a fixed ~50px above
 // the ring's own bottom edge, ~40px tall (see LabelRegion's doc
 // comment for why this is absolute pixels rather than a fraction of
-// the ring). Re-validated against the escalation snapshot library
-// after a first pass wrongly modeled the label as a ring-relative
+// the ring). Re-validated against saved frames after a first pass wrongly modeled the label as a ring-relative
 // fraction (worked for the one tile size it was eyeballed against,
 // wrong by 2-4x for others) — measured directly from two real
-// escalated frames at very different scales (a full-screen 1-on-1
+// frames at very different scales (a full-screen 1-on-1
 // tile and a ~440x245 gallery tile) rather than a single eyeballed
 // example. These are still single-machine measurements, not a
 // stress-tested calibration: ColorTolerance and the area-fraction
 // bounds are deliberately generous to survive lighting/monitor
 // variation, and the label offset assumes this display's DPI scale
 // holds — both may need retuning against more real calls or other
-// displays. Two simultaneous rings were observed in one frame
-// (multiple recent speakers highlighted at once); DetectRing only
-// returns its single best-scoring match today, so a second active
-// ring in the same frame is currently missed — a known limitation, not
-// addressed by this rule entry.
+// displays. Teams lights every tile making sound, so several rings in one
+// frame are real (see Look.Candidates); a ring-colored virtual background
+// is ruled out by DetectRings' border-shape test.
 //
 // To add another platform's entry once you have its calibration data
-// (e.g. from reviewing snapshots under config.UnrecognizedUIDir(), or
-// a live session): rules[meeting.PlatformX] = Rule{Ring: RingConfig{...}, Label: LabelRegion{...}}.
+// (frames saved from the hint timeline, or a live session): rules[meeting.PlatformX] = Rule{Ring: RingConfig{...}, Label: LabelRegion{...}}.
 var rules = map[meeting.Platform]Rule{
 	meeting.PlatformTeams: {
-		// Calibrated against the same escalation snapshot library used
+		// Calibrated against the same saved frames used
 		// for Ring/Label below: the "Leave" hang-up icon's red glyph,
 		// found at an exact, repeatable pixel count (110) across every
 		// real call frame checked (15/15, spanning four different

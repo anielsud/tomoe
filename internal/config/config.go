@@ -116,28 +116,26 @@ type MeetingConfig struct {
 	DiarizeStride        int     `toml:"diarize_stride"`
 	DiarizeRecluster     float64 `toml:"diarize_recluster"`
 
-	// VideoHintPollInterval/VideoHintTriggerDebounce mirror
-	// videohint.Poll's interval/trigger-debounce parameters (seconds).
-	VideoHintPollInterval    float64 `toml:"video_hint_poll_interval"`
-	VideoHintTriggerDebounce float64 `toml:"video_hint_trigger_debounce"`
+	// VideoHintLearnInterval is the time between looks at the meeting
+	// window while a speaker still needs naming or right after a speaker
+	// change, and VideoHintCheckInterval the time between looks that only
+	// confirm known names (seconds; see videohint.Watcher).
+	VideoHintLearnInterval float64 `toml:"video_hint_learn_interval"`
+	VideoHintCheckInterval float64 `toml:"video_hint_check_interval"`
 }
 
-// VideoHintTiming converts VideoHintPollInterval/VideoHintTriggerDebounce
-// into time.Duration, falling back to DefaultConfig's values for
-// anything zero/invalid — the one place this seconds-to-Duration
-// conversion happens, shared by internal/backend and internal/daemon
-// rather than duplicated at each videohint.Poll call site.
-func (m MeetingConfig) VideoHintTiming() (pollInterval, triggerDebounce time.Duration) {
+// VideoHintTiming is VideoHintLearnInterval and VideoHintCheckInterval
+// as durations, with defaults for unset values.
+func (m MeetingConfig) VideoHintTiming() (learn, check time.Duration) {
 	def := DefaultConfig().Meeting
-	interval := m.VideoHintPollInterval
-	if interval <= 0 {
-		interval = def.VideoHintPollInterval
+	l, c := m.VideoHintLearnInterval, m.VideoHintCheckInterval
+	if l <= 0 {
+		l = def.VideoHintLearnInterval
 	}
-	debounce := m.VideoHintTriggerDebounce
-	if debounce <= 0 {
-		debounce = def.VideoHintTriggerDebounce
+	if c <= 0 {
+		c = def.VideoHintCheckInterval
 	}
-	return time.Duration(interval * float64(time.Second)), time.Duration(debounce * float64(time.Second))
+	return time.Duration(l * float64(time.Second)), time.Duration(c * float64(time.Second))
 }
 
 // DefaultConfig returns a Config with sensible defaults.
@@ -192,8 +190,8 @@ func DefaultConfig() *Config {
 			MinAssignDuration:       0,
 			ShortSegmentGraceWindow: 15.0,
 
-			VideoHintPollInterval:    5.0,
-			VideoHintTriggerDebounce: 1.0,
+			VideoHintLearnInterval: 0.35,
+			VideoHintCheckInterval: 1.0,
 		},
 	}
 }
@@ -231,25 +229,11 @@ func SessionDir() string {
 	return filepath.Join(DataDir(), "sessions")
 }
 
-// UnrecognizedUIPendingDir returns the staging directory
-// (~/.local/share/tomoe/unrecognized-uis-pending/) internal/videohint
-// writes escalation snapshots to — a captured frame + metadata per
-// meeting-app UI its rule table doesn't recognize yet. This is
-// deliberately NOT the permanent library: a captured window can be the
-// wrong thing entirely (e.g. a chat tab, not an actual call), so
-// nothing here is treated as safe to keep or use for calibration until
-// a human reviews and approves it — see UnrecognizedUIApprovedDir and
-// `tomoe videohint`.
-func UnrecognizedUIPendingDir() string {
-	return filepath.Join(DataDir(), "unrecognized-uis-pending")
-}
-
-// UnrecognizedUIApprovedDir returns the permanent escalation snapshot
-// library (~/.local/share/tomoe/unrecognized-uis-approved/) — where a
-// snapshot lands only once explicitly approved via `tomoe videohint
-// approve`, at which point it's fair game for writing a real rule from.
-func UnrecognizedUIApprovedDir() string {
-	return filepath.Join(DataDir(), "unrecognized-uis-approved")
+// HintAnalysisDir is where the hint timeline's "Save for analysis" puts
+// looks (~/.local/share/tomoe/hint-analysis/): frames kept for working out
+// why the ring or the name wasn't found. Local only.
+func HintAnalysisDir() string {
+	return filepath.Join(DataDir(), "hint-analysis")
 }
 
 // DataDir returns the base data directory (~/.local/share/tomoe/).

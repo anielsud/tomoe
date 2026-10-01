@@ -10,56 +10,73 @@ discovery/capture this builds on.
 
 ## Concept
 
-`internal/speaker`'s embedding + clustering pipeline runs unchanged
-from Linux — cluster audio, label clusters "Person N". This package
-adds a second, independent signal: whenever a confident visual hint
-lands, *label* the currently-active cluster with a real name
-(`"Person N (Name)"`), carrying that label forward for the cluster's
-later turns even without a fresh hint. A cluster that never gets a
-hint stays "Person N" — the same as Linux does today, not a
-regression. Only turns transcribed *after* a hint lands show the name;
-earlier turns from the same speaker correctly keep the plain label
-they had at the time.
+Teams already knows who's talking: it rings their tile. That's a
+second, independent signal next to the voice-based speaker pipeline.
+`videohint.Watcher` captures the meeting window, finds the lit tile and
+reads the name under it, and records every look with a timestamp. The
+names then do two jobs:
+
+- **Name speakers by vote.** Each read votes for whoever the diarization
+  timeline has talking at that moment, so the diarization lag doesn't
+  matter. A speaker is named only when the evidence agrees.
+- **Correct the clustering.** Two stretches of speech confidently read
+  as different people can't be one speaker; clusters whose reads agree
+  on a name merge at a looser voice-similarity threshold.
+
+A speaker with no agreeing reads stays "Person N". A name the user gives
+in the transcript (click a speaker) beats any read.
 
 ```text
-Teams window → capture frame → call-chrome gate → ring detection → OCR label
-                                      │                  │             │
-                                 not a call?         no match?    empty/error?
-                                      │                  │             │
-                                      └──────────────────┴─────────────┘
-                                                          │
-                                              escalate to review queue
-                                          (only if chrome gate passed —
-                                           see "Escalation library" below)
+speech starts / voice change / ring moves ─┐
+                                           ▼
+Teams window → capture → call-chrome gate → rings → name(s) → Look (timestamped)
+                                                                  │
+                    session's looks.jsonl + thumbnail ◄───────────┤
+                    hint timeline (live)              ◄───────────┤
+                                                                  ▼
+                         diarize.SessionDiarizer: votes by time → names
+                                                  constraints   → clustering
 ```
+
+With `diarize_during_meeting = false` (the previous pipeline) a name
+read goes to `speaker.Tracker.SetHintForRecent`, attaching to whichever
+live speaker was heard most recently, as before.
 
 ## Ring detection (`ring.go`)
 
-Pure Go, no cgo: color-threshold every pixel against a target RGB
-within a tolerance, connected-components label the result (4-connectivity
-flood fill), then for each component check it's plausibly ring-shaped
-(pixel count well below its bounding box's full area — a filled blob
-wouldn't be) and within a min/max area-fraction of the whole frame.
-Unit-tested against synthetic frames (`ring_test.go`).
+Pure Go, no cgo. Every pixel within `ColorTolerance` of the ring color
+is marked, connected marked pixels form candidates, and a candidate is a
+ring when it:
+
+- covers `MinAreaFraction`–`MaxAreaFraction` of the frame;
+- is mostly hollow (at least 30% of its bounding box empty);
+- **is shaped like a border**: at least 90% of its pixels lie within a
+  few pixels of its bounding box's edges, and it covers at least 70% of
+  each of the four edges (rounded corners leave the ends empty). A
+  ring-colored virtual background makes hollow-ish blobs that fail
+  this. On the saved frames it removed every background fragment
+  (galleries went from 8–13 candidates to the 1–3 real lit tiles).
 
 **Teams calibration** (from a real, live, multi-participant call,
 explicit authorization obtained first): active-speaker ring is
 RGB(129,136,243), a hollow rounded-square border. `ColorTolerance: 25`
 is deliberately generous to survive lighting/monitor variation.
 
-**Simultaneous rings, fixed.** Teams can highlight more than one
-recent speaker at once — observed live: two people both had a ring at
-the same moment, and the original "just return the single
-best-scoring match" behavior confidently attributed the hint to
-whichever one scored higher, silently mislabeling the other.
-`DetectRing` now returns three values (`match, found, ambiguous`):
-finding *more than one* plausible candidate sets `ambiguous` and
-returns no match at all, rather than guessing between them. The
-poller reports this as its own `StageAmbiguousRing` event (distinct
-from "no ring found") and still escalates the frame — a real "two
-people highlighted" moment is exactly the kind of case worth keeping
-in the snapshot library, even though nothing here is a rule gap to
-fix.
+**Several lit tiles are real.** Teams rings every tile making sound,
+for example two conference rooms, or three people at once. Each lit
+tile's name is read into `Look.Candidates`, and attribution resolves the
+speaker by elimination (see Attribution).
+
+**Speaker view has no ring.** In speaker view (and 1:1 calls) Teams
+draws no ring: the main video *is* the active speaker, named at its
+bottom left. When no ring is found and the stage's left margin isn't
+Teams' flat dark gallery background (brightness 29), the watcher reads
+that label (`speaker_view` looks). This covered every "no ring" frame
+saved so far.
+
+`frames_test.go` runs all of this over a folder of saved frames
+(`TOMOE_HINT_FRAMES=<dir> go test ./internal/videohint -run
+TestSavedFrames -v`); the frames show real meetings, so they stay local.
 
 ## Label geometry (`label.go`, `rule.go`'s `LabelRegion`)
 
@@ -82,7 +99,7 @@ constant on-screen font size regardless of tile size) and a
 fraction-of-ring model structurally can't express. Current values:
 `BottomOffset: 52`, `Height: 40`, `MaxWidth: 300` (clamped to the
 ring's own width if narrower, so a small tile's crop doesn't spill into
-a neighboring tile). Re-running OCR against every real escalated frame
+a neighboring tile). Re-running OCR against every real saved frame
 that had a ring match: 0/7 succeeded under the fractional model, 7/7
 succeed under the fixed-pixel model.
 
@@ -144,12 +161,11 @@ icon's small red glyph within a fixed-position search window
 (**absolute pixels from the frame's top-right corner, not a fraction
 of frame size** — same reasoning as label geometry: this is native
 toolbar chrome, and Teams renders it at a constant pixel size/position
-regardless of window size). Calibrated against the real escalation
-library: exactly 110 matching pixels in every one of 15 real call
-frames checked (across four different window sizes), 0 in all 7
-non-call frames. Wired into `Poll` as a hard gate before Ring/Label are
-even attempted — a rejected frame emits `StageNotACall` and is never
-written to the escalation library at all.
+regardless of window size). Calibrated against real saved frames:
+exactly 110 matching pixels in every one of 15 real call frames checked
+(across four different window sizes), 0 in all 7 non-call frames. The
+watcher checks it before Ring/Label: a rejected frame is a
+`not_a_call` look, shown in the timeline but never attributed.
 
 **Matched by hue+saturation, not exact RGB** — a deliberate bet that a
 semantic "danger/leave" accent color keeps its hue across light/dark
@@ -170,113 +186,74 @@ the box excludes *other* things that share the target color — measure
 the false positive's exact location before assuming a wider net is
 safer.
 
-## Escalation library (`snapshot.go`)
+## Watching (`watcher.go`)
 
-A captured frame + metadata that didn't produce a confident hint lands
-in a **staging** directory
-(`config.UnrecognizedUIPendingDir`), never the permanent library
-(`config.UnrecognizedUIApprovedDir`) — promotion requires a human
-explicitly approving it (`tomoe videohint {list,approve,discard}`, or
-the GUI's pending-screenshots panel). This exists specifically because
-a captured window can be the wrong thing entirely (see the call-chrome
-gate above) — nothing here is safe to calibrate a rule from, or even
-safe to have captured at all, until reviewed. The call-chrome gate
-(added later) prevents most wrong-window captures from reaching this
-queue at all; the staging/approval step remains as defense for
-whatever it doesn't catch.
+The watcher looks at the window on two clocks:
 
-Rate-limited (skip if <60s since the last capture in the same `Poll`
-call) and capped (stop after 5 snapshots per call) so a long idle
-meeting can't fill the disk. Retroactively applying the label-geometry
-and chrome-gate fixes to a real ~22-snapshot library collected across
-one day's live meetings: escalation-worthy snapshots dropped to 7, and
-every one of those 7 is a genuine "ring wasn't visually present at that
-instant" miss, not a bug.
+- **Learning**, every `video_hint_learn_interval` (default 0.35 s): while
+  anyone who spoke in the last minute has no name
+  (`SessionDiarizer.NeedsNames`), and for 3 s after any sign of a
+  speaker change.
+- **Checking**, every `video_hint_check_interval` (default 1 s)
+  otherwise.
 
-## Speaker-tracker wiring (`internal/speaker.Tracker.SetHintForRecent`)
+Speaker-change signals, fastest first: speech starting after at least
+0.25 s of quiet (`live.Config.OnMonitorSpeechStart`), the ring moving to
+another tile, and a new voice in the newest part of a diarization window
+(`StreamConfig.OnSpeakerChange`, about 1 s, before any clustering). The
+live pass's "this speaker has no name" signal also starts a burst.
 
-A video hint only knows "this name is active right now," not which
-audio cluster ID it belongs to — it's attributed to whichever cluster
-the audio pipeline most recently assigned an embedding to (both
-signals are keyed to the same monitor-source audio). Baked in at
-`Tracker.Assign` time, so this is a point-in-time relabel, not
-retroactive.
+A tile's name is remembered by its position. A ring on a known tile
+reuses the name (`from_cache`) and is only read again after 1 s while
+learning, or 5 s while checking. Measured per look on an Apple Silicon
+desktop: ring detection 4 ms, thumbnail 2 ms, a full-resolution frame
+21 ms (only when something changed), reading a name 16 ms (only when
+needed), plus the capture.
 
-**Sticky-speaker continuity fix:** live multi-participant testing found
-one person's continuous turn fragmenting into a fresh "Person N" per
-sentence — each single-sentence VAD segment produced a noisier
-embedding than a longer utterance, occasionally missing
-`speaker.Tracker`'s similarity threshold. Fixed with a sticky-speaker
-heuristic in `internal/speaker` — see `speaker.Tuning`'s doc comment
-for the full mechanism, current thresholds, and the later real-call
-diagnostic session that retuned `DefaultThreshold` itself (0.65 → 0.55)
-from real similarity scores rather than a guess. Every one of these
-constants is now hot-reloadable from `config.toml` (`MeetingConfig`,
-`config.Watch`) — no rebuild or relaunch needed to retune it again.
+## Hint timeline (`look.go`, frontend `HintTimeline.tsx`)
 
-**Cluster merging on a matching video hint.** A video hint is
-independent evidence of identity, separate from audio similarity —
-if it resolves *two different* "Person N" clusters to the same real
-name, that's a strong signal they're actually one person whose
-embeddings simply never clustered together (exactly the kind of
-mistake real-call diagnostics found the audio side making).
-`SetHintForRecent` now merges in that case (`speaker.Tracker.mergeInto`):
-folds the newer cluster's centroid into the existing one's running
-average and aliases it, so every future match against either resolves
-to the same identity — without ever renumbering an unrelated
-"Person N" (see `Tracker.canonical`). Gated by `sameIdentity`, stricter
-than the truncation check used elsewhere: requires an exact match, or
-a truncation relationship with the shorter name at least 4 characters,
-so a bare ambiguous fragment (a first initial, "Mr") can never trigger
-a merge.
+Every look is recorded, failures included: `looks.jsonl` plus a
+320-pixel thumbnail per distinct look (`looks/<id>.jpg`) in the
+session's folder. Looks that found the same thing within 10 s share a
+thumbnail. It stays on this computer and goes with the session.
 
-**Short-segment fallback blindly overriding a better-matching known
-speaker, found live mid-call.** A quick back-and-forth between two
-already-distinguished speakers relabeled the second speaker's own
-short replies as the first speaker's — visibly wrong, not just an
-unlabeled-cluster edge case. Root cause: the short-segment fallback
-(added earlier for filler-word fragmentation) defaulted to "whoever
-was just assigned" purely because a segment was short and recent,
-without ever checking whether the audio was actually a much better
-match for some OTHER already-known speaker's centroid. Fixed: if the
-raw best-matching centroid points at a different speaker and clears
-the same relaxed floor the sticky check already trusts
-(`Threshold-StickyThresholdMargin`), that speaker wins instead of
-blind recency.
+The timeline (camera button; "Hints" on a saved session) shows each look
+with its ring outlined, the name read or why there wasn't one, and a
+**Save for analysis** button. That copies the full-resolution frame
+(kept in memory for the last ~90 s) or the thumbnail, plus the look's
+details, to `~/.local/share/tomoe/hint-analysis/`: the folder
+`frames_test.go` reads. There's no review or approval step any more.
 
-## Polling (`poller_darwin.go`)
+The call-chrome gate (Leave button) still decides whether anything read
+counts as a name; a look that fails it is shown but never attributed.
 
-Runs on a fixed ticker *and* an immediate trigger:
-`live.Coordinator.HintNeeded()` signals the moment a monitor-source
-speaker with no hint yet is heard (`speaker.Tracker.Assign`'s
-`needsHint` return value), debounced separately from the ticker (now a
-`Poll` parameter, `triggerDebounce`, default 1s) so a still-talking
-unlabeled speaker can't hammer ScreenCaptureKit + Vision faster than
-that. Both the ticker interval (default 5s, down from an original 10s)
-and the debounce come from `config.toml`
-(`MeetingConfig.VideoHintPollInterval`/`VideoHintTriggerDebounce`),
-read fresh each time a meeting session starts — unlike
-`speaker.Tracker`'s tuning, these aren't hot-reloaded *mid-session*
-(the ticker's already running by the time a session starts), but still
-need no rebuild or relaunch: a new session picks up an edited config
-immediately.
+## Attribution (`internal/diarize/hints.go`)
 
-**Double-shot on a brand-new speaker.** `HintNeeded()`'s channel
-carries a priority bool, not just a bare signal: a brand-new speaker
-(detected via `NumSpeakers()` before/after `Assign`, not a change to
-`Assign`'s own return signature) fires twice — immediately, and again
-~500ms later in case the ring/label hadn't rendered on the first
-attempt — both bypassing `triggerDebounce` entirely, since a new
-identity is rarer and more valuable to resolve fast than an ordinary
-still-unlabeled retry.
+Each read is a `Hint` (session time, name). `nameSpeakers`:
 
-Every stage reached each tick is reported on an `events` channel
-(window found/not, frame captured, not-a-call, ring matched/not, OCR
-hit/miss, escalated) — non-blocking, so a slow/absent consumer never
-stalls polling. `internal/daemon` logs every stage; `internal/backend`
-additionally buffers a short ring (`GetVideoHintActivity`) and forwards
-each one live via a `"videohint:activity"` Wails event to a frontend
-ticker.
+1. shifts each hint back 0.5 s (the ring lights after speech starts and
+   lingers after it stops);
+2. gives its vote to the one speaker the timeline has talking then.
+   Hints during silence or overlapping speech don't vote;
+3. counts reads of a name within 5 s as one, and names a speaker only
+   with at least 2 independent reads and 60% of that speaker's reads;
+4. folds spellings together: truncations ("Nazanin Rame…") and one- or
+   two-letter OCR misreads ("Shafgat") become the most-read spelling;
+5. resolves several lit tiles by elimination: a speaker whose name is
+   among them is confirmed, otherwise names other speakers already have
+   are ruled out and a single remaining name votes. If any lit tile's
+   name wasn't read, the hint doesn't vote.
+
+Labels read "Person N (Name)"; a user rename shows the name alone. A
+line not yet covered by the timeline shows the latest read during it,
+provisionally ("Ana?").
+
+**Clustering constraints** (`applyHintConstraints`, every recluster):
+window-speakers active alone at a hint's time are tagged with its name.
+A cluster holding two names with at least 2 tags each is split, each
+untagged member going to the nearer name's voice. Clusters whose tags
+are mostly one name merge if their voices are at least the merge
+similarity minus 0.2 alike.
 
 ## Diagnostics pane (frontend `DiagnosticsPane.tsx`)
 
@@ -303,38 +280,24 @@ this segment's own decision wasn't a fresh confident match) or `"Kevin
 re-confirmed the same identity this instant) — no cross-referencing
 the video-hint event stream needed.
 
-**Known limitation, not fixed here:** a video hint only labels
-segments emitted *after* it lands (see this doc's "Speaker-tracker
-wiring" section above) — already-sent segments for that speaker are
-never retroactively relabeled. So in practice a line's tag jumps
-straight from plain `"Person N"` to `"Name [Person N, OCR]"` on a
-*later* line, rather than the same line visibly upgrading through
-every stage in place.
+With diarizing during the meeting, names come from the timeline's votes
+and every covered line is relabeled when they change, earlier lines
+included. With the previous pipeline a hint still only labels lines
+emitted after it lands.
 
 ## Still open
 
 - **Window-finding only works for Teams.** Zoom/Meet/Webex/Slack each
-  need their own window-finder (native owner-name match for
-  Zoom/Slack; browser owner-name + title match for Meet/Webex, reusing
-  `internal/meeting/platform.go`'s existing pattern) before video hints
-  produce anything for them.
-- **Orphaned hints.** A hint with no recent-enough speaker to attach to
-  (`SetHintForRecent` returns `false`) is logged but otherwise silently
-  dropped, not retried.
-- **Truncated names.** Teams' active-speaker tile often truncates the
-  name (e.g. "Nazanin Rame…") — a fine hint, not necessarily the
-  participant's actual full name. Investigated: macOS's own local data
-  sources (Outlook's mail/calendar cache, macOS Contacts, macOS
-  Calendar) were all empty/proprietary dead ends on the one real
-  machine checked; Teams' own local IndexedDB cache has a real but
-  narrow mri→displayName mapping (from the @-mention feature — only
-  ~18% coverage against real meeting participants in one measured
-  session) not accepted as a real solve. Remaining candidates: reading
-  the roster/participants panel (opportunistic OCR, needs live
-  calibration), or Microsoft Graph API (`/me/people`) — genuine
-  complete coverage, but a fundamentally bigger feature (network +
-  OAuth, not a passive local read).
-- **Ambiguous-ring escalations still need a human look.** Nothing
-  automatically distinguishes "two people genuinely both just spoke"
-  from a false-positive second ring (e.g. noise coincidentally passing
-  the color/shape filters) — both currently escalate the same way.
+  need their own window-finder before video hints produce anything for
+  them.
+- **"Everything" as the audio source** turns off speaker separation, so
+  hints have no speaker to name. Looks still appear in the timeline.
+  This belongs with making "Everything" a good default.
+- **Not measured yet.** The vote thresholds, the 0.5 s ring lag and the
+  clustering constraints are reasoned, not tuned: tuning them needs a
+  session recorded with this (audio plus `looks.jsonl`) and a reviewed
+  transcript of it, replayed in `tomoe eval`.
+- **Speaker-view detection** relies on Teams' gallery background
+  brightness and the label's position, calibrated on one display.
+- **Truncated names.** Teams' tiles often truncate long names; the
+  fullest spelling read wins, which may still be truncated.

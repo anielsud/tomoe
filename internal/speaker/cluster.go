@@ -500,6 +500,22 @@ func sameIdentity(a, b string) bool {
 	return len(shorter) >= 4 && strings.HasPrefix(longer, shorter)
 }
 
+// HasUnnamedSpeakers reports whether any current speaker has no hint
+// name yet (or there are no speakers yet).
+func (t *Tracker) HasUnnamedSpeakers() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if len(t.centroids) == 0 {
+		return true
+	}
+	for i := range t.centroids {
+		if t.canonical(i) == i && (i >= len(t.hints) || t.hints[i] == "") {
+			return true
+		}
+	}
+	return false
+}
+
 // Reset clears all speaker centroids and hints.
 func (t *Tracker) Reset() {
 	t.mu.Lock()

@@ -104,6 +104,10 @@ fingerprint stride (CPU budget) and the recluster interval.
   session. If anything fails, the post-meeting pass runs as before.
 - Settings come from the speaker model's profile (`StreamThreshold`,
   `StreamMerge` in `models.SpeakerModels`).
+- Teams video hints are timestamped and attributed by time against the
+  timeline, by vote, and constrain the clustering (split clusters that
+  hold two names, merge clusters that share one); see
+  [macos-video-hints.md](macos-video-hints.md).
 
 Since then: the CLI daemon, a low-priority thread (utility QoS on macOS,
 nice 10 on Linux), and bounds for long meetings (reclusters spaced out

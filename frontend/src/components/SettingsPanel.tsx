@@ -329,8 +329,8 @@ export default function SettingsPanel() {
 
         {mac && (
           <Group title="Teams video hints" applies="next">
-            <Row label="Check interval (seconds)">{num('Meeting', 'VideoHintPollInterval', 0.5, 0.5)}</Row>
-            <Row label="Minimum gap between checks (seconds)">{num('Meeting', 'VideoHintTriggerDebounce', 0.1)}</Row>
+            <Row label="Look while learning (seconds)" hint="While someone speaking has no name yet, or right after a speaker change">{num('Meeting', 'VideoHintLearnInterval', 0.05, 0.1)}</Row>
+            <Row label="Look while checking (seconds)" hint="When everyone speaking already has a name">{num('Meeting', 'VideoHintCheckInterval', 0.25, 0.25)}</Row>
           </Group>
         )}
       </div>
