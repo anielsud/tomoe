@@ -165,7 +165,39 @@ model at the same settings scored 96.9% and 97.7%. It now sorts the
 clusters first. With the base model the shipped settings scored 95.8%
 both before and after, so its figures above stand.
 
-## Speed and processing load
+## What each live setting contributes
+
+The experimental preset changes four things at once. Each was measured
+alone (turned on over the defaults) and on top of the others (turned off
+from experimental). Live guess, right speaker by word; clusters is how
+many speakers the live pass created for the 8 people.
+
+| Run | English-trained | Clusters | Base model | Clusters |
+|---|---|---|---|---|
+| Default | 90.9% | 119 | 83.6% | 119 |
+| + two-pass | 90.9% | 122 | 83.6% | 122 |
+| + threshold 0.55 | 95.4% | 81 | 91.6% | 77 |
+| + sticky 0.15 | 91.5% | 108 | 83.8% | 110 |
+| + short-segment 0.7 s | 90.9% | 90 | 83.6% | 91 |
+| Experimental (all four) | 95.9% | 42 | 91.8% | 44 |
+| − two-pass | 95.9% | 42 | 91.8% | 44 |
+| − threshold (back to 0.65) | 91.8% | 76 | 84.0% | 80 |
+| − sticky | 95.4% | 53 | 91.7% | 51 |
+| − short-segment | 95.7% | 75 | 91.8% | 68 |
+
+- **The threshold is nearly all of the accuracy gain**: +4.5 points alone
+  with the English-trained model, +8 with the base model.
+- **Two-pass has no effect on speakers.** It changes when text appears
+  and the live text, not who said it.
+- **Sticky and short-segment barely move accuracy** (up to +0.5) but cut
+  the number of spurious speakers: together they take the English-trained
+  model from 81 clusters to 42 at threshold 0.55. Fewer phantom
+  "Person N" entries is what a user sees during the meeting, and it's
+  what video hints have to name.
+- None of this reaches the final transcript, which the post-meeting pass
+  relabels.
+
+
 
 Measured on the same hour of audio, uncached, one run at a time.
 "This Mac" is the performance cores of an Apple Silicon desktop with 4
