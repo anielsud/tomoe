@@ -105,7 +105,10 @@ type MeetingConfig struct {
 	// DiarizeDuringMeeting runs Tomoe's own diarizer while the meeting is
 	// recorded instead of sherpa-onnx's after it: labels improve as the
 	// meeting goes on and the final ones are ready when it ends (see
-	// docs/speaker-pipeline-design.md). Experimental, off by default.
+	// docs/speaker-pipeline-design.md). On by default; false restores the
+	// pass after the meeting exactly as before (sherpa-onnx in a
+	// subprocess), and it falls back to that by itself if the in-process
+	// diarizer can't load.
 	// DiarizeStride fingerprints every nth analysis window (the CPU
 	// budget) and DiarizeRecluster is the seconds of audio between
 	// reclusters.
@@ -168,15 +171,16 @@ func DefaultConfig() *Config {
 			DefaultLang: "en",
 		},
 		Meeting: MeetingConfig{
-			DefaultSources:     "both",
-			SpeakerThreshold:   0.65,
-			MaxSpeechDuration:  30.0,
-			MinSilenceDuration: 0.5,
-			AutoSave:           true,
-			AutoDetect:         true,
-			SpeakerModel:       "auto",
-			DiarizeStride:      2,
-			DiarizeRecluster:   10,
+			DefaultSources:       "both",
+			SpeakerThreshold:     0.65,
+			MaxSpeechDuration:    30.0,
+			MinSilenceDuration:   0.5,
+			AutoSave:             true,
+			AutoDetect:           true,
+			SpeakerModel:         "auto",
+			DiarizeDuringMeeting: true,
+			DiarizeStride:        2,
+			DiarizeRecluster:     10,
 
 			// The sticky-speaker and short-segment rules are off (margin
 			// and duration 0), matching main's clustering, until they're

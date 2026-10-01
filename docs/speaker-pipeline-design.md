@@ -1,7 +1,8 @@
 # Speaker pipeline: a simpler design
 
-Status: first version built, opt-in (`diarize_during_meeting`, off by
-default; GUI app only, not yet the CLI daemon). It keeps the live
+Status: built and on by default (`diarize_during_meeting`; `false`
+restores the previous post-meeting pass exactly), in the GUI app and the
+CLI daemon. It keeps the live
 `speaker.Tracker` for the instant label and video-hint names, and replaces
 the post-meeting pass. Proposal for the rest. Simulated on one reviewed meeting it matches the
 post-meeting pass's accuracy (97.9%) with final labels ready when the
@@ -104,9 +105,11 @@ fingerprint stride (CPU budget) and the recluster interval.
 - Settings come from the speaker model's profile (`StreamThreshold`,
   `StreamMerge` in `models.SpeakerModels`).
 
-Not yet: removing the live tracker's rules, cutting utterances for text
-alone, the CLI daemon, a cap for very long meetings, lower thread
-priority.
+Since then: the CLI daemon, a low-priority thread (utility QoS on macOS,
+nice 10 on Linux), and bounds for long meetings (reclusters spaced out
+past 3,000 fingerprints, at most 8,000 per clustering). Not yet: removing
+the live tracker's rules and the post-meeting pass. They stay while
+`diarize_during_meeting = false` is the way back.
 
 ## Costs and risks
 

@@ -175,6 +175,9 @@ export default function SettingsPanel() {
       next.Meeting.StickyThresholdMargin = experimental ? 0.15 : 0;
       next.Meeting.MinAssignDuration = experimental ? 0.7 : 0;
       next.Meeting.SplitOnSpeakerChange = experimental;
+      next.Meeting.DiarizeDuringMeeting = true;
+      next.Meeting.DiarizeStride = 2;
+      next.Meeting.DiarizeRecluster = 10;
       return next;
     });
     setResult(null);
@@ -315,10 +318,10 @@ export default function SettingsPanel() {
 
         <Group title="After the meeting" applies="next">
           <Row label="Split lines at speaker changes" hint="When the post-meeting pass hears a different voice mid-line, give it its own line (experimental)">{toggle('Meeting', 'SplitOnSpeakerChange')}</Row>
-          <Row label="Diarize during the meeting" hint="Work out who spoke when while recording, so labels improve as you go and final ones are ready when it ends, instead of a pass afterwards. Uses more CPU during the call (experimental)">{toggle('Meeting', 'DiarizeDuringMeeting')}</Row>
+          <Row label="Diarize during the meeting" hint="Work out who spoke when while recording, so labels improve as you go and final ones are ready when it ends. Off: the previous pass after the meeting instead. On uses more CPU during the call">{toggle('Meeting', 'DiarizeDuringMeeting')}</Row>
           {draft.Meeting.DiarizeDuringMeeting && (
             <>
-              <Row label="Fingerprint every Nth window" hint="Higher uses less CPU; 2 is about as accurate as 1">{num('Meeting', 'DiarizeStride', 1, 1)}</Row>
+              <Row label="Fingerprint every Nth window" hint="Sets CPU use during the call: higher uses less (5 is a fifth of 1), 2 is about as accurate as 1">{num('Meeting', 'DiarizeStride', 1, 1)}</Row>
               <Row label="Recluster every (seconds)" hint="How often labels during the meeting are updated">{num('Meeting', 'DiarizeRecluster', 5, 5)}</Row>
             </>
           )}
