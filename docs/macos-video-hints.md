@@ -383,6 +383,20 @@ not read as a window that stopped repainting, which would silently stop
 every name read. A window hidden from the very start of a meeting is
 therefore only caught once it has repainted at least once.
 
+**1:1 calls.** Calling someone (from a chat, say) opens a call window
+titled with their name ("<name> | Microsoft Teams"), separate from the
+chat window, which the window rule already skips ("Chat |"). Its layout
+has no active-speaker ring: the other person is a round avatar (camera
+off) or a full video, named at the bottom left, and the toolbar has
+calling controls a meeting doesn't (Hold, Transfer, Dial pad, Consult).
+When a look finds no ring and no speaker view, the toolbar is OCR'd (at
+most every 10 s per window) and, if it has those controls, the look names
+the other person from the stage label, else from the window title (stage
+`one_on_one`). With one other person, every remote voice is theirs. On
+the first recorded call from a chat every look had been "no ring" (no name
+at all); replayed, all 10 saved frames give the right name, and 25
+"no ring" frames from a group meeting are unaffected.
+
 **Checking the hints (`tomoe tune`, hints.txt).** Every `tomoe tune` run
 also reports on the hints themselves, apart from what the clustering made
 of them: which windows were watched (title and size), stages, the

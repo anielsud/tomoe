@@ -14,6 +14,7 @@ const (
 	StageNotACall       EventStage = "not_a_call"
 	StageBlankCapture   EventStage = "blank_capture"
 	StageUIFrozen       EventStage = "ui_frozen"
+	StageOneOnOne       EventStage = "one_on_one"
 	StageNoRule         EventStage = "no_rule"
 	StageRingMatched    EventStage = "ring_matched"
 	StageNoRingMatch    EventStage = "no_ring_match"

@@ -189,3 +189,28 @@ func TestUITrackerScalesTheRegion(t *testing.T) {
 		t.Errorf("captureScale with no point width = %d, want 1", got)
 	}
 }
+
+func TestOneOnOneCallSigns(t *testing.T) {
+	for text, want := range map[string]bool{
+		"Transfer Consult Dial pad Hold Chat 2 People View Apps More Camera Mic Share Leave": true,
+		"Hold Dial pad": true,
+		"Chat 6 People Raise React View Notes Apps More Camera Mic Share Leave": false,
+		"Transfer": false, // no Hold
+		"":         false,
+	} {
+		if got := isCallToolbar(text); got != want {
+			t.Errorf("isCallToolbar(%q) = %v, want %v", text, got, want)
+		}
+	}
+	for window, want := range map[string]string{
+		"Microsoft Teams — Alex Kim | Microsoft Teams":               "Alex Kim",
+		"Microsoft Teams — Weekly sync | Planning | Microsoft Teams": "",
+		"Microsoft Teams — Microsoft Teams":                          "",
+		"Microsoft Teams — Chat | Alex Kim | Microsoft Teams":        "",
+		"": "",
+	} {
+		if got := nameFromCallTitle(window); got != want {
+			t.Errorf("nameFromCallTitle(%q) = %q, want %q", window, got, want)
+		}
+	}
+}

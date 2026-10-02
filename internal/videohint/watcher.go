@@ -118,6 +118,7 @@ type Watcher struct {
 	shots       map[int]*shotState
 	shotCheckAt time.Time
 	ui          uiTracker // is the window repainting its interface?
+	call        callCheck // is the window a 1:1 call? (cached)
 	invKey      string    // the last window list recorded
 	invListAt   time.Time
 	invTeamsKey string // the Teams windows when last pictured
@@ -320,6 +321,10 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 				l.Detail = fmt.Sprintf("speaker view: read %q under the main video", name)
 				return
 			}
+		}
+		// A 1:1 call has no ring either, and only one other person.
+		if w.oneOnOne(l, fr, rule) {
+			return
 		}
 		l.Stage, l.Detail = StageNoRingMatch, "no active-speaker ring found"
 		return

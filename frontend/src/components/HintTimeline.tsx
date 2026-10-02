@@ -16,6 +16,7 @@ const STAGE_LABEL: Record<string, string> = {
   not_a_call: 'not a call',
   blank_capture: 'window captured black',
   ui_frozen: 'window not repainting',
+  one_on_one: '1:1 call',
   no_rule: 'no rule',
   ring_matched: 'ring',
   no_ring_match: 'no ring',
