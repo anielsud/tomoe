@@ -323,6 +323,18 @@ func (p *Prepared) turns(clusters []int, params Params) []session.DiarizeSegment
 			order[k] = k
 		}
 		row := count[f]
+		var votes int32
+		for _, v := range row {
+			votes += v
+		}
+		if votes == 0 {
+			// Every window covering this frame was left unfingerprinted
+			// (EveryNth, or the newest frames of a recluster): nothing
+			// says who is speaking, and the sort below would hand it to
+			// cluster 0, an arbitrary speaker. The frame stays unlabeled
+			// until a later recluster sees a fingerprint for it.
+			continue
+		}
 		sort.SliceStable(order, func(a, b int) bool { return row[order[a]] > row[order[b]] })
 		for _, k := range order[:min(n, numClusters)] {
 			active[k][f] = true
