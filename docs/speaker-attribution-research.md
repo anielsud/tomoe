@@ -435,6 +435,24 @@ about 77% is the most "right" can reach.
   Both halves are off with `video_hint_constraints = false`; merge-only
   would score the same here, so it's off too until there's a meeting where
   it helps.
+- **Most of the constraints' damage was stale name reads.** Teams stops
+  repainting a hidden call window (docs/macos-video-hints.md, "Stale hints"),
+  and two stretches of this call (621 s) fed the constraints a highlight
+  frozen on one person. Replayed with the looks from those stretches
+  ignored, as the `ui_frozen` check now does:
+
+  | | Speakers right | Names right / wrong |
+  |---|---|---|
+  | Constraints off | 96.8% | 73.5% / 2.4% |
+  | Constraints on, all looks (before) | 92.8% | 70.0% / 5.7% |
+  | Constraints on, frozen-window looks ignored | 96.3% | 73.1% / 2.7% |
+
+  The gap to "off" falls from 4.0 points to 0.5, but they still don't help
+  in this meeting, so they stay off by default. Both rules take every tag
+  at face value: the harmful split came from 300 wrong "Ben" tags against
+  2622 right "Imran" tags in one cluster (a 10% minority name), which a
+  minimum share for the second name would have blocked (not tried). Worth
+  re-measuring on a meeting where the diarizer over-splits a speaker.
 - **The vote rules barely matter**: lag, reads, share and bucket changes
   moved names right by under 1 point (73.4–73.5% across the top 20).
 - **Looks can be much sparser for the saved transcript**: one look every
