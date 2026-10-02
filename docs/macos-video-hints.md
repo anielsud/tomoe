@@ -296,9 +296,9 @@ callers/tests already use).
 
 The speaker label itself already carries everything the view needs:
 `Tracker.label()` embeds a resolved hint in parens (`"Person 1
-(Kevin)"`), so `DiagnosticsPane` parses that back out and combines it
-with `Decision` to render `"Kevin [Person 1, OCR]"` (a hint exists, but
-this segment's own decision wasn't a fresh confident match) or `"Kevin
+(Alex)"`), so `DiagnosticsPane` parses that back out and combines it
+with `Decision` to render `"Alex [Person 1, OCR]"` (a hint exists, but
+this segment's own decision wasn't a fresh confident match) or `"Alex
 [Person 1, OCR+Centroid match]"` (this segment's audio independently
 re-confirmed the same identity this instant) — no cross-referencing
 the video-hint event stream needed.
@@ -322,7 +322,7 @@ every stage in place.
   (`SetHintForRecent` returns `false`) is logged but otherwise silently
   dropped, not retried.
 - **Truncated names.** Teams' active-speaker tile often truncates the
-  name (e.g. "Nazanin Rame…") — a fine hint, not necessarily the
+  name (e.g. "Natalia Rami…") — a fine hint, not necessarily the
   participant's actual full name. Investigated: macOS's own local data
   sources (Outlook's mail/calendar cache, macOS Contacts, macOS
   Calendar) were all empty/proprietary dead ends on the one real

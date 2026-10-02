@@ -140,7 +140,7 @@ earlier ones.
    bugs in this area have taken live debugging sessions to catch
    rather than showing up in `go test`.
 4. **Full participant names.** Teams' active-speaker tile often
-   truncates the name (e.g. "Nazanin Rame…", cut off by the tile's
+   truncates the name (e.g. "Natalia Rami…", cut off by the tile's
    width) — a fine naming hint, not necessarily the participant's
    actual full name. Resolving the truncation needs a second signal:
    reading the roster/participants panel (a different, richer piece of
