@@ -91,6 +91,11 @@ func (a *App) newHintWatcher() (*videohint.Watcher, *hintSession) {
 				fmt.Printf("videohint: saving frame %d: %v\n", id, err)
 			}
 		})
+		hs.watcher.SetOnWindowShot(func(lookID, windowID int, thumb bool, jpeg []byte) {
+			if err := hs.log.WriteWindowShot(lookID, windowID, thumb, jpeg); err != nil {
+				fmt.Printf("videohint: saving window %d: %v\n", windowID, err)
+			}
+		})
 	}
 	return hs.watcher, hs
 }

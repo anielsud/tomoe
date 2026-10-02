@@ -3,6 +3,7 @@ package videohint
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -47,6 +48,12 @@ type WatchConfig struct {
 	// with its own thumbnail (Record for tuning), on the Watcher's
 	// goroutine.
 	OnFullFrame func(id int, jpeg []byte)
+	// OnWindowShot, if set (Record for tuning), switches on the window
+	// inventory: every look lists the windows on screen, and when the set
+	// changes (and every inventoryEvery) it also gets a picture of each
+	// Teams window (full size) and a thumbnail of the others. Called on
+	// the Watcher's goroutine.
+	OnWindowShot func(lookID, windowID int, thumb bool, jpeg []byte)
 }
 
 // Default look intervals.
@@ -68,6 +75,12 @@ const (
 	// A look whose result matches the previous one within this long shares
 	// its thumbnail.
 	sameThumbFor = 10 * time.Second
+	// inventoryEvery is how often the window inventory is recorded again
+	// even if nothing changed; maxInventoryShots caps the pictures taken
+	// of other apps' windows each time.
+	inventoryEvery    = 30 * time.Second
+	inventoryMinGap   = 5 * time.Second
+	maxInventoryShots = 12
 )
 
 // Watcher watches the meeting window for who's speaking: it captures
@@ -86,11 +99,15 @@ type Watcher struct {
 	frames        []keptFrame
 
 	// Watcher-goroutine state.
-	nextID  int
-	last    *Look
-	tiles   []tileName
-	thumbID int // the last look that has its own thumbnail
-	thumbAt time.Time
+	nextID      int
+	last        *Look
+	tiles       []tileName
+	thumbID     int // the last look that has its own thumbnail
+	thumbAt     time.Time
+	invKey      string // the last window list recorded
+	invListAt   time.Time
+	invTeamsKey string // the Teams windows when last pictured
+	invAt       time.Time
 }
 
 type keptFrame struct {
@@ -106,10 +123,13 @@ type tileName struct {
 	readAt time.Time
 }
 
-// frame is a captured window, packed RGB.
+// frame is a captured window, packed RGB. windowID and pick say which
+// window it is and why it was chosen (automatic mode).
 type frame struct {
 	width, height int
 	pix           []byte
+	windowID      int
+	pick          string
 }
 
 // NewWatcher returns a Watcher; call Run to start it.
@@ -130,6 +150,11 @@ func (w *Watcher) SetSource(source string) {
 	w.source, w.sourceChanged = source, true
 	w.mu.Unlock()
 	w.Burst()
+}
+
+// SetOnWindowShot sets WatchConfig.OnWindowShot; call before Run.
+func (w *Watcher) SetOnWindowShot(f func(lookID, windowID int, thumb bool, jpeg []byte)) {
+	w.cfg.OnWindowShot = f
 }
 
 // SetOnFullFrame sets WatchConfig.OnFullFrame; call before Run.
@@ -213,8 +238,11 @@ func (w *Watcher) look(learning bool) {
 	fr, platform, window, stage, detail := captureWindow(source)
 	l.Cost.Capture = msSince(l.Time)
 	l.Stage, l.Detail, l.Window = stage, detail, window
+	if w.cfg.OnWindowShot != nil {
+		w.inventory(&l)
+	}
 	if fr != nil {
-		l.Width, l.Height = fr.width, fr.height
+		l.Width, l.Height, l.WindowID, l.Pick = fr.width, fr.height, fr.windowID, fr.pick
 		w.analyze(&l, fr, platform, learning)
 		began := time.Now()
 		w.keepThumb(&l, fr)
@@ -327,7 +355,7 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 // while.
 func (w *Watcher) keepThumb(l *Look, fr *frame) {
 	if p := w.last; p != nil && w.thumbID != 0 && p.Stage == l.Stage && p.Name == l.Name &&
-		sameRing(p.Ring, l.Ring) && l.Time.Sub(w.thumbAt) < sameThumbFor {
+		sameRing(p.Ring, l.Ring) && p.Width == l.Width && p.Height == l.Height && l.Time.Sub(w.thumbAt) < sameThumbFor {
 		l.ThumbOf = w.thumbID
 		return
 	}
@@ -350,6 +378,64 @@ func (w *Watcher) keepThumb(l *Look, fr *frame) {
 	}
 	w.frames = w.frames[cut:]
 	w.mu.Unlock()
+}
+
+// inventory lists the windows on screen on l and pictures them. The list
+// is recorded when the set of windows changed (at most every
+// inventoryMinGap, since other apps' windows come and go constantly) or
+// inventoryEvery has passed; the pictures are taken when a Teams window
+// appeared, went, was retitled, resized or reordered among the Teams
+// windows (the things the window rule depends on), or inventoryEvery has
+// passed, so a quiet call costs one set of pictures every 30 seconds.
+func (w *Watcher) inventory(l *Look) {
+	recs := snapshotWindows()
+	var all, teamsKey strings.Builder
+	rank := 0
+	for _, r := range recs {
+		fmt.Fprintf(&all, "%d|%s|%s|%dx%d|%d;", r.ID, r.Owner, r.Title, r.Width, r.Height, r.Layer)
+		if r.IsTeams() {
+			fmt.Fprintf(&teamsKey, "%d|%s|%dx%d|%d;", r.ID, r.Title, r.Width, r.Height, rank)
+			rank++
+		}
+	}
+	beat := l.Time.Sub(w.invAt) >= inventoryEvery
+	listChanged := all.String() != w.invKey && l.Time.Sub(w.invListAt) >= inventoryMinGap
+	teamsChanged := teamsKey.String() != w.invTeamsKey
+	if !beat && !listChanged && !teamsChanged {
+		return
+	}
+	w.invKey, w.invListAt = all.String(), l.Time
+	l.Windows = recs
+	if !beat && !teamsChanged {
+		return
+	}
+	w.invTeamsKey, w.invAt = teamsKey.String(), l.Time
+	others := 0
+	for _, r := range recs {
+		teams := r.IsTeams()
+		if r.Width < 100 || r.Height < 60 || (!teams && r.Layer != 0) {
+			continue
+		}
+		if !teams {
+			if others >= maxInventoryShots {
+				continue
+			}
+			others++
+		}
+		fr, err := captureWindowByID(r.ID)
+		if err != nil || fr == nil {
+			continue
+		}
+		maxWidth := thumbWidth
+		if teams {
+			maxWidth = 0
+		}
+		jpegBytes, err := encodeJPEG(fr.pix, fr.width, fr.height, maxWidth, 80)
+		if err != nil {
+			continue
+		}
+		w.cfg.OnWindowShot(l.ID, r.ID, !teams, jpegBytes)
+	}
 }
 
 func (w *Watcher) tileFor(r RingMatch) *tileName {

@@ -17,15 +17,16 @@ const captureSupported = true
 // nothing to look at, with the stage saying why.
 func captureWindow(source string) (fr *frame, platform meeting.Platform, window string, stage EventStage, detail string) {
 	var id teamsvideo.WindowID
+	var pick string
 	switch source {
 	case SourceNone:
 		return nil, "", "", StageWindowNotFound, "video hints are off"
 	case SourceAuto:
-		wid, err := teamsvideo.FindMeetingWindow()
+		rec, why, err := teamsvideo.FindMeetingWindowInfo()
 		if err != nil {
-			return nil, "", "", StageWindowNotFound, "no Teams meeting window on screen"
+			return nil, "", "", StageWindowNotFound, "no Teams meeting window on screen: " + why
 		}
-		id, platform, window = wid, meeting.PlatformTeams, "Microsoft Teams"
+		id, platform, window, pick = teamsvideo.WindowID(rec.ID), meeting.PlatformTeams, "Microsoft Teams — "+rec.Title, why
 	default:
 		w, err := teamsvideo.FindWindowByOwner(source)
 		if err != nil {
@@ -43,7 +44,7 @@ func captureWindow(source string) (fr *frame, platform meeting.Platform, window 
 	if err != nil {
 		return nil, platform, window, StageCaptureFailed, err.Error()
 	}
-	return &frame{width: f.Width, height: f.Height, pix: f.Pix}, platform, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", f.Width, f.Height)
+	return &frame{width: f.Width, height: f.Height, pix: f.Pix, windowID: int(id), pick: pick}, platform, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", f.Width, f.Height)
 }
 
 // Windows lists the on-screen app windows video hints could watch.
@@ -62,4 +63,19 @@ func Windows() ([]WindowChoice, error) {
 		out = append(out, WindowChoice{App: w.Owner, Title: w.Title, Known: strings.Contains(strings.ToLower(w.Owner), "teams")})
 	}
 	return out, nil
+}
+
+// snapshotWindows lists every on-screen window, front to back.
+func snapshotWindows() []teamsvideo.WindowRecord {
+	recs, _ := teamsvideo.ListAllWindows()
+	return recs
+}
+
+// captureWindowByID captures one window.
+func captureWindowByID(id int) (*frame, error) {
+	f, err := teamsvideo.CaptureWindowRGB(teamsvideo.WindowID(id))
+	if err != nil {
+		return nil, err
+	}
+	return &frame{width: f.Width, height: f.Height, pix: f.Pix, windowID: id}, nil
 }

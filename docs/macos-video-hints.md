@@ -302,6 +302,35 @@ frames feed `frames_test.go`, for tuning detection itself. Only final
 labels are scored; how labels look while the meeting is still going is
 `tomoe eval --online`'s job.
 
+### Window inventory (Record for tuning)
+
+The window rule in automatic mode is `teamsvideo.PickMeetingWindow`: the
+frontmost Teams window whose title isn't empty, "Window" or a "Chat |"
+panel. It never checks that the window holds a call, so a Calendar window
+in front of the meeting would be picked (seen live: with no call going,
+it picked "Calendar | … | Microsoft Teams"). With `record_for_tuning` on,
+each session records enough to see which cases happen in real calls
+(pop-out and compact windows, screen-share toolbars, calling from a chat):
+
+- every look says which window it captured (`window_id`, the title in
+  `window`) and `pick`: what the rule picked and what it passed over.
+- `looks.jsonl` gets the full window list (`windows`: owner, title, pid,
+  size, layer, front-to-back order) when the set of windows changes (at
+  most every 5 s) and every 30 s.
+- `windows/<look>-<window>.jpg` is a full-size picture of every Teams
+  window, and `windows/<look>-<window>-thumb.jpg` a 320 px thumbnail of up
+  to 12 other windows, taken when a Teams window appeared, went, changed
+  title or size, or moved in the Teams stacking order, and every 30 s.
+- full frames are also saved when the captured window's size changes
+  (before, a look that found "the same thing" within 10 s reused the last
+  picture, so a new layout with no ring went unsaved). Pictures are saved
+  whether or not a ring, name or call is found.
+
+All of it is local, in the session folder. It includes other apps'
+windows, so keep that folder out of any backup that leaves the computer
+(e.g. the sessions backup script) unless that's intended, and turn Record
+for tuning off afterwards.
+
 ## Diagnostics pane (frontend `DiagnosticsPane.tsx`)
 
 A real-time, separate view into *how* each transcript line got its
