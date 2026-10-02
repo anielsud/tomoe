@@ -3,7 +3,7 @@
 ## Project Overview
 
 Local-first speech-to-text desktop application, built for Linux; macOS
-support is in progress (see `docs/macos-support.md`), not yet build-ready.
+support builds and runs on real hardware (see `docs/macos-support.md` for what's left).
 Two modes of operation:
 
 1. **CLI dictation** (`tomoe`) — global hotkey triggers mic capture, transcribes speech, pastes result into the focused window (terminal-aware: Ctrl+Shift+V for terminals, Ctrl+V otherwise)
@@ -11,7 +11,7 @@ Two modes of operation:
 
 - **License:** GPLv3
 - **Language:** Go 1.22+
-- **Target OS:** Ubuntu Linux 24.04+ (X11 primary, Wayland best-effort) — shipping today. macOS — in progress, not yet build-ready.
+- **Target OS:** Ubuntu Linux 24.04+ (X11 primary, Wayland best-effort) — shipping today. macOS — builds and runs (CLI, GUI, meeting mode); remaining work in `docs/macos-support.md`.
 - **Audio:** PipeWire (with PulseAudio compat layer) via malgo/miniaudio
 - **GPU:** NVIDIA CUDA via ONNX Runtime, automatic CPU fallback
 - **GUI:** Wails v2 + React + TypeScript + Vite
@@ -62,7 +62,7 @@ Mic Capturer → StreamCapturer → VAD → Transcribe(lang) → Segment
 - **Signal handler fix**: ONNX Runtime / WebKit install SIGSEGV handlers without `SA_ONSTACK`, crashing Go goroutines on alternate signal stacks. `sigfix.AfterSherpa()` patches this on every frontend-bound method call.
 - **Async session save**: `StopSession()` releases the mutex immediately, emits `session:stopped`, then runs MP3 encoding + session save in a background goroutine.
 - **VAD activity channel**: Coordinator exposes an `Activity()` channel signaled when `vad.IsSpeech()` returns true, used to reset the silence timer during continuous speech (not just on completed segments).
-- **PulseAudio meeting detection**: Simultaneous source-output (mic) + sink-input (speaker) from the same PID reliably indicates an active meeting. cgo bindings to libpulse (`#cgo pkg-config: libpulse`) follow the same pattern as `hotkey_linux.go`: static C globals, thread-locked event loop, `//export` callbacks. Platform identified via native app name or `xdotool` window title matching for browser-based meetings.
+- **PulseAudio meeting detection**: Simultaneous source-output (mic) + sink-input (speaker) from the same PID reliably indicates an active meeting. cgo bindings to libpulse (`#cgo pkg-config: libpulse`) follow the same pattern as `hotkey_linux.go`: static C globals, thread-locked event loop, `//export` callbacks. Platform identified via native app name or `xdotool` window title matching for browser-based meetings. macOS uses the same signal from CoreAudio's per-process input/output flags (`internal/audiosources.ListStreams`, polled once a second in `internal/meeting/detect_darwin.go`), attributing helper processes to their app and ignoring Tomoe's own mic; browser titles come from the window list (Screen Recording permission).
 - **Manual language selection via EngineSet**: `EngineSet` holds a `map[string]Engine` (e.g., "en"→Parakeet, "bn"→Bengali Zipformer). Does NOT implement `Engine` — callers explicitly pick a language via `Get(lang)`. Tray sub-menus provide per-language start items; hotkey press uses the default language. Sessions store language code for re-transcription with a different engine.
 - **Hotword boosting**: sherpa-onnx supports `modified_beam_search` with `HotwordsFile` for Parakeet TDT. Works independently of multilingual. Configurable via `[transcription]` section in config.toml.
 - **macOS speaker naming (in progress)**: not a port of the Linux audio-only clustering approach — macOS has a second, independent naming signal Linux doesn't (Teams' visual active-speaker ring + name label, read via `internal/teamsvideo`). Plan is to keep `internal/speaker`'s embedding+clustering unchanged and *label* a cluster ID with a real name whenever a fresh video hint lands, carrying that label forward for the cluster's later turns — a cluster that never gets a hint still falls back to "Person N" exactly like Linux does today. See `docs/macos-support.md`.
@@ -91,7 +91,7 @@ tomoe-pc/
 │   ├── hotkey/             # Global hotkey (X11 key grabs with lock-mask handling)
 │   ├── langid/             # Spoken language identification (Whisper tiny INT8)
 │   ├── live/               # Live transcription coordinator + per-source pipelines
-│   ├── meeting/            # Automatic meeting detection via PulseAudio cgo bindings
+│   ├── meeting/            # Automatic meeting detection (PulseAudio cgo bindings; CoreAudio polling on macOS)
 │   ├── models/             # Model download and management
 │   ├── notify/             # Desktop notifications (notify-send)
 │   ├── platform/           # Services aggregation layer

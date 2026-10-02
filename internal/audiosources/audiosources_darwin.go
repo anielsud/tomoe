@@ -55,3 +55,36 @@ func ListActive() ([]Source, error) {
 	}
 	return out, nil
 }
+
+// ListStreams returns the apps with a microphone stream running (input)
+// or producing playback (!input), each once, under the regular app that
+// owns them — a browser's audio helper process counts as the browser.
+// Processes with no owning app (system daemons) are left out.
+func ListStreams(input bool) ([]Source, error) {
+	in := C.int32_t(0)
+	if input {
+		in = 1
+	}
+	var cStreams *C.audiosources_stream_t
+	count := C.audiosources_list_streams(in, &cStreams)
+	if count < 0 {
+		return nil, fmt.Errorf("audiosources: failed to query audio processes")
+	}
+	if count == 0 {
+		return nil, nil
+	}
+	defer C.audiosources_free_streams(cStreams, count)
+
+	out := make([]Source, 0, count)
+	for _, s := range unsafe.Slice(cStreams, int(count)) {
+		src := Source{PID: int(s.pid)}
+		if s.name != nil {
+			src.Name = C.GoString(s.name)
+		}
+		if s.bundle_id != nil {
+			src.BundleID = C.GoString(s.bundle_id)
+		}
+		out = append(out, src)
+	}
+	return out, nil
+}

@@ -77,7 +77,7 @@ type MeetingConfig struct {
 	MaxSpeechDuration  float64 `toml:"max_speech_duration"`  // seconds
 	MinSilenceDuration float64 `toml:"min_silence_duration"` // seconds
 	AutoSave           bool    `toml:"auto_save"`            // save session on stop
-	AutoDetect         bool    `toml:"auto_detect"`          // auto-detect meetings via PulseAudio
+	AutoDetect         bool    `toml:"auto_detect"`          // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
