@@ -157,6 +157,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 		duration = times[len(times)-1]
 	}
 	if refPath == "" {
+		writeHintReport(outDir, dir, sess, recorded, nil)
 		return tuneWithoutRef(sess, segs, prep, info, recorded, looks, duration, outDir, began)
 	}
 
@@ -179,6 +180,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	}
 	ref = ref.Shift(refOffset)
 	fmt.Printf("Reference: %d turns, %d speakers; shifted %+.1fs to match the recording\n", len(ref.Turns), len(ref.Speakers()), refOffset)
+	writeHintReport(outDir, dir, sess, recorded, ref)
 
 	sc := &tuneScorer{ref: ref, align: align, turnOf: turnOf, segs: segs, info: info}
 

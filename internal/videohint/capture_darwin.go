@@ -18,6 +18,7 @@ const captureSupported = true
 func captureWindow(source string) (fr *frame, platform meeting.Platform, window string, stage EventStage, detail string) {
 	var id teamsvideo.WindowID
 	var pick string
+	var pointsWidth int
 	switch source {
 	case SourceNone:
 		return nil, "", "", StageWindowNotFound, "video hints are off"
@@ -30,13 +31,13 @@ func captureWindow(source string) (fr *frame, platform meeting.Platform, window 
 		if f == nil {
 			return nil, platform, window, StageCaptureFailed, why
 		}
-		return &frame{width: f.Width, height: f.Height, pix: f.Pix, windowID: rec.ID, pick: why}, platform, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", f.Width, f.Height)
+		return &frame{width: f.Width, height: f.Height, pix: f.Pix, windowID: rec.ID, pick: why, scale: captureScale(f.Width, rec.Width)}, platform, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", f.Width, f.Height)
 	default:
 		w, err := teamsvideo.FindWindowByOwner(source)
 		if err != nil {
 			return nil, "", "", StageWindowNotFound, fmt.Sprintf("no %s window on screen", source)
 		}
-		id, window = w.ID, w.Owner
+		id, window, pointsWidth = w.ID, w.Owner, w.Width
 		if w.Title != "" {
 			window += " — " + w.Title
 		}
@@ -48,7 +49,7 @@ func captureWindow(source string) (fr *frame, platform meeting.Platform, window 
 	if err != nil {
 		return nil, platform, window, StageCaptureFailed, err.Error()
 	}
-	return &frame{width: f.Width, height: f.Height, pix: f.Pix, windowID: int(id), pick: pick}, platform, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", f.Width, f.Height)
+	return &frame{width: f.Width, height: f.Height, pix: f.Pix, windowID: int(id), pick: pick, scale: captureScale(f.Width, pointsWidth)}, platform, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", f.Width, f.Height)
 }
 
 // Windows lists the on-screen app windows video hints could watch.
@@ -143,4 +144,13 @@ func pickCallWindow() (teamsvideo.WindowRecord, *teamsvideo.Frame, string, error
 		return *front, frontFrame, "no candidate captured anything but black; using the frontmost: " + strings.Join(notes, "; "), nil
 	}
 	return recs[cands[0]], nil, "every candidate failed to capture: " + strings.Join(notes, "; "), nil
+}
+
+// captureScale is a capture's pixels per point: the captured width over
+// the window's width in points, rounded (1 when the latter is unknown).
+func captureScale(pixels, points int) int {
+	if points <= 0 || pixels <= 0 {
+		return 1
+	}
+	return max(1, (pixels+points/2)/points)
 }

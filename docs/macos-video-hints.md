@@ -375,6 +375,31 @@ read from it. Replayed over the call's saved frames it flags exactly those
 two stretches plus two isolated frames. Keeping the call window visible
 (even partly, on any display) avoids the freeze.
 
+The region is in points and scaled by the capture's pixels per point (a
+Retina capture is 2x), and a freeze only counts once the region has been
+seen changing for that window and size: a region that isn't really the
+timer (a layout or scale this rule doesn't know) never changes, and must
+not read as a window that stopped repainting, which would silently stop
+every name read. A window hidden from the very start of a meeting is
+therefore only caught once it has repainted at least once.
+
+**Checking the hints (`tomoe tune`, hints.txt).** Every `tomoe tune` run
+also reports on the hints themselves, apart from what the clustering made
+of them: which windows were watched (title and size), stages, the
+stretches when the watched window wasn't repainting (from looks marked
+`ui_frozen`, or, for sessions recorded before that check, the saved full
+frames replayed through it) with the names the ring gave and, with
+`--ref`, who the reference has speaking then; and how often the name under
+the ring was the reference's speaker at that second, overall, with the
+window repainting or not, and the worst minutes. On the 82-minute call:
+26% of named looks disagree overall, 53% while the window wasn't
+repainting and 23% while it was. Part of the 23% is the reference's
+coarse timing (a turn runs to the next one's start) and the host's own
+speech, which has no ring, but the worst minutes outside stale stretches
+show the same pattern (one name held while another person speaks): not
+yet explained. hints.txt names people; `tune-*/` and `eval-*/` in the repo
+root are gitignored.
+
 All of it is local, in the session folder. It includes other apps'
 windows, so keep that folder out of any backup that leaves the computer
 (e.g. the sessions backup script) unless that's intended, and turn Record

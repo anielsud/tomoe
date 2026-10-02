@@ -121,7 +121,7 @@ func TestUITrackerFlagsAFrozenTimerRegion(t *testing.T) {
 	t0 := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
 	// A live timer changes every second: never frozen.
 	for s := 0; s < 10; s++ {
-		if d := u.update(frame(byte(s+1)), w, h, t0.Add(time.Duration(s)*time.Second)); d != 0 {
+		if d := u.update(frame(byte(s+1)), w, h, 1, t0.Add(time.Duration(s)*time.Second)); d != 0 {
 			t.Fatalf("live timer reported unchanged for %v at second %d", d, s)
 		}
 	}
@@ -129,15 +129,63 @@ func TestUITrackerFlagsAFrozenTimerRegion(t *testing.T) {
 	// the moment the timer changes.
 	var last time.Duration
 	for s := 10; s < 16; s++ {
-		last = u.update(frame(99), w, h, t0.Add(time.Duration(s)*time.Second))
+		last = u.update(frame(99), w, h, 1, t0.Add(time.Duration(s)*time.Second))
 	}
 	if last < uiFrozenAfter {
 		t.Errorf("a timer unchanged for %v isn't flagged (threshold %v)", last, uiFrozenAfter)
 	}
-	if d := u.update(frame(100), w, h, t0.Add(16*time.Second)); d != 0 {
+	if d := u.update(frame(100), w, h, 1, t0.Add(16*time.Second)); d != 0 {
 		t.Errorf("a changed timer is still reported frozen for %v", d)
 	}
-	if d := u.update(make([]byte, 10), 2, 2, t0.Add(17*time.Second)); d != 0 {
+	if d := u.update(make([]byte, 10), 2, 2, 1, t0.Add(17*time.Second)); d != 0 {
 		t.Errorf("a frame too small for the region reported frozen for %v", d)
+	}
+}
+
+func TestUITrackerNeedsToSeeTheTimerTickFirst(t *testing.T) {
+	// A region that never changes (not the timer: another layout, or a 2x
+	// capture read at 1x) must never read as frozen.
+	const w, h = 400, 120
+	still := make([]byte, w*h*3)
+	var u uiTracker
+	t0 := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
+	for s := 0; s < 30; s++ {
+		if d := u.update(still, w, h, 1, t0.Add(time.Duration(s)*time.Second)); d != 0 {
+			t.Fatalf("a region never seen changing reported frozen for %v", d)
+		}
+	}
+}
+
+func TestUITrackerScalesTheRegion(t *testing.T) {
+	// At 2x the timer's digits sit at twice the point coordinates.
+	const w, h = 800, 240
+	frame := func(tick byte) []byte {
+		p := make([]byte, w*h*3)
+		for y := 2 * (uiY0 + 5); y < 2*(uiY0+20); y++ {
+			for x := 2 * (uiX0 + 40); x < 2*(uiX0+80); x++ {
+				p[(y*w+x)*3] = tick
+			}
+		}
+		return p
+	}
+	var u uiTracker
+	t0 := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
+	u.update(frame(1), w, h, 2, t0)
+	u.update(frame(2), w, h, 2, t0.Add(time.Second)) // seen ticking
+	var last time.Duration
+	for s := 2; s < 9; s++ {
+		last = u.update(frame(2), w, h, 2, t0.Add(time.Duration(s)*time.Second))
+	}
+	if last < uiFrozenAfter {
+		t.Errorf("a stopped 2x timer reported unchanged for only %v", last)
+	}
+	if got := captureScale(3378, 1689); got != 2 {
+		t.Errorf("captureScale(3378, 1689) = %d, want 2", got)
+	}
+	if got := captureScale(1689, 1689); got != 1 {
+		t.Errorf("captureScale(1689, 1689) = %d, want 1", got)
+	}
+	if got := captureScale(1689, 0); got != 1 {
+		t.Errorf("captureScale with no point width = %d, want 1", got)
 	}
 }

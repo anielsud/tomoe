@@ -144,6 +144,7 @@ type frame struct {
 	pix           []byte
 	windowID      int
 	pick          string
+	scale         int // pixels per point of the capture (1 when unknown)
 }
 
 // NewWatcher returns a Watcher; call Run to start it.
@@ -289,7 +290,7 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 		l.Stage, l.Detail = StageNotACall, "no active-call chrome (Leave button not found): likely not a live call"
 		return
 	}
-	if frozen := w.ui.update(fr.pix, fr.width, fr.height, l.Time); frozen >= uiFrozenAfter {
+	if frozen := w.ui.update(fr.pix, fr.width, fr.height, fr.scale, l.Time); frozen >= uiFrozenAfter {
 		// Teams stops repainting a window that's hidden or in the
 		// background (only the video tiles keep moving): the timer, the
 		// speaker highlight and the name labels stay as they were, so
