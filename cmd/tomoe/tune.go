@@ -46,11 +46,10 @@ var tuneCmd = &cobra.Command{
 }
 
 func init() {
-	tuneCmd.Flags().String("ref", "", "Reviewed Teams transcript of the same meeting (required)")
+	tuneCmd.Flags().String("ref", "", "Teams transcript of the same meeting (a raw export works: Teams labels speakers from each person's own audio); without it, only what can be measured without an answer key")
 	tuneCmd.Flags().String("out", "", "Output directory (default tune-<session>)")
 	tuneCmd.Flags().Float64("ref-offset", 0, "Seconds to add to the reference's times to match the recording (default: estimated from the text)")
 	tuneCmd.Flags().Int("threads", 2, "Threads per worker if fingerprints have to be computed")
-	_ = tuneCmd.MarkFlagRequired("ref")
 	rootCmd.AddCommand(tuneCmd)
 }
 
@@ -119,26 +118,6 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 		return fmt.Errorf("session %s has no word timings (recorded before they were saved?)", sess.ID)
 	}
 
-	f, err := os.Open(refPath)
-	if err != nil {
-		return err
-	}
-	ref, err := eval.ParseTeamsTranscript(f, sess.Duration+3600)
-	f.Close()
-	if err != nil {
-		return fmt.Errorf("parsing reference: %w", err)
-	}
-	align := eval.NewWordAlignment(ref, texts)
-	turnOf := make([]int, len(texts))
-	for i := range texts {
-		turnOf[i] = align.RefTurn(i)
-	}
-	if autoOffset {
-		refOffset = estimateRefOffset(ref, turnOf, times)
-	}
-	ref = ref.Shift(refOffset)
-	fmt.Printf("Reference: %d turns, %d speakers; shifted %+.1fs to match the recording\n", len(ref.Turns), len(ref.Speakers()), refOffset)
-
 	// Fingerprints: saved by diarizing during the meeting, else computed.
 	prep, info, err := loadFingerprints(dir)
 	if err != nil {
@@ -177,6 +156,30 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	if duration <= 0 {
 		duration = times[len(times)-1]
 	}
+	if refPath == "" {
+		return tuneWithoutRef(sess, segs, prep, info, recorded, looks, duration, outDir, began)
+	}
+
+	f, err := os.Open(refPath)
+	if err != nil {
+		return err
+	}
+	ref, err := eval.ParseTeamsTranscript(f, sess.Duration+3600)
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("parsing reference: %w", err)
+	}
+	align := eval.NewWordAlignment(ref, texts)
+	turnOf := make([]int, len(texts))
+	for i := range texts {
+		turnOf[i] = align.RefTurn(i)
+	}
+	if autoOffset {
+		refOffset = estimateRefOffset(ref, turnOf, times)
+	}
+	ref = ref.Shift(refOffset)
+	fmt.Printf("Reference: %d turns, %d speakers; shifted %+.1fs to match the recording\n", len(ref.Turns), len(ref.Speakers()), refOffset)
+
 	sc := &tuneScorer{ref: ref, align: align, turnOf: turnOf, segs: segs, info: info}
 
 	strides := []int{info.Stride}

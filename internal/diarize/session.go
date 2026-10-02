@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -340,11 +341,13 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	d.lock.Lock()
 	tl.Through = 1e18 // everything
 	d.timeline = &tl
+	labels := d.labelsLocked(tl.Through)
 	if d.split {
-		d.sess.Segments, _ = session.SplitByDiarization(d.sess.Segments, tl.Turns, d.labelsLocked(tl.Through))
+		d.sess.Segments, _ = session.SplitByDiarization(d.sess.Segments, tl.Turns, labels)
 	} else {
 		d.relabelLocked()
 	}
+	d.settleProvisionalLocked(tl.Turns, labels)
 	id := d.sess.ID
 	d.lock.Unlock()
 	fmt.Printf("session %s: final speaker labels %.1fs after the meeting ended\n", id, time.Since(began).Seconds())
@@ -383,4 +386,42 @@ type StreamInfo struct {
 func (d *SessionDiarizer) Abort() {
 	_, _ = d.stream.Finish()
 	d.stream.Close()
+}
+
+// settleProvisionalLocked gives every line still carrying a provisional
+// label ("New speaker", "Ana?") once the meeting is over a final one: the
+// speaker of the nearest turn within 10 s, else the live label. These are
+// lines no turn overlaps (very short, or in a gap the timeline leaves).
+func (d *SessionDiarizer) settleProvisionalLocked(turns []session.DiarizeSegment, labels map[int]string) {
+	for i := range d.sess.Segments {
+		seg := &d.sess.Segments[i]
+		if !isProvisional(seg.Speaker) {
+			continue
+		}
+		mid := (seg.StartTime + seg.EndTime) / 2
+		best, bestD := -1, 10.0
+		for _, t := range turns {
+			dist := 0.0
+			switch {
+			case mid < t.Start:
+				dist = t.Start - mid
+			case mid > t.End:
+				dist = mid - t.End
+			}
+			if dist < bestD {
+				best, bestD = t.Speaker, dist
+			}
+		}
+		if best >= 0 {
+			seg.Speaker = labels[best]
+		} else {
+			seg.Speaker = seg.LiveLabel()
+		}
+	}
+}
+
+// isProvisional reports whether label is one LabelNewLocked gives while
+// the timeline hasn't placed a voice yet.
+func isProvisional(label string) bool {
+	return strings.HasPrefix(label, NewSpeakerLabel) || strings.HasSuffix(label, "?") || strings.HasSuffix(label, "?)")
 }
