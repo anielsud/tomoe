@@ -197,6 +197,14 @@ signal, read from CoreAudio instead of PulseAudio.
   identified from one of its window titles ("Meet - …"), which needs
   the Screen Recording permission Tomoe already has; otherwise the
   platform is "Unknown" and the recording still starts.
+- Known limits: Safari calls are likely not detected, because WebKit's
+  audio runs in XPC services whose parent is launchd (checked: their ppid
+  is 1), so there is no app to attribute them to; Chrome, Edge, Brave and
+  Firefox helpers are children of the browser (not yet checked live). A
+  browser meeting is only identified while its tab is the window's active
+  one on the current Space, and any title containing "zoom" or "webex"
+  counts, as on Linux. A failed CoreAudio query keeps the previous
+  listing rather than reading as every stream stopping.
 - Checked live: input and output lists, and owning-app resolution, with
   an app playing audio. Not checked: a real call, so whether Teams,
   Zoom or Meet keep the input stream up while muted is still open.

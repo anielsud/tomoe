@@ -237,6 +237,13 @@ func (d *Detector) checkForMeeting() {
 			return
 		}
 	}
+
+	// Nothing has both streams any more: a pending detection died before
+	// its recheck. Left set, it would stop the next detection from
+	// scheduling its own recheck.
+	d.mu.Lock()
+	d.pendingPID = 0
+	d.mu.Unlock()
 }
 
 // checkForMeetingEnd verifies whether the tracked meeting is still active.

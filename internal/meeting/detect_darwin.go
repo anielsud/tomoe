@@ -151,12 +151,28 @@ func pulseListSinkInputs() []streamInfo { return listStreams(false) }
 
 func pulseListSourceOutputs() []streamInfo { return listStreams(true) }
 
+// lastStreams is the most recent successful listing per direction. One
+// failed CoreAudio query must not read as every stream vanishing — that
+// would end a meeting and start another on the next poll — so a failure
+// returns the previous listing.
+var (
+	lastMu      sync.Mutex
+	lastStreams [2][]streamInfo // [0] playback, [1] microphone
+)
+
 func listStreams(input bool) []streamInfo {
-	sources, err := audiosources.ListStreams(input)
-	if err != nil {
-		return nil
+	dir := 0
+	if input {
+		dir = 1
 	}
-	return streamInfos(sources, os.Getpid())
+	sources, err := audiosources.ListStreams(input)
+	lastMu.Lock()
+	defer lastMu.Unlock()
+	if err != nil {
+		return lastStreams[dir]
+	}
+	lastStreams[dir] = streamInfos(sources, os.Getpid())
+	return lastStreams[dir]
 }
 
 // streamInfos converts apps to detector streams under the names
