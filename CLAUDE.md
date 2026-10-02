@@ -70,6 +70,7 @@ Mic Capturer → StreamCapturer → VAD → Transcribe(lang) → Segment
 
 - **Speaker models per language**: `speaker_model = "auto"` uses the English-trained ERes2Net for English meetings and the Mandarin-trained base model otherwise (`models.SpeakerModels` holds each model's diarization settings). `eres2net-base` restores the previous model everywhere.
 - **Diarizing during the meeting** (`diarize_during_meeting`, on by default): `diarize.Stream` segments, fingerprints and reclusters the monitor audio as it arrives, and `diarize.SessionDiarizer` relabels transcript lines from each timeline, so final labels are ready when the meeting ends. `false` restores the previous post-meeting sherpa-onnx subprocess exactly, which also runs by itself if the in-process diarizer can't load. Design: `docs/speaker-pipeline-design.md`; measurements: `docs/speaker-attribution-research.md`.
+- **System audio (macOS)**: the default source "Meeting app (automatic)" (`meetingaudio.AutoSource`) captures the meeting app making sound (Teams, Zoom, Webex, FaceTime, Discord, Slack, or a browser window titled for Meet/Teams/Zoom/Webex), else the whole system until one does, switching live via `audio.SwitchCapturer`. "Everything" is diarized like any other source.
 - **Video hints (macOS)**: `videohint.Watcher` looks at the Teams window often while a speaker needs naming or right after a speaker change, records every look with the session (`looks.jsonl`, thumbnails; shown in the hint timeline), and its name reads are attributed by vote against the diarization timeline and constrain clustering. See `docs/macos-video-hints.md`, including tuning with `record_for_tuning` and `tomoe tune`.
 
 ## Project Structure
@@ -159,7 +160,8 @@ make install-gpu      # Install CUDA toolkit + sherpa-onnx GPU libraries
 
 Config: `~/.config/tomoe/config.toml`
 Models: `~/.local/share/tomoe/models/`
-Sessions: `~/.local/share/tomoe/sessions/`
+Sessions: `~/.local/share/tomoe/sessions/` (each: `session.json`, `audio.m4a`; with diarizing during the meeting `diarization.gob`/`.json`; on macOS `looks.jsonl` + `looks/` thumbnails)
+macOS app log: `~/Library/Logs/Tomoe/tomoe-gui.log` (stdout/stderr and crash traces; check here first after a crash)
 
 ### Default Hotkeys
 

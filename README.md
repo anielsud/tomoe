@@ -123,7 +123,7 @@ silence_timeout = 5.0
 
 [meeting]
 default_sources = 'both'
-monitor_device = ''       # '' = default monitor source, 'none' = mic only
+monitor_device = ''       # Linux: '' = default monitor source; macOS: '' = 'auto' (the meeting app once it makes sound, else everything), 'everything', or an app; 'none' = mic only
 speaker_threshold = 0.65           # cosine similarity for a confident speaker match
 max_speech_duration = 30.0         # longest utterance (s) before it's cut; each utterance gets one speaker label
 min_silence_duration = 0.5         # pause (s) that ends an utterance
@@ -143,6 +143,9 @@ video_hint_learn_interval = 0.35   # macOS: seconds between looks at the meeting
 video_hint_check_interval = 1.0    # macOS: seconds between looks once everyone speaking has a name
 record_for_tuning = false          # record meetings at full detail for `tomoe tune` (more CPU, ~250 MB/hour)
 ```
+
+On macOS the app logs to `~/Library/Logs/Tomoe/tomoe-gui.log` (crash traces
+included; kept to about 20 MB).
 
 Settings missing from your `config.toml` take the defaults above. The `[meeting]`
 speaker settings are reloaded while Tomoe runs; no restart needed. Everything can
