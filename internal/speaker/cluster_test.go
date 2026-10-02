@@ -579,7 +579,7 @@ func TestTrackerSetHintForRecent_MergeDoesNotRenumberUnrelatedClusters(t *testin
 	tracker.Assign([]float32{0, 0, 1, 0}, 2*time.Second) // Person 3, unrelated to the merge below
 
 	clock.advance(time.Second)
-	tracker.Assign([]float32{0, 1, 0, 0}, 2*time.Second)       // re-select Person 2 as most recent
+	tracker.Assign([]float32{0, 1, 0, 0}, 2*time.Second)  // re-select Person 2 as most recent
 	tracker.SetHintForRecent("Daniel Stone", time.Minute) // merges Person 2 into Person 1
 
 	clock.advance(time.Second)

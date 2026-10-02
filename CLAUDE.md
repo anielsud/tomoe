@@ -93,6 +93,8 @@ tomoe-pc/
 │   ├── live/               # Live transcription coordinator + per-source pipelines
 │   ├── meeting/            # Automatic meeting detection (PulseAudio cgo bindings; CoreAudio polling on macOS)
 │   ├── models/             # Model download and management
+│   ├── ocr/                # Open text detection + recognition (PaddleOCR PP-OCRv5 via ONNX Runtime), all platforms
+│   ├── onnxrt/             # Loads ONNX Runtime once for packages that run ONNX models directly
 │   ├── notify/             # Desktop notifications (notify-send)
 │   ├── platform/           # Services aggregation layer
 │   ├── session/            # Session storage, export (MD/TXT/SRT), audio (M4A)
@@ -155,6 +157,7 @@ make install-gpu      # Install CUDA toolkit + sherpa-onnx GPU libraries
 | `google/uuid` | Session IDs | No |
 | `schollz/progressbar` | CLI progress bars | No |
 | `libpulse` (C) | PulseAudio meeting detection (cgo via pkg-config) | Yes |
+| `yalue/onnxruntime_go` | Runs ONNX models directly (own diarizer, OCR) on sherpa-onnx's ONNX Runtime | Yes |
 
 ## Configuration
 

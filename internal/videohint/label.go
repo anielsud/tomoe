@@ -62,17 +62,15 @@ func cropRGB(pix []byte, frameWidth, frameHeight, x, y, w, h int) ([]byte, int, 
 }
 
 // RecognizeLabel crops the name-label region implied by a matched ring
-// and platform Label config out of frame, then runs OCR on it. Returns
-// the recognized text (trimmed of surrounding whitespace is the
-// caller's job, since RecognizeText already returns Vision's raw
-// output) or an error if cropping or OCR failed.
+// and platform Label config out of frame and reads the name in it (the
+// widest line of text there; see recognizeName), cleaned of UI noise.
 func RecognizeLabel(pix []byte, frameWidth, frameHeight int, ring RingMatch, label LabelRegion) (string, error) {
 	x, y, w, h := LabelRect(ring, label)
 	crop, cw, ch, err := cropRGB(pix, frameWidth, frameHeight, x, y, w, h)
 	if err != nil {
 		return "", err
 	}
-	text, err := RecognizeText(crop, cw, ch)
+	text, err := recognizeName(crop, cw, ch)
 	if err != nil {
 		return "", err
 	}
