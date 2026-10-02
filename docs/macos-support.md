@@ -177,6 +177,49 @@ earlier ones.
    `macos-video-hints.md`'s "Still open" for what each platform would
    need.
 
+## Linux and macOS: where they differ
+
+A review of `feature/transcript-quality` (2026-10-02). "Gap" means one
+platform lacks something the other has; the rest are different but
+equivalent approaches. None of the Linux-side gaps change Linux
+transcripts: they are macOS-only additions Linux never had.
+
+**Missing on macOS**
+
+- Automatic meeting detection (`internal/meeting/detect_darwin.go` is a
+  stub, so `auto_detect = true` does nothing) and, for browser meetings,
+  platform identification (Linux reads the window title with `xdotool`).
+- GPU transcription: macOS is CPU-only; the CUDA path (`internal/gpu`,
+  `config.EnsureGPULibs`, `make install-gpu`) is Linux-only.
+- Video hints cover Teams only (item 7 below), and tile names are
+  truncated (item 4).
+
+**Missing on Linux (macOS-only additions)**
+
+- Video-based speaker naming (`internal/teamsvideo`, `internal/videohint`
+  OCR and ring reading, the hint timeline, `looks.jsonl`): Linux only
+  gets "Person N" from voice clustering.
+- System audio choices: "Meeting app (automatic)", "Everything" and the
+  active-app list (`internal/audiosources`). Linux captures a PulseAudio
+  monitor device chosen by name.
+- App bundle packaging, permission checks (Microphone, Screen Recording,
+  Accessibility) and the crash log at `~/Library/Logs/Tomoe/`.
+- In the other direction, Linux has no Wayland global hotkey (X11
+  `XGrabKey` only), and no `.desktop` file, `.deb` or autostart.
+
+**Different but equivalent**
+
+| | Linux | macOS |
+|---|---|---|
+| System audio capture | PulseAudio `.monitor` source; failure is fatal | ScreenCaptureKit (resampled and low-passed); failure falls back to mic only |
+| Global hotkey | X11 `XGrabKey` | Carbon `RegisterEventHotKey` |
+| Typing dictation | `xdotool type` / `wtype` | `osascript` keystrokes (needs Accessibility) |
+| Notifications | `notify-send` | `osascript display notification` |
+| Diarizer priority | nice +10 | `QOS_CLASS_UTILITY` |
+| Tray run loop | goroutine | Cocoa main thread |
+| Setup checks | tools list with `apt` fixes | permissions list, `brew` ffmpeg |
+| Data and config paths | `~/.config/tomoe`, `~/.local/share/tomoe` (XDG) | the same paths, not `~/Library/Application Support` |
+
 ## Background
 
 The video-ring/OCR mechanism, the ScreenCaptureKit gotchas, and the

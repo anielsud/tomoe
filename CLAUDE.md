@@ -3,7 +3,7 @@
 ## Project Overview
 
 Local-first speech-to-text desktop application, built for Linux; macOS
-support is in progress (see `docs/macos-support.md`), not yet build-ready.
+support builds and runs on real hardware (see `docs/macos-support.md` for what's left).
 Two modes of operation:
 
 1. **CLI dictation** (`tomoe`) — global hotkey triggers mic capture, transcribes speech, pastes result into the focused window (terminal-aware: Ctrl+Shift+V for terminals, Ctrl+V otherwise)
@@ -11,7 +11,7 @@ Two modes of operation:
 
 - **License:** GPLv3
 - **Language:** Go 1.22+
-- **Target OS:** Ubuntu Linux 24.04+ (X11 primary, Wayland best-effort) — shipping today. macOS — in progress, not yet build-ready.
+- **Target OS:** Ubuntu Linux 24.04+ (X11 primary, Wayland best-effort) — shipping today. macOS — builds and runs (CLI, GUI, meeting mode); remaining work in `docs/macos-support.md`.
 - **Audio:** PipeWire (with PulseAudio compat layer) via malgo/miniaudio
 - **GPU:** NVIDIA CUDA via ONNX Runtime, automatic CPU fallback
 - **GUI:** Wails v2 + React + TypeScript + Vite

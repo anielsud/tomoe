@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"runtime"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -250,11 +251,7 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println(result.GPU)
 	fmt.Println()
 
-	displayServer := os.Getenv("XDG_SESSION_TYPE")
-	if displayServer == "" {
-		displayServer = "unknown"
-	}
-	fmt.Printf("Display server: %s\n", displayServer)
+	fmt.Printf("Display server: %s\n", displayServerName())
 	fmt.Println()
 
 	if configExisted {
@@ -335,11 +332,7 @@ var statusCmd = &cobra.Command{
 		fmt.Println()
 
 		// Display server
-		ds := os.Getenv("XDG_SESSION_TYPE")
-		if ds == "" {
-			ds = "unknown"
-		}
-		fmt.Printf("Display: %s\n", ds)
+		fmt.Printf("Display: %s\n", displayServerName())
 		fmt.Println()
 
 		// Daemon
@@ -721,4 +714,17 @@ var configCmd = &cobra.Command{
 		fmt.Print(string(data))
 		return nil
 	},
+}
+
+// displayServerName is the session type for status output: X11/Wayland
+// from XDG_SESSION_TYPE on Linux, "macOS" on macOS (no such variable
+// there), "unknown" when neither says.
+func displayServerName() string {
+	if ds := os.Getenv("XDG_SESSION_TYPE"); ds != "" {
+		return ds
+	}
+	if runtime.GOOS == "darwin" {
+		return "macOS"
+	}
+	return "unknown"
 }
