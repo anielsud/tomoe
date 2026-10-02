@@ -383,6 +383,11 @@ var modelDownloadCmd = &cobra.Command{
 		if err := mgr.DownloadSpeakerModels(speakerCfg.Meeting.SpeakerModel, speakerCfg.MeetingLanguages(), force, cliDownloadProgress()); err != nil {
 			return err
 		}
+		if speakerCfg.Meeting.VideoHintsOn() {
+			if err := mgr.DownloadOCRModels(force, cliDownloadProgress()); err != nil {
+				return err
+			}
+		}
 		if streaming {
 			if err := mgr.DownloadEnglishStreaming(force, cliDownloadProgress()); err != nil {
 				return err

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"sync"
 	"time"
@@ -139,6 +140,13 @@ type MeetingConfig struct {
 
 // VideoHintTiming is VideoHintLearnInterval and VideoHintCheckInterval
 // as durations, with defaults for unset values.
+// VideoHintsOn reports whether video hints run: on macOS (the only platform
+// that captures the meeting window) unless switched off. Its text-reading
+// models are only fetched then.
+func (m MeetingConfig) VideoHintsOn() bool {
+	return runtime.GOOS == "darwin" && m.VideoHintWindow != "none"
+}
+
 func (m MeetingConfig) VideoHintTiming() (learn, check time.Duration) {
 	def := DefaultConfig().Meeting
 	l, c := m.VideoHintLearnInterval, m.VideoHintCheckInterval

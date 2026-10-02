@@ -292,6 +292,7 @@ type engineBundle struct {
 // each piece as optional except engines, which StartSession requires.
 func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
 	b := engineBundle{modelMgr: models.NewManager(cfg.Transcription.ModelPath)}
+	videohint.SetOCRModels(status.OCRModelPath(models.OCRDetector), status.OCRModelPath(models.OCRRecognizer))
 
 	// Create transcription engine if models are ready
 	if status.Ready() {

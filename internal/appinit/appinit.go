@@ -66,6 +66,12 @@ func EnsureInitialized(onProgress models.ProgressFunc) (*Result, error) {
 	if err := mgr.DownloadSpeakerModels(cfg.Meeting.SpeakerModel, cfg.MeetingLanguages(), false, onProgress); err != nil {
 		fmt.Printf("Warning: %v (meetings will use the base speaker model)\n", err)
 	}
+	// Not fatal: video hints read no names until they're there.
+	if cfg.Meeting.VideoHintsOn() {
+		if err := mgr.DownloadOCRModels(false, onProgress); err != nil {
+			fmt.Printf("Warning: %v (video hints will read no names)\n", err)
+		}
+	}
 	// Only two-pass uses the streaming model, and it's off by default.
 	// Not fatal: sessions fall back to single-pass without it.
 	if cfg.Transcription.TwoPass {

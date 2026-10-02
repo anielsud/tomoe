@@ -3,6 +3,8 @@ package models
 import (
 	"archive/tar"
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -357,5 +359,32 @@ func TestPruneEnglishStreamingKeepsOnlyInt8Model(t *testing.T) {
 	}
 	if !NewManager(modelDir).Check().EnglishStreamingReady {
 		t.Error("streaming model no longer complete after pruning")
+	}
+}
+
+func TestDownloadVerifiedKeepsOnlyMatchingFiles(t *testing.T) {
+	body := []byte("model bytes")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write(body) }))
+	defer srv.Close()
+	dir := t.TempDir()
+	dest := filepath.Join(dir, "m.onnx")
+	sum := sha256.Sum256(body)
+
+	if err := downloadVerified(srv.URL, dest, hex.EncodeToString(sum[:]), "test", nil); err != nil {
+		t.Fatalf("matching checksum: %v", err)
+	}
+	if got, _ := os.ReadFile(dest); string(got) != string(body) {
+		t.Fatalf("kept %q, want %q", got, body)
+	}
+
+	other := filepath.Join(dir, "bad.onnx")
+	if err := downloadVerified(srv.URL, other, strings.Repeat("0", 64), "test", nil); err == nil {
+		t.Fatal("a checksum mismatch was accepted")
+	}
+	if _, err := os.Stat(other); !os.IsNotExist(err) {
+		t.Error("a file with the wrong checksum was left in place")
+	}
+	if left, _ := filepath.Glob(filepath.Join(dir, "*.part")); len(left) != 0 {
+		t.Errorf("temporary files left behind: %v", left)
 	}
 }
