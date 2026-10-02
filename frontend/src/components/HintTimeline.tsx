@@ -15,6 +15,7 @@ const STAGE_LABEL: Record<string, string> = {
   frame_captured: 'captured',
   not_a_call: 'not a call',
   blank_capture: 'window captured black',
+  ui_frozen: 'window not repainting',
   no_rule: 'no rule',
   ring_matched: 'ring',
   no_ring_match: 'no ring',
@@ -27,7 +28,7 @@ const STAGE_LABEL: Record<string, string> = {
 
 function stageClass(l: LookView): string {
   if (l.usable) return 'hint-ok';
-  if (l.stage === 'ambiguous_ring' || l.stage === 'no_ring_match' || l.stage === 'ocr_miss' || l.stage === 'blank_capture') return 'hint-fail';
+  if (l.stage === 'ambiguous_ring' || l.stage === 'no_ring_match' || l.stage === 'ocr_miss' || l.stage === 'blank_capture' || l.stage === 'ui_frozen') return 'hint-fail';
   return 'hint-idle';
 }
 

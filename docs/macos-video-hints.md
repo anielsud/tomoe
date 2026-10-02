@@ -358,6 +358,23 @@ were passed over and why. A frame that is all black gets the stage
 frames: both compact-view frames are blank, the call window shows its
 controls, and the Calendar window is readable without them.
 
+**Stale hints from a window Teams isn't repainting (found by replaying
+that call against Teams' transcript):** when the call window is hidden or
+in the background (behind the compact view or another window), Teams
+stops repainting its interface: the call timer, the speaker highlight and
+the name labels freeze, while the video tiles keep moving. Two stretches
+of the 82-minute call (10:12:58-10:18:54 and 10:26:30-10:30:55, 621 s in
+all) had a timer that never changed, and in both the highlight sat on one
+person while others spoke (Teams' transcript has three speakers in the
+second one; the ring said the same name for every look). Those stale reads
+were also what the clustering constraints split on (see
+speaker-attribution-research.md). The watcher now hashes the timer region
+at the toolbar's left edge each look; unchanged for 4 s means the
+interface isn't repainting, the look is marked `ui_frozen` and no name is
+read from it. Replayed over the call's saved frames it flags exactly those
+two stretches plus two isolated frames. Keeping the call window visible
+(even partly, on any display) avoids the freeze.
+
 All of it is local, in the session folder. It includes other apps'
 windows, so keep that folder out of any backup that leaves the computer
 (e.g. the sessions backup script) unless that's intended, and turn Record
