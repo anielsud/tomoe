@@ -232,6 +232,25 @@ clipboard = true
 	}
 }
 
+func TestVideoHintConstraintsOffByDefaultAndSaved(t *testing.T) {
+	if DefaultConfig().Meeting.VideoHintConstraints {
+		t.Error("VideoHintConstraints defaults to true; the replay measured it worse than off")
+	}
+	path := filepath.Join(t.TempDir(), "config.toml")
+	cfg := DefaultConfig()
+	cfg.Meeting.VideoHintConstraints = true
+	if err := Save(cfg, path); err != nil {
+		t.Fatal(err)
+	}
+	got, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.Meeting.VideoHintConstraints {
+		t.Error("video_hint_constraints = true didn't survive a save and load (the way back)")
+	}
+}
+
 func TestSessionDir(t *testing.T) {
 	t.Setenv("XDG_DATA_HOME", "/custom/data")
 	got := SessionDir()

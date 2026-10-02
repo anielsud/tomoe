@@ -191,6 +191,9 @@ func planApply(old, next *config.Config) applyPlan {
 	if old.Meeting.VideoHintWindow != next.Meeting.VideoHintWindow {
 		p.later = append(p.later, "Video hint window (the hint timeline switches it at once)")
 	}
+	if old.Meeting.VideoHintConstraints != next.Meeting.VideoHintConstraints {
+		p.later = append(p.later, "Video hint clustering constraints")
+	}
 	if old.Meeting.RecordForTuning != next.Meeting.RecordForTuning {
 		p.later = append(p.later, "Record for tuning")
 	}

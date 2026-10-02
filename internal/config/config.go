@@ -126,6 +126,15 @@ type MeetingConfig struct {
 	// captured, for writing one from its saved frames.
 	VideoHintWindow string `toml:"video_hint_window"`
 
+	// VideoHintConstraints lets the meeting window's name reads split and
+	// merge the diarizer's clusters (diarize.applyHintConstraints). Off by
+	// default: replayed against a Teams transcript of an 82-minute,
+	// 5-speaker call (docs/speaker-attribution-research.md) it cost about
+	// 4 points of speaker accuracy and more than doubled wrong names;
+	// names still come from the vote either way. true restores the
+	// previous behavior.
+	VideoHintConstraints bool `toml:"video_hint_constraints"`
+
 	VideoHintLearnInterval float64 `toml:"video_hint_learn_interval"`
 	VideoHintCheckInterval float64 `toml:"video_hint_check_interval"`
 

@@ -392,6 +392,44 @@ reconstruction take about 5 s. Our diarizer embeds every 10 s window per
 local speaker (4841 embeddings for the hour), so it does more of that work
 than sherpa. Fewer or shorter embeddings are the lever if it's to ship.
 
+## Video hints, tuned on a real meeting (2026-10-02)
+
+`tomoe tune` on a session recorded with Record for tuning (82 minutes, 5
+speakers, Teams window in gallery, speaker and screen-share layouts)
+against Teams' own transcript of the same meeting (72 minutes overlap, the
+reference shifted +633 s to match). Scored by word on the final labels.
+Teams labels each speaker from their own audio, so it's a reliable key; the
+host's own words are labeled "You" by Tomoe (23% of the words), which the
+scorer counts as unnamed, so the "none" column is almost entirely that and
+about 77% is the most "right" can reach.
+
+| Setting | Speakers right | Names right / wrong | Hint CPU |
+|---|---|---|---|
+| Defaults (clustering constraints on, looks every 0.35 s) | 92.8% | 70.0% / 5.7% | 8.2% |
+| Constraints off, same looks | 96.8% | 72.5% / 2.6% | 8.2% |
+| Constraints off, one look every 1 s | 96.8% | 73.5% / 2.4% | 2.6% |
+| Constraints off, one look every 2 s | 96.8% | 73.5% / 2.4% | 1.4% |
+| Constraints off, one look every 5 s | 96.8% | 72.4% / 3.5% | 0.6% |
+
+- **The clustering constraints hurt**: with them on, speaker accuracy was
+  92–93.6% against 96.5–96.8% with them off at every stride and look rate
+  tried, and wrong names rose from about 2.5% to 5.5–6%. They were
+  "reasoned, not tuned" until now. `video_hint_constraints` (default
+  false) controls them; names are still voted onto clusters either way.
+- **The vote rules barely matter**: lag, reads, share and bucket changes
+  moved names right by under 1 point (73.4–73.5% across the top 20).
+- **Looks can be much sparser for the saved transcript**: one look every
+  1–2 s loses nothing against every 0.35 s and costs 2.6% / 1.4% of a core
+  instead of 8.2%. Every 5 s loses about 1 point of names. This is the
+  final transcript only; the live ticker and early labels do depend on how
+  often it looks, which wasn't measured.
+- **Stride** (constraints off): 96.8% at 1, 96.7% at 2, 96.5% at 3, 96.1%
+  at 5, as in the earlier replay.
+- **Limits**: one meeting; two of the five speakers (Teams: 270 and 178
+  words of about 18,000) barely spoke, so their accuracy is noisy; the
+  first 10:33 of the recording has no reference and isn't scored; Teams'
+  transcript is itself automatic.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time

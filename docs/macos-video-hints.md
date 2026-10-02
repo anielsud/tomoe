@@ -257,7 +257,8 @@ Labels read "Person N (Name)"; a user rename shows the name alone. A
 line not yet covered by the timeline shows the latest read during it,
 provisionally ("Ana?").
 
-**Clustering constraints** (`applyHintConstraints`, every recluster):
+**Clustering constraints** (`applyHintConstraints`, every recluster; off
+by default, `video_hint_constraints = true` turns them on):
 window-speakers active alone at a hint's time are tagged with its name.
 A cluster holding two names with at least 2 tags each is split, each
 untagged member going to the nearer name's voice. Clusters whose tags
@@ -337,10 +338,11 @@ emitted after it lands.
 - **Rules for other apps.** Zoom, Meet and Webex windows can be watched
   and their frames collected, but nothing is read from them until each
   has a rule (ring color and shape, label position, call chrome).
-- **Not measured yet.** The vote thresholds, the 0.5 s ring lag and the
-  clustering constraints are reasoned, not tuned: tuning them needs a
-  session recorded with Record for tuning and a reviewed transcript of it,
-  replayed with `tomoe tune` (see "Tuning the numbers").
+- **Tuned once.** The vote thresholds and the ring lag barely matter, and
+  the clustering constraints made things worse (speakers 92.8% against
+  96.8% without them, wrong names 5.7% against 2.6%), so they are off
+  unless `video_hint_constraints = true`. One 82-minute, 5-speaker meeting;
+  see docs/speaker-attribution-research.md.
 - **Speaker-view detection** relies on Teams' gallery background
   brightness and the label's position, calibrated on one display.
 - **Truncated names.** Teams' tiles often truncate long names; the

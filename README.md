@@ -138,6 +138,7 @@ speaker_model = 'auto'             # voice model: 'auto' (English-trained for En
 diarize_during_meeting = true      # work out who spoke when while recording; false = the previous pass after the meeting
 diarize_stride = 2                 # with it on: fingerprint every Nth analysis window; sets CPU use during the call (higher = less)
 diarize_recluster = 10             # with it on: seconds between label updates
+video_hint_constraints = false      # macOS: true lets video hints split/merge speaker clusters (measured worse: see docs/speaker-attribution-research.md)
 video_hint_window = ''             # macOS: window to read speakers from: '' = Teams meeting, 'none' = off, or an app's name (frames kept for a future rule)
 video_hint_learn_interval = 0.35   # macOS: seconds between looks at the meeting window while a speaker needs naming
 video_hint_check_interval = 1.0    # macOS: seconds between looks once everyone speaking has a name

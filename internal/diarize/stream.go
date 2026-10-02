@@ -30,6 +30,10 @@ type StreamConfig struct {
 	// stream time; reclusters split and merge clusters by them (see
 	// applyHintConstraints).
 	Hints func() []Hint
+	// HintConstraints applies Hints as clustering constraints (split and
+	// merge clusters by name); otherwise names are only voted onto the
+	// clusters afterwards.
+	HintConstraints bool
 	// OnSpeakerChange, if set, is called when a window shows a voice
 	// starting that wasn't talking just before: a cheap, early speaker
 	// change signal, before any clustering. On the Stream's goroutine;
@@ -294,7 +298,7 @@ func (s *Stream) recluster(final bool) Timeline {
 		if s.cfg.Params.MergeSimilarity > 0 {
 			clusters = p.MergeClusters(clusters, s.cfg.Params.MergeSimilarity)
 		}
-		if s.cfg.Hints != nil {
+		if s.cfg.Hints != nil && s.cfg.HintConstraints {
 			if hints := s.cfg.Hints(); len(hints) > 0 {
 				relaxed := max(0.2, s.cfg.Params.MergeSimilarity-0.2)
 				clusters = applyHintConstraints(embs, clusters, hintedPairs(p, hints), relaxed)
