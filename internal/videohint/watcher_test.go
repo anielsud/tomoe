@@ -77,3 +77,28 @@ func TestSigDiffTellsLayoutFromMotion(t *testing.T) {
 		t.Errorf("incomparable signatures differ by %v, want 255", d)
 	}
 }
+
+func TestIsBlank(t *testing.T) {
+	const w, h = 200, 100
+	black := make([]byte, w*h*3)
+	if !isBlank(black, w, h) {
+		t.Error("an all-black frame isn't blank")
+	}
+	faint := make([]byte, w*h*3)
+	for i := range faint {
+		faint[i] = 5 // codec noise floor
+	}
+	if !isBlank(faint, w, h) {
+		t.Error("a near-black frame isn't blank")
+	}
+	dark := make([]byte, w*h*3)
+	for i := range dark {
+		dark[i] = 29 // Teams' dark stage background
+	}
+	if isBlank(dark, w, h) {
+		t.Error("Teams' dark stage background counts as blank")
+	}
+	if isBlank(nil, 0, 0) {
+		t.Error("an empty frame counts as blank")
+	}
+}

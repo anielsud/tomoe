@@ -333,6 +333,28 @@ each session records enough to see which cases happen in real calls
   look (about 0.35 s). Pictures are saved whether or not a ring, name or
   call is found.
 
+**First real call (2026-10-02) found:**
+
+- The main call window captures cleanly, even when hidden behind another
+  window. Occlusion is not a problem.
+- Teams' **"Meeting compact view"**, a floating panel (window layer 19,
+  about 690x250), is found at the right size but **captures entirely
+  black**. It was labeled "not a call", and the rule kept watching it for
+  78 s while the full call window sat behind it, so no names were read
+  for that stretch. The window list now records each window's sharing
+  state (0 = the app asked not to be captured) to confirm why.
+- A Calendar or Chat window in front of the call is picked by the title
+  rule and fails the Leave-button check ("not a call") until the call
+  window is in front again; it happened at each click away from the call.
+
+Automatic mode now tries the acceptable Teams windows frontmost first
+(`teamsvideo.MeetingCandidates`) and takes the first that captures
+something and shows the call controls (Leave button); `pick` says which
+were passed over and why. A frame that is all black gets the stage
+`blank_capture` instead of "not a call". Checked against that call's
+frames: both compact-view frames are blank, the call window shows its
+controls, and the Calendar window is readable without them.
+
 All of it is local, in the session folder. It includes other apps'
 windows, so keep that folder out of any backup that leaves the computer
 (e.g. the sessions backup script) unless that's intended, and turn Record

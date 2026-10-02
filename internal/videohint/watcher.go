@@ -272,6 +272,11 @@ func (w *Watcher) look(learning bool) {
 
 // analyze finds the ring and the name in fr.
 func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learning bool) {
+	if isBlank(fr.pix, fr.width, fr.height) {
+		l.Stage = StageBlankCapture
+		l.Detail = fmt.Sprintf("captured %dx%d but every pixel is black: the window can't be read this way (its sharing state is in the window list)", fr.width, fr.height)
+		return
+	}
 	rule, ok := ruleFor(platform)
 	if !ok {
 		l.Stage, l.Detail = StageNoRule, "no rule for this app yet: frames are kept for analysis, nothing is read"
