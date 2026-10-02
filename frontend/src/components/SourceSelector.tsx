@@ -43,7 +43,12 @@ export default function SourceSelector({
         title="Microphone"
       >
         <option value="">No Mic</option>
-        <option value="default">Default Mic</option>
+        <option value="default">
+          Default Mic{(() => {
+            const d = devices.find(d => d.DeviceType === 0 && d.IsDefault);
+            return d ? ` (${d.Name})` : '';
+          })()}
+        </option>
         {devices
           .filter(d => d.DeviceType === 0)
           .map(d => (

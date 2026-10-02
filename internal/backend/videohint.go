@@ -9,6 +9,7 @@ import (
 
 	wailsRuntime "github.com/wailsapp/wails/v2/pkg/runtime"
 
+	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/diarize"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
@@ -384,4 +385,59 @@ func (a *App) CurrentAudioSource() string {
 	a.videoHintMu.Lock()
 	defer a.videoHintMu.Unlock()
 	return a.audioSource
+}
+
+// MicSilentEvent is sent ("audio:mic-silent") when the recording's mic has
+// delivered nothing for a while: usually the wrong device (a closed
+// laptop's built-in mic as the system default, say).
+type MicSilentEvent struct {
+	Device  string  `json:"device"`
+	Seconds float64 `json:"seconds"`
+}
+
+// micSilentAfter is how long a silent mic goes before the warning.
+const micSilentAfter = 20 * time.Second
+
+// watchMic warns the frontend when the mic goes silent for micSilentAfter,
+// and clears the warning ("audio:mic-ok") when sound returns.
+func (a *App) watchMic(ctx context.Context, c *live.Coordinator, device string) {
+	name := micName(device)
+	warned := false
+	t := time.NewTicker(5 * time.Second)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			quiet := c.MicQuietFor()
+			switch {
+			case !warned && quiet >= micSilentAfter:
+				warned = true
+				fmt.Printf("mic %q: no signal for %.0fs\n", name, quiet.Seconds())
+				wailsRuntime.EventsEmit(a.ctx, "audio:mic-silent", MicSilentEvent{Device: name, Seconds: quiet.Seconds()})
+			case warned && quiet < 5*time.Second:
+				warned = false
+				wailsRuntime.EventsEmit(a.ctx, "audio:mic-ok", name)
+			}
+		}
+	}
+}
+
+// micName is the device a mic selection records from: "default" is the
+// system's default input, named.
+func micName(device string) string {
+	if device != "default" {
+		return device
+	}
+	devices, err := audio.ListDevices()
+	if err != nil {
+		return "the default mic"
+	}
+	for _, d := range devices {
+		if d.IsDefault && d.DeviceType == audio.Input {
+			return d.Name + " (the system default)"
+		}
+	}
+	return "the default mic"
 }

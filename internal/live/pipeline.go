@@ -178,6 +178,9 @@ func (c *Coordinator) processWindow(st *sourceState, window []float32) {
 	if st.source == SourceMonitor && c.cfg.MonitorAudio != nil {
 		c.cfg.MonitorAudio(window, c.elapsed())
 	}
+	if st.source == SourceMic && hasSignal(window) {
+		c.micHeardAt.Store(c.now().UnixNano())
+	}
 	// Feed window to VAD (must be exactly windowSize)
 	if len(window) == vadWindowSize {
 		vadBegan := time.Now()
@@ -688,4 +691,16 @@ func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, durat
 	}
 
 	return "Other", ""
+}
+
+// hasSignal reports whether a window holds anything above about -80
+// dBFS: a live mic picks up at least room noise, a disabled one sends
+// zeros.
+func hasSignal(window []float32) bool {
+	for _, v := range window {
+		if v > 1e-4 || v < -1e-4 {
+			return true
+		}
+	}
+	return false
 }

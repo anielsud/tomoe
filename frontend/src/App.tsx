@@ -25,6 +25,16 @@ function App() {
   // StartSession, ...) before the engines they depend on actually exist.
   const [initializing, setInitializing] = useState(true);
   const [view, setView] = useState<View>('live');
+  // Set while the recording's mic has delivered nothing for a while.
+  const [micSilent, setMicSilent] = useState<string | null>(null);
+  useEffect(() => {
+    const offs = [
+      EventsOn('audio:mic-silent', (e: { device: string }) => setMicSilent(e.device)),
+      EventsOn('audio:mic-ok', () => setMicSilent(null)),
+      EventsOn('session:stopped', () => setMicSilent(null)),
+    ];
+    return () => offs.forEach(off => off());
+  }, []);
   // The saved session the hint timeline shows; undefined = the current one.
   const [hintSession, setHintSession] = useState<string | undefined>(undefined);
   const [micDevice, setMicDevice] = useState('default');
@@ -274,6 +284,12 @@ function App() {
 
       {view === 'live' && (
         <>
+          {micSilent && (
+            <div className="mic-warning" role="alert">
+              No sound from the mic ({micSilent}) for 20 seconds. If you're talking, it's probably the wrong mic: stop and pick the one you're using.
+              <button className="btn btn-secondary btn-sm" onClick={() => setMicSilent(null)}>Dismiss</button>
+            </div>
+          )}
           {systemAudioMode === 'auto' && <HintTicker onOpen={() => { setHintSession(undefined); setView('videohints'); }} />}
           <TranscriptPane
             segments={segments}

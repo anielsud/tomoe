@@ -217,6 +217,19 @@ body {
 .hint-fail { color: var(--primary); }
 .hint-idle { color: var(--text-dim); }
 
+/* Silent-mic warning on the live view */
+.mic-warning {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 16px;
+  background: #4a2a1a;
+  color: #f0c8a0;
+  border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+
 /* Click-to-rename speakers in the transcript */
 .speaker-renamable { cursor: pointer; }
 .speaker-renamable:hover { text-decoration: underline; }
