@@ -56,3 +56,29 @@ func TestReclusterSpacingAndThin(t *testing.T) {
 		t.Errorf("thin below the limit changed the count: %d", len(p))
 	}
 }
+
+// Frames covered only by windows without a fingerprint have no votes;
+// they must stay unlabeled, not fall to cluster 0.
+func TestTurnsLeaveUnvotedFramesUnlabeled(t *testing.T) {
+	always := [][]int8{{1}, {1}, {1}, {1}}
+	p := &Prepared{
+		Meta:       Meta{SampleRate: 1, WindowSize: 4, WindowShift: 1, ReceptiveFieldSize: 1, ReceptiveFieldShift: 1},
+		NumSamples: 6,
+		Labels:     [][][]int8{always, always, always}, // frames 0-3, 1-4, 2-5
+		Pairs:      []ChunkSpeaker{{Chunk: 0, Speaker: 0}},
+		Embeddings: make([][]float32, 1),
+	}
+	// One fingerprint (window 0, cluster 1); cluster 0 exists but owns nothing.
+	segs := p.ReconstructClusters([]int{1}, Params{})
+	for _, s := range segs {
+		if s.Speaker == 0 {
+			t.Errorf("unvoted frames went to cluster 0: %+v", s)
+		}
+		if s.Speaker == 1 && s.End > 4.5 {
+			t.Errorf("cluster 1's turn %+v runs past the frames its window covers (frames 0-3, ending at 4.5)", s)
+		}
+	}
+	if len(segs) == 0 {
+		t.Error("the fingerprinted window's frames got no turn")
+	}
+}

@@ -294,9 +294,29 @@ that; *delay* is from the end of a word to its first label.
   change afterwards.
 - **Every 2nd window costs 0.3 points** for half the fingerprint work;
   every 5th costs 0.7 points for a fifth.
-- Every 3rd window is an unexplained outlier: its final score is normal
-  but first-shown labels are much worse and relabel 11% of words. To
-  investigate before relying on any stride.
+- Every 3rd (and 4th) window looked like an outlier: normal final score,
+  but first-shown labels 88% and 11% of words relabeled. **Cause
+  (found 2026-10-02):** a frame none of whose covering windows were
+  fingerprinted has no votes, and the cluster sort handed it to cluster 0,
+  an arbitrary speaker. The newest frames at a recluster are covered by
+  only the last window or two, and windows start every 1 s while
+  reclusters fall every 10 s, so strides dividing 10 (2, 5) always
+  fingerprint the last window and strides 3 and 4 mostly don't. Relabels
+  were spread evenly across the meeting, mostly "cluster 0 → the real
+  speaker". **Fix:** frames with no votes stay unlabeled until a later
+  recluster has a fingerprint for them. Rerun (first shown / relabeled):
+
+  | Stride | 10 s recluster, before | 10 s, after | 30 s, after |
+  |---|---|---|---|
+  | 2 | 96.9% / 2.2% | 96.9% / 2.2% | 97.5% / 1.1% |
+  | 3 | 87.9% / 10.9% | 94.8% / 4.2% | 96.1% / 2.3% |
+  | 4 | 87.7% / 11.1% | 94.8% / 4.2% | 96.7% / 1.8% |
+  | 5 | 96.1% / 2.0% | 96.2% / 1.8% | 96.6% / 1.1% |
+
+  Final scores did not move at any stride (97.2–97.9%), and stride 1 is
+  untouched. Strides 3 and 4 at 10 s are still about 2 points below 2 and
+  5 on first-shown: their newest frames are labeled a recluster later.
+  The app's default (stride 2, 10 s) was never affected.
 - Without the gap rule (timeline only) final scores drop to 94–94.6%.
 
 The built version (`diarize_during_meeting`, `tomoe eval
