@@ -63,32 +63,6 @@ func TestNameSpeakersVotes(t *testing.T) {
 	}
 }
 
-func TestApplyHintConstraints(t *testing.T) {
-	a, b := []float32{1, 0}, []float32{0, 1}
-	near := func(v []float32) []float32 { return []float32{v[0]*0.9 + 0.1, v[1]*0.9 + 0.1} }
-	embs := [][]float32{a, a, near(a), b, b, near(b)}
-
-	// One cluster holding two confidently named people splits, and each
-	// unnamed member follows the nearer voice.
-	split := applyHintConstraints(embs, []int{0, 0, 0, 0, 0, 0}, map[int]string{0: "Ana", 1: "Ana", 3: "Ben", 4: "Ben"}, 0.3)
-	if split[0] != split[2] || split[3] != split[5] || split[0] == split[3] {
-		t.Errorf("split = %v, want Ana's and Ben's windows apart", split)
-	}
-
-	// Two clusters both named Ana merge if their voices are similar enough.
-	embs2 := [][]float32{a, a, near(a), near(a)}
-	merged := applyHintConstraints(embs2, []int{0, 0, 1, 1}, map[int]string{0: "Ana", 1: "Ana", 2: "Ana", 3: "Ana"}, 0.3)
-	if merged[0] != merged[2] {
-		t.Errorf("merged = %v, want one cluster", merged)
-	}
-	// ...but not when the voices are far apart.
-	embs3 := [][]float32{a, a, b, b}
-	kept := applyHintConstraints(embs3, []int{0, 0, 1, 1}, map[int]string{0: "Ana", 1: "Ana", 2: "Ana", 3: "Ana"}, 0.3)
-	if kept[0] == kept[2] {
-		t.Errorf("merged dissimilar voices on a name alone: %v", kept)
-	}
-}
-
 func TestNewVoiceAtEnd(t *testing.T) {
 	frames := func(spk0Until, spk1From int) [][]int8 {
 		out := make([][]int8, 100) // 10 frames a second

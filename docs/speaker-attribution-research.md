@@ -392,6 +392,79 @@ reconstruction take about 5 s. Our diarizer embeds every 10 s window per
 local speaker (4841 embeddings for the hour), so it does more of that work
 than sherpa. Fewer or shorter embeddings are the lever if it's to ship.
 
+## Video hints, tuned on a real meeting (2026-10-02)
+
+`tomoe tune` on a session recorded with Record for tuning (82 minutes, 5
+speakers, Teams window in gallery, speaker and screen-share layouts)
+against Teams' own transcript of the same meeting (72 minutes overlap, the
+reference shifted +633 s to match). Scored by word on the final labels.
+Teams labels each speaker from their own audio, so it's a reliable key; the
+host's own words are labeled "You" by Tomoe (23% of the words), which the
+scorer counts as unnamed, so the "none" column is almost entirely that and
+about 77% is the most "right" can reach.
+
+| Setting | Speakers right | Names right / wrong | Hint CPU |
+|---|---|---|---|
+| Defaults (clustering constraints on, looks every 0.35 s) | 92.8% | 70.0% / 5.7% | 8.2% |
+| Constraints off, same looks | 96.8% | 72.5% / 2.6% | 8.2% |
+| Constraints off, one look every 1 s | 96.8% | 73.5% / 2.4% | 2.6% |
+| Constraints off, one look every 2 s | 96.8% | 73.5% / 2.4% | 1.4% |
+| Constraints off, one look every 5 s | 96.8% | 72.4% / 3.5% | 0.6% |
+
+- **The clustering constraints hurt**: with them on, speaker accuracy was
+  92–93.6% against 96.5–96.8% with them off at every stride and look rate
+  tried, and wrong names rose from about 2.5% to 5.5–6%. They were
+  "reasoned, not tuned" until now. Removed (2026-10-02): names now reach
+  clusters only through the vote.
+- **Splitting is the harmful half** (same session, default naming rules,
+  one half of the constraints switched on at a time):
+
+  | Constraints | Speakers right | Names right / wrong |
+  |---|---|---|
+  | Neither | 96.8% | 72.5% / 2.6% |
+  | Merge only (clusters dominated by one name, voices at least 0.3 alike) | 96.7% | 72.4% / 2.5% |
+  | Split only (a cluster with two confident names) | 93.0% | 70.2% / 5.2% |
+  | Both, merge threshold raised from 0.3 to 0.5 | 93.0% | 70.2% / 5.2% |
+  | Both (the old default) | 92.8% | 70.0% / 5.7% |
+
+  Merging changed nothing here and raising its threshold changed nothing;
+  the whole loss comes from splitting. The mechanism isn't shown. A name
+  read that is wrong or late (the highlight stays on one person through
+  another's short interjection, as seen at 10:17-10:19 in this call) tags
+  the wrong person's voice, and a cluster with two such names is split.
+  Merge-only scored the same as none, so both halves were removed.
+- **Most of the constraints' damage was stale name reads.** Teams stops
+  repainting a hidden call window (docs/macos-video-hints.md, "Stale hints"),
+  and two stretches of this call (621 s) fed the constraints a highlight
+  frozen on one person. Replayed with the looks from those stretches
+  ignored, as the `ui_frozen` check now does:
+
+  | | Speakers right | Names right / wrong |
+  |---|---|---|
+  | Constraints off | 96.8% | 73.5% / 2.4% |
+  | Constraints on, all looks (before) | 92.8% | 70.0% / 5.7% |
+  | Constraints on, frozen-window looks ignored | 96.3% | 73.1% / 2.7% |
+
+  The gap to "off" falls from 4.0 points to 0.5, but they still didn't
+  help in this meeting, so they were removed outright. Both rules take every tag
+  at face value: the harmful split came from 300 wrong tags (one person's name)
+  against 2622 right ones (another person's) in one cluster, a 10% minority name, which a
+  minimum share for the second name would have blocked (not tried). Worth
+  re-measuring on a meeting where the diarizer over-splits a speaker.
+- **The vote rules barely matter**: lag, reads, share and bucket changes
+  moved names right by under 1 point (73.4–73.5% across the top 20).
+- **Looks can be much sparser for the saved transcript**: one look every
+  1–2 s loses nothing against every 0.35 s and costs 2.6% / 1.4% of a core
+  instead of 8.2%. Every 5 s loses about 1 point of names. This is the
+  final transcript only; the live ticker and early labels do depend on how
+  often it looks, which wasn't measured.
+- **Stride** (constraints off): 96.8% at 1, 96.7% at 2, 96.5% at 3, 96.1%
+  at 5, as in the earlier replay.
+- **Limits**: one meeting; two of the five speakers (Teams: 270 and 178
+  words of about 18,000) barely spoke, so their accuracy is noisy; the
+  first 10:33 of the recording has no reference and isn't scored; Teams'
+  transcript is itself automatic.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time

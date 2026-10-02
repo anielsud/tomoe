@@ -35,7 +35,6 @@ Teams window → capture → call-chrome gate → rings → name(s) → Look (ti
                     hint timeline (live)              ◄───────────┤
                                                                   ▼
                          diarize.SessionDiarizer: votes by time → names
-                                                  constraints   → clustering
 ```
 
 With `diarize_during_meeting = false` (the previous pipeline) a name
@@ -257,17 +256,17 @@ Labels read "Person N (Name)"; a user rename shows the name alone. A
 line not yet covered by the timeline shows the latest read during it,
 provisionally ("Ana?").
 
-**Clustering constraints** (`applyHintConstraints`, every recluster):
-window-speakers active alone at a hint's time are tagged with its name.
-A cluster holding two names with at least 2 tags each is split, each
-untagged member going to the nearer name's voice. Clusters whose tags
-are mostly one name merge if their voices are at least the merge
-similarity minus 0.2 alike.
+Names only ever reach the diarizer's clusters through this vote. An
+earlier version also let name reads split and merge the clusters; replayed
+against Teams' own transcript it made speaker labels worse (stale reads
+from a window Teams wasn't repainting split correct clusters, and with
+clean reads it still gained nothing), so it was removed. The measurements
+are in speaker-attribution-research.md.
 
 ## Tuning the numbers (`tomoe tune`)
 
-The vote rules, the ring lag, the look rate, the fingerprint stride and
-the clustering constraints are tuned from one recorded meeting:
+The vote rules, the ring lag, the look rate and the fingerprint stride
+are tuned from one recorded meeting:
 
 1. Turn on **Record for tuning** (`record_for_tuning = true`) and record a
    real meeting. Hints look at the learning rate throughout and save every
@@ -337,10 +336,10 @@ emitted after it lands.
 - **Rules for other apps.** Zoom, Meet and Webex windows can be watched
   and their frames collected, but nothing is read from them until each
   has a rule (ring color and shape, label position, call chrome).
-- **Not measured yet.** The vote thresholds, the 0.5 s ring lag and the
-  clustering constraints are reasoned, not tuned: tuning them needs a
-  session recorded with Record for tuning and a reviewed transcript of it,
-  replayed with `tomoe tune` (see "Tuning the numbers").
+- **Tuned once.** The vote thresholds and the ring lag barely matter
+  (one 82-minute, 5-speaker meeting; see speaker-attribution-research.md),
+  and one look every 1-2 s loses nothing in the saved transcript against
+  every 0.35 s.
 - **Speaker-view detection** relies on Teams' gallery background
   brightness and the label's position, calibrated on one display.
 - **Truncated names.** Teams' tiles often truncate long names; the
