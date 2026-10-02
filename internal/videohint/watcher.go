@@ -117,7 +117,8 @@ type Watcher struct {
 	thumbSig    []uint8 // the picture last kept of the watched window
 	shots       map[int]*shotState
 	shotCheckAt time.Time
-	invKey      string // the last window list recorded
+	ui          uiTracker // is the window repainting its interface?
+	invKey      string    // the last window list recorded
 	invListAt   time.Time
 	invTeamsKey string // the Teams windows when last pictured
 	invAt       time.Time
@@ -286,6 +287,15 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 		// Not a live call (a chat, a recording page): shown, but nothing
 		// read here is a name.
 		l.Stage, l.Detail = StageNotACall, "no active-call chrome (Leave button not found): likely not a live call"
+		return
+	}
+	if frozen := w.ui.update(fr.pix, fr.width, fr.height, l.Time); frozen >= uiFrozenAfter {
+		// Teams stops repainting a window that's hidden or in the
+		// background (only the video tiles keep moving): the timer, the
+		// speaker highlight and the name labels stay as they were, so
+		// whatever they say is stale, not who is speaking now.
+		l.Stage = StageUIFrozen
+		l.Detail = fmt.Sprintf("the window's interface hasn't repainted for %.0f s (the call timer is unchanged): Teams doesn't update a hidden window, so its speaker highlight is stale", frozen.Seconds())
 		return
 	}
 	began := time.Now()

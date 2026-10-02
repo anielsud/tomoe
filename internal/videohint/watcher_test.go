@@ -1,6 +1,9 @@
 package videohint
 
-import "testing"
+import (
+	"testing"
+	"time"
+)
 
 func TestSameTile(t *testing.T) {
 	a := RingMatch{X: 100, Y: 100, Width: 300, Height: 200}
@@ -100,5 +103,41 @@ func TestIsBlank(t *testing.T) {
 	}
 	if isBlank(nil, 0, 0) {
 		t.Error("an empty frame counts as blank")
+	}
+}
+
+func TestUITrackerFlagsAFrozenTimerRegion(t *testing.T) {
+	const w, h = 400, 120
+	frame := func(tick byte) []byte {
+		p := make([]byte, w*h*3)
+		for y := uiY0 + 5; y < uiY0+20; y++ { // the timer's digits
+			for x := uiX0 + 40; x < uiX0+80; x++ {
+				p[(y*w+x)*3] = tick
+			}
+		}
+		return p
+	}
+	var u uiTracker
+	t0 := time.Date(2026, 10, 2, 10, 0, 0, 0, time.UTC)
+	// A live timer changes every second: never frozen.
+	for s := 0; s < 10; s++ {
+		if d := u.update(frame(byte(s+1)), w, h, t0.Add(time.Duration(s)*time.Second)); d != 0 {
+			t.Fatalf("live timer reported unchanged for %v at second %d", d, s)
+		}
+	}
+	// The same pixels for 6 s: frozen after uiFrozenAfter, and it resumes
+	// the moment the timer changes.
+	var last time.Duration
+	for s := 10; s < 16; s++ {
+		last = u.update(frame(99), w, h, t0.Add(time.Duration(s)*time.Second))
+	}
+	if last < uiFrozenAfter {
+		t.Errorf("a timer unchanged for %v isn't flagged (threshold %v)", last, uiFrozenAfter)
+	}
+	if d := u.update(frame(100), w, h, t0.Add(16*time.Second)); d != 0 {
+		t.Errorf("a changed timer is still reported frozen for %v", d)
+	}
+	if d := u.update(make([]byte, 10), 2, 2, t0.Add(17*time.Second)); d != 0 {
+		t.Errorf("a frame too small for the region reported frozen for %v", d)
 	}
 }
