@@ -341,8 +341,11 @@ each session records enough to see which cases happen in real calls
   about 690x250), is found at the right size but **captures entirely
   black**. It was labeled "not a call", and the rule kept watching it for
   78 s while the full call window sat behind it, so no names were read
-  for that stretch. The window list now records each window's sharing
-  state (0 = the app asked not to be captured) to confirm why.
+  for that stretch. Cause, confirmed live in a second call: the window
+  server lists its sharing state as 0 (the app asked not to be captured),
+  while the call window is 1 (readable), so the black capture is Teams'
+  choice, not a Tomoe bug, and ScreenCaptureKit would be expected to
+  honor it too. The call window behind it still captures and is read.
 - A Calendar or Chat window in front of the call is picked by the title
   rule and fails the Leave-button check ("not a call") until the call
   window is in front again; it happened at each click away from the call.
