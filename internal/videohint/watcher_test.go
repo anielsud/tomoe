@@ -38,3 +38,42 @@ func TestEncodeJPEGScalesDown(t *testing.T) {
 		t.Fatalf("encodeJPEG: %v", err)
 	}
 }
+
+func TestSigDiffTellsLayoutFromMotion(t *testing.T) {
+	const w, h = 480, 270
+	solid := func(v byte) []byte {
+		p := make([]byte, w*h*3)
+		for i := range p {
+			p[i] = v
+		}
+		return p
+	}
+	a := lumaSig(solid(40), w, h)
+	if d := sigDiff(a, lumaSig(solid(40), w, h)); d != 0 {
+		t.Errorf("identical frames differ by %v", d)
+	}
+	// A small bright patch (a ring or a moving face) stays under keepDiff.
+	small := solid(40)
+	for y := 100; y < 130; y++ {
+		for x := 200; x < 240; x++ {
+			i := (y*w + x) * 3
+			small[i], small[i+1], small[i+2] = 255, 255, 255
+		}
+	}
+	if d := sigDiff(a, lumaSig(small, w, h)); d > keepDiff {
+		t.Errorf("a small patch differs by %v, over keepDiff %v", d, keepDiff)
+	}
+	// Half the window changing (a layout change) is far over it.
+	half := solid(40)
+	for y := 0; y < h/2; y++ {
+		for x := 0; x < w*3; x++ {
+			half[y*w*3+x] = 200
+		}
+	}
+	if d := sigDiff(a, lumaSig(half, w, h)); d <= keepDiff {
+		t.Errorf("half the window changing differs by only %v", d)
+	}
+	if d := sigDiff(a, nil); d != 255 {
+		t.Errorf("incomparable signatures differ by %v, want 255", d)
+	}
+}
