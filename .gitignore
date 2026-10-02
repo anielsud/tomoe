@@ -51,3 +51,7 @@ go.work.sum
 
 # Real meeting recordings and transcripts for evals: private, never committed
 /testdata/private/
+# `tomoe eval` / `tomoe tune` output written in the repo root by default:
+# transcripts and names from real meetings
+/eval-*/
+/tune-*/

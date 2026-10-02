@@ -90,6 +90,11 @@ static int32_t window_owner_pid(CFArrayRef windows, CFIndex i) {
     return dict_get_int(w, kCGWindowOwnerPID);
 }
 
+static int32_t window_sharing_state(CFArrayRef windows, CFIndex i) {
+    CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
+    return dict_get_int(w, kCGWindowSharingState);
+}
+
 static int32_t window_layer(CFArrayRef windows, CFIndex i) {
     CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
     return dict_get_int(w, kCGWindowLayer);
@@ -150,44 +155,56 @@ type WindowID uint32
 // side panel is its own separate window) and isn't empty/"Window"
 // (menu-bar-ish artifacts).
 func FindMeetingWindow() (WindowID, error) {
+	w, _, err := FindMeetingWindowInfo()
+	return WindowID(w.ID), err
+}
+
+// FindMeetingWindowInfo is FindMeetingWindow with the window's details
+// and a sentence saying why it was picked (see PickMeetingWindow).
+func FindMeetingWindowInfo() (WindowRecord, string, error) {
+	recs, err := ListAllWindows()
+	if err != nil {
+		return WindowRecord{}, "", err
+	}
+	i, why := PickMeetingWindow(recs)
+	if i < 0 {
+		return WindowRecord{}, why, fmt.Errorf("teamsvideo: no Microsoft Teams meeting window found")
+	}
+	return recs[i], why, nil
+}
+
+// ListAllWindows returns every on-screen window, of every app and layer,
+// frontmost first.
+func ListAllWindows() ([]WindowRecord, error) {
 	windows := C.list_windows()
 	if C.cfarray_is_null(windows) != 0 {
-		return 0, fmt.Errorf("teamsvideo: CGWindowListCopyWindowInfo returned nil")
+		return nil, fmt.Errorf("teamsvideo: CGWindowListCopyWindowInfo returned nil")
 	}
 	defer C.release_windows(windows)
-
 	n := int(C.window_count(windows))
+	out := make([]WindowRecord, 0, n)
 	for i := 0; i < n; i++ {
 		idx := C.CFIndex(i)
-
-		ownerPtr := C.window_owner_name(windows, idx)
-		if ownerPtr == nil {
-			continue
+		w := WindowRecord{
+			ID:      int(int32(C.window_number(windows, idx))),
+			PID:     int(int32(C.window_owner_pid(windows, idx))),
+			Layer:   int(int32(C.window_layer(windows, idx))),
+			Sharing: int(int32(C.window_sharing_state(windows, idx))),
+			Width:   int(C.window_bounds_width(windows, idx)),
+			Height:  int(C.window_bounds_height(windows, idx)),
+			Order:   i,
 		}
-		owner := C.GoString(ownerPtr)
-		C.free(unsafe.Pointer(ownerPtr))
-
-		if !strings.Contains(strings.ToLower(owner), "teams") {
-			continue
+		if p := C.window_owner_name(windows, idx); p != nil {
+			w.Owner = C.GoString(p)
+			C.free(unsafe.Pointer(p))
 		}
-
-		namePtr := C.window_name(windows, idx)
-		title := ""
-		if namePtr != nil {
-			title = C.GoString(namePtr)
-			C.free(unsafe.Pointer(namePtr))
+		if p := C.window_name(windows, idx); p != nil {
+			w.Title = C.GoString(p)
+			C.free(unsafe.Pointer(p))
 		}
-		if title == "" || strings.HasPrefix(title, "Chat |") || title == "Window" {
-			continue
-		}
-
-		num := int32(C.window_number(windows, idx))
-		if num < 0 {
-			continue
-		}
-		return WindowID(num), nil
+		out = append(out, w)
 	}
-	return 0, fmt.Errorf("teamsvideo: no Microsoft Teams meeting window found")
+	return out, nil
 }
 
 // FindWindowForPID returns the CGWindowID of the largest on-screen,

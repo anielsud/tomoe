@@ -3,10 +3,12 @@ package videohint
 import (
 	"context"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
+	"github.com/sosuke-ai/tomoe-pc/internal/teamsvideo"
 )
 
 // Video hint sources (WatchConfig.Source): SourceAuto finds the Teams
@@ -47,6 +49,12 @@ type WatchConfig struct {
 	// with its own thumbnail (Record for tuning), on the Watcher's
 	// goroutine.
 	OnFullFrame func(id int, jpeg []byte)
+	// OnWindowShot, if set (Record for tuning), switches on the window
+	// inventory: every look lists the windows on screen, and when the set
+	// changes (and every inventoryEvery) it also gets a picture of each
+	// Teams window (full size) and a thumbnail of the others. Called on
+	// the Watcher's goroutine.
+	OnWindowShot func(lookID, windowID int, thumb bool, jpeg []byte)
 }
 
 // Default look intervals.
@@ -68,6 +76,21 @@ const (
 	// A look whose result matches the previous one within this long shares
 	// its thumbnail.
 	sameThumbFor = 10 * time.Second
+	// inventoryEvery is how often the window inventory is recorded again
+	// even if nothing changed; maxInventoryShots caps the pictures taken
+	// of other apps' windows each time.
+	// keepDiff is how different (mean brightness change per cell, 0-255) a
+	// window must look from the last picture kept of it to be kept again;
+	// keepGap is the least time between pictures kept on that account. A
+	// layout change moves most cells a lot; people moving in their tiles,
+	// or a ring jumping, barely does.
+	keepDiff = 12.0
+	keepGap  = time.Second
+	// shotCheckEvery is how often the other Teams windows are looked at.
+	shotCheckEvery    = time.Second
+	inventoryEvery    = 30 * time.Second
+	inventoryMinGap   = 5 * time.Second
+	maxInventoryShots = 12
 )
 
 // Watcher watches the meeting window for who's speaking: it captures
@@ -86,11 +109,20 @@ type Watcher struct {
 	frames        []keptFrame
 
 	// Watcher-goroutine state.
-	nextID  int
-	last    *Look
-	tiles   []tileName
-	thumbID int // the last look that has its own thumbnail
-	thumbAt time.Time
+	nextID      int
+	last        *Look
+	tiles       []tileName
+	thumbID     int // the last look that has its own thumbnail
+	thumbAt     time.Time
+	thumbSig    []uint8 // the picture last kept of the watched window
+	shots       map[int]*shotState
+	shotCheckAt time.Time
+	ui          uiTracker // is the window repainting its interface?
+	call        callCheck // is the window a 1:1 call? (cached)
+	invKey      string    // the last window list recorded
+	invListAt   time.Time
+	invTeamsKey string // the Teams windows when last pictured
+	invAt       time.Time
 }
 
 type keptFrame struct {
@@ -106,10 +138,14 @@ type tileName struct {
 	readAt time.Time
 }
 
-// frame is a captured window, packed RGB.
+// frame is a captured window, packed RGB. windowID and pick say which
+// window it is and why it was chosen (automatic mode).
 type frame struct {
 	width, height int
 	pix           []byte
+	windowID      int
+	pick          string
+	scale         int // pixels per point of the capture (1 when unknown)
 }
 
 // NewWatcher returns a Watcher; call Run to start it.
@@ -130,6 +166,11 @@ func (w *Watcher) SetSource(source string) {
 	w.source, w.sourceChanged = source, true
 	w.mu.Unlock()
 	w.Burst()
+}
+
+// SetOnWindowShot sets WatchConfig.OnWindowShot; call before Run.
+func (w *Watcher) SetOnWindowShot(f func(lookID, windowID int, thumb bool, jpeg []byte)) {
+	w.cfg.OnWindowShot = f
 }
 
 // SetOnFullFrame sets WatchConfig.OnFullFrame; call before Run.
@@ -214,7 +255,13 @@ func (w *Watcher) look(learning bool) {
 	l.Cost.Capture = msSince(l.Time)
 	l.Stage, l.Detail, l.Window = stage, detail, window
 	if fr != nil {
-		l.Width, l.Height = fr.width, fr.height
+		l.WindowID = fr.windowID
+	}
+	if w.cfg.OnWindowShot != nil {
+		w.inventory(&l)
+	}
+	if fr != nil {
+		l.Width, l.Height, l.WindowID, l.Pick = fr.width, fr.height, fr.windowID, fr.pick
 		w.analyze(&l, fr, platform, learning)
 		began := time.Now()
 		w.keepThumb(&l, fr)
@@ -228,6 +275,11 @@ func (w *Watcher) look(learning bool) {
 
 // analyze finds the ring and the name in fr.
 func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learning bool) {
+	if isBlank(fr.pix, fr.width, fr.height) {
+		l.Stage = StageBlankCapture
+		l.Detail = fmt.Sprintf("captured %dx%d but every pixel is black: the window can't be read this way (its sharing state is in the window list)", fr.width, fr.height)
+		return
+	}
 	rule, ok := ruleFor(platform)
 	if !ok {
 		l.Stage, l.Detail = StageNoRule, "no rule for this app yet: frames are kept for analysis, nothing is read"
@@ -237,6 +289,15 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 		// Not a live call (a chat, a recording page): shown, but nothing
 		// read here is a name.
 		l.Stage, l.Detail = StageNotACall, "no active-call chrome (Leave button not found): likely not a live call"
+		return
+	}
+	if frozen := w.ui.update(fr.pix, fr.width, fr.height, fr.scale, l.Time); frozen >= uiFrozenAfter {
+		// Teams stops repainting a window that's hidden or in the
+		// background (only the video tiles keep moving): the timer, the
+		// speaker highlight and the name labels stay as they were, so
+		// whatever they say is stale, not who is speaking now.
+		l.Stage = StageUIFrozen
+		l.Detail = fmt.Sprintf("the window's interface hasn't repainted for %.0f s (the call timer is unchanged): Teams doesn't update a hidden window, so its speaker highlight is stale", frozen.Seconds())
 		return
 	}
 	began := time.Now()
@@ -260,6 +321,10 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 				l.Detail = fmt.Sprintf("speaker view: read %q under the main video", name)
 				return
 			}
+		}
+		// A 1:1 call has no ring either, and only one other person.
+		if w.oneOnOne(l, fr, rule) {
+			return
 		}
 		l.Stage, l.Detail = StageNoRingMatch, "no active-speaker ring found"
 		return
@@ -326,11 +391,16 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 // found the same thing within sameThumbFor, and keeps the full frame for a
 // while.
 func (w *Watcher) keepThumb(l *Look, fr *frame) {
+	sig := lumaSig(fr.pix, fr.width, fr.height)
 	if p := w.last; p != nil && w.thumbID != 0 && p.Stage == l.Stage && p.Name == l.Name &&
-		sameRing(p.Ring, l.Ring) && l.Time.Sub(w.thumbAt) < sameThumbFor {
+		sameRing(p.Ring, l.Ring) && p.Width == l.Width && p.Height == l.Height && l.Time.Sub(w.thumbAt) < sameThumbFor &&
+		// Recording for tuning keeps every picture that looks different,
+		// whatever was found in it (a new view with no ring is the point).
+		!(w.cfg.OnWindowShot != nil && l.Time.Sub(w.thumbAt) >= keepGap && sigDiff(w.thumbSig, sig) > keepDiff) {
 		l.ThumbOf = w.thumbID
 		return
 	}
+	w.thumbSig = sig
 	if thumb, err := encodeJPEG(fr.pix, fr.width, fr.height, thumbWidth, 70); err == nil {
 		l.Thumb = thumb
 		w.thumbID, w.thumbAt = l.ID, l.Time
@@ -350,6 +420,146 @@ func (w *Watcher) keepThumb(l *Look, fr *frame) {
 	}
 	w.frames = w.frames[cut:]
 	w.mu.Unlock()
+}
+
+// inventory lists the windows on screen on l and pictures them.
+//
+// The list is recorded when the set of windows changed (at most every
+// inventoryMinGap, since other apps' windows come and go constantly) or
+// inventoryEvery has passed.
+//
+// Teams windows other than the watched one (which its looks already
+// keep) are looked at every shotCheckEvery and a full-size picture kept
+// whenever it's the first of that window, its size changed, it looks
+// different (keepDiff, at most one per keepGap), or inventoryEvery has
+// passed. Other apps' windows get a thumbnail whenever the Teams windows
+// change or inventoryEvery passes.
+func (w *Watcher) inventory(l *Look) {
+	recs := snapshotWindows()
+	var all, teamsKey strings.Builder
+	rank := 0
+	for _, r := range recs {
+		fmt.Fprintf(&all, "%d|%s|%s|%dx%d|%d;", r.ID, r.Owner, r.Title, r.Width, r.Height, r.Layer)
+		if r.IsTeams() {
+			fmt.Fprintf(&teamsKey, "%d|%s|%dx%d|%d;", r.ID, r.Title, r.Width, r.Height, rank)
+			rank++
+		}
+	}
+	beat := l.Time.Sub(w.invAt) >= inventoryEvery
+	if all.String() != w.invKey && l.Time.Sub(w.invListAt) >= inventoryMinGap || beat {
+		w.invKey, w.invListAt = all.String(), l.Time
+		l.Windows = recs
+	}
+	teamsChanged := teamsKey.String() != w.invTeamsKey
+	if teamsChanged || beat {
+		w.invTeamsKey, w.invAt = teamsKey.String(), l.Time
+		w.pictureOthers(l, recs)
+	}
+	if l.Time.Sub(w.shotCheckAt) < shotCheckEvery && !teamsChanged && !beat {
+		return
+	}
+	w.shotCheckAt = l.Time
+	if w.shots == nil {
+		w.shots = map[int]*shotState{}
+	}
+	for _, r := range recs {
+		if !r.IsTeams() || r.Width < 100 || r.Height < 60 || r.ID == l.WindowID && l.WindowID != 0 {
+			continue
+		}
+		fr, err := captureWindowByID(r.ID)
+		if err != nil || fr == nil {
+			continue
+		}
+		sig := lumaSig(fr.pix, fr.width, fr.height)
+		st := w.shots[r.ID]
+		keep := st == nil || st.w != fr.width || st.h != fr.height || l.Time.Sub(st.at) >= inventoryEvery ||
+			(l.Time.Sub(st.at) >= keepGap && sigDiff(st.sig, sig) > keepDiff)
+		if !keep {
+			continue
+		}
+		if jpegBytes, err := encodeJPEG(fr.pix, fr.width, fr.height, 0, 80); err == nil {
+			w.cfg.OnWindowShot(l.ID, r.ID, false, jpegBytes)
+			w.shots[r.ID] = &shotState{sig: sig, w: fr.width, h: fr.height, at: l.Time}
+		}
+	}
+}
+
+// shotState is the last full picture kept of a Teams window.
+type shotState struct {
+	sig  []uint8
+	w, h int
+	at   time.Time
+}
+
+// pictureOthers saves a thumbnail of up to maxInventoryShots windows of
+// other apps.
+func (w *Watcher) pictureOthers(l *Look, recs []teamsvideo.WindowRecord) {
+	n := 0
+	for _, r := range recs {
+		if r.IsTeams() || r.Layer != 0 || r.Width < 100 || r.Height < 60 {
+			continue
+		}
+		if n >= maxInventoryShots {
+			return
+		}
+		n++
+		fr, err := captureWindowByID(r.ID)
+		if err != nil || fr == nil {
+			continue
+		}
+		if jpegBytes, err := encodeJPEG(fr.pix, fr.width, fr.height, thumbWidth, 80); err == nil {
+			w.cfg.OnWindowShot(l.ID, r.ID, true, jpegBytes)
+		}
+	}
+}
+
+// Signature grid: a window is reduced to sigW x sigH cells of mean
+// brightness, enough to tell a changed layout from people moving.
+const (
+	sigW = 48
+	sigH = 27
+)
+
+// lumaSig is fr's brightness on a sigW x sigH grid (each cell sampled at
+// a few points).
+func lumaSig(pix []byte, width, height int) []uint8 {
+	sig := make([]uint8, sigW*sigH)
+	if width <= 0 || height <= 0 || len(pix) < width*height*3 {
+		return sig
+	}
+	for cy := 0; cy < sigH; cy++ {
+		for cx := 0; cx < sigW; cx++ {
+			var sum, n int
+			for sy := 0; sy < 3; sy++ {
+				for sx := 0; sx < 3; sx++ {
+					x := (cx*3 + sx) * width / (sigW * 3)
+					y := (cy*3 + sy) * height / (sigH * 3)
+					i := (y*width + x) * 3
+					sum += (299*int(pix[i]) + 587*int(pix[i+1]) + 114*int(pix[i+2])) / 1000
+					n++
+				}
+			}
+			sig[cy*sigW+cx] = uint8(sum / n)
+		}
+	}
+	return sig
+}
+
+// sigDiff is the mean absolute brightness difference per cell (0-255);
+// 255 if the signatures can't be compared.
+func sigDiff(a, b []uint8) float64 {
+	if len(a) != len(b) || len(a) == 0 {
+		return 255
+	}
+	var sum int
+	for i := range a {
+		d := int(a[i]) - int(b[i])
+		if d < 0 {
+			d = -d
+		}
+		sum += d
+	}
+	return float64(sum) / float64(len(a))
 }
 
 func (w *Watcher) tileFor(r RingMatch) *tileName {

@@ -301,6 +301,133 @@ frames feed `frames_test.go`, for tuning detection itself. Only final
 labels are scored; how labels look while the meeting is still going is
 `tomoe eval --online`'s job.
 
+### Window inventory (Record for tuning)
+
+The window rule in automatic mode is `teamsvideo.PickMeetingWindow`: the
+frontmost Teams window whose title isn't empty, "Window" or a "Chat |"
+panel. It never checks that the window holds a call, so a Calendar window
+in front of the meeting would be picked (seen live: with no call going,
+it picked "Calendar | … | Microsoft Teams"). With `record_for_tuning` on,
+each session records enough to see which cases happen in real calls
+(pop-out and compact windows, screen-share toolbars, calling from a chat):
+
+- every look says which window it captured (`window_id`, the title in
+  `window`) and `pick`: what the rule picked and what it passed over.
+- `looks.jsonl` gets the full window list (`windows`: owner, title, pid,
+  size, layer, front-to-back order) when the set of windows changes (at
+  most every 5 s) and every 30 s.
+- the watched window's full frame is kept for every look that looks
+  different from the last one kept (see below), whatever was found in it.
+- `windows/<look>-<window>.jpg` is a full-size picture of each other
+  Teams window, looked at every second and kept when it's the first of
+  that window, its size changed, it looks different, or 30 s have passed;
+  `windows/<look>-<window>-thumb.jpg` is a 320 px thumbnail of up to 12
+  other apps' windows, taken when the Teams windows change and every 30 s.
+- "Looks different" means the mean brightness change per cell on a 48x27
+  grid exceeds `keepDiff` (12, on 0-255), at most one picture a second.
+  Calibrated on 181 frames from a real call: consecutive frames differ by
+  a median of 6.3, p90 16, p99 26, max 111, so ordinary video motion
+  stays mostly under it and a layout change does not. A size change
+  always keeps. No dwell time is needed: a new view is kept on the next
+  look (about 0.35 s). Pictures are saved whether or not a ring, name or
+  call is found.
+
+**First real call (2026-10-02) found:**
+
+- The main call window captures cleanly, even when hidden behind another
+  window. Occlusion is not a problem.
+- Teams' **"Meeting compact view"**, a floating panel (window layer 19,
+  about 690x250), is found at the right size but **captures entirely
+  black**. It was labeled "not a call", and the rule kept watching it for
+  78 s while the full call window sat behind it, so no names were read
+  for that stretch. Cause, confirmed live in a second call: the window
+  server lists its sharing state as 0 (the app asked not to be captured),
+  while the call window is 1 (readable), so the black capture is Teams'
+  choice, not a Tomoe bug, and ScreenCaptureKit would be expected to
+  honor it too. The call window behind it still captures and is read.
+- A Calendar or Chat window in front of the call is picked by the title
+  rule and fails the Leave-button check ("not a call") until the call
+  window is in front again; it happened at each click away from the call.
+
+Automatic mode now tries the acceptable Teams windows frontmost first
+(`teamsvideo.MeetingCandidates`) and takes the first that captures
+something and shows the call controls (Leave button); `pick` says which
+were passed over and why. A frame that is all black gets the stage
+`blank_capture` instead of "not a call". Checked against that call's
+frames: both compact-view frames are blank, the call window shows its
+controls, and the Calendar window is readable without them.
+
+**Stale hints from a window Teams isn't repainting (found by replaying
+that call against Teams' transcript):** when the call window is hidden or
+in the background (behind the compact view or another window), Teams
+stops repainting its interface: the call timer, the speaker highlight and
+the name labels freeze, while the video tiles keep moving. Two stretches
+of the 82-minute call (10:12:58-10:18:54 and 10:26:30-10:30:55, 621 s in
+all) had a timer that never changed, and in both the highlight sat on one
+person while others spoke (Teams' transcript has three speakers in the
+second one; the ring said the same name for every look). Those stale reads
+were what the clustering constraints (since removed) split on; see
+speaker-attribution-research.md. The watcher now hashes the timer region
+at the toolbar's left edge each look; unchanged for 4 s means the
+interface isn't repainting, the look is marked `ui_frozen` and no name is
+read from it. Replayed over the call's saved frames it flags exactly those
+two stretches plus two isolated frames. Keeping the call window visible
+(even partly, on any display) avoids the freeze.
+
+The region is in points and scaled by the capture's pixels per point (a
+Retina capture is 2x), and a freeze only counts once the region has been
+seen changing for that window and size: a region that isn't really the
+timer (a layout or scale this rule doesn't know) never changes, and must
+not read as a window that stopped repainting, which would silently stop
+every name read. A window hidden from the very start of a meeting is
+therefore only caught once it has repainted at least once.
+
+**1:1 calls.** Calling someone (from a chat, say) opens a call window
+titled with their name ("<name> | Microsoft Teams"), separate from the
+chat window, which the window rule already skips ("Chat |"). Its layout
+has no active-speaker ring: the other person is a round avatar (camera
+off) or a full video, named at the bottom left, and the toolbar has
+calling controls a meeting doesn't (Hold, Transfer, Dial pad, Consult).
+When a look finds no ring and no speaker view, the toolbar is OCR'd (at
+most every 10 s per window) and, if it has those controls, the look names
+the other person from the stage label, else from the window title (stage
+`one_on_one`). With one other person, every remote voice is theirs. On
+the first recorded call from a chat every look had been "no ring" (no name
+at all); replayed, all 10 saved frames give the right name, and 25
+"no ring" frames from a group meeting are unaffected.
+
+**Checking the hints (`tomoe tune`, hints.txt).** Every `tomoe tune` run
+also reports on the hints themselves, apart from what the clustering made
+of them: which windows were watched (title and size), stages, the
+stretches when the watched window wasn't repainting (from looks marked
+`ui_frozen`, or, for sessions recorded before that check, the saved full
+frames replayed through it) with the names the ring gave and, with
+`--ref`, who the reference has speaking then; and how often the name under
+the ring was the reference's speaker at that second, overall, with the
+window repainting or not, the worst minutes, and who the reference had
+speaking when no ring was found. A reference turn is taken to last as long
+as its words take to say (a Teams export has only start times; letting a
+turn run to the next start credited a one-word "Yeah" with everything the
+previous speaker said after it, which first made rings look missed when
+they weren't).
+
+On the 82-minute call: 18% of named looks disagree with the reference
+overall, 51% while the window wasn't repainting, 15% while it was. Of the
+looks while it was repainting, 85% agree, 10.7% are the host speaking
+(Teams doesn't ring your own tile, so the highlight stays on the last
+remote speaker; harmless, since such a read only votes for a remote voice
+talking at that moment and there is none) and 4.4% are another remote
+person speaking (ring lag at speaker changes and the reference's timing).
+Looks that found no ring were the host speaking 70% of the time, nobody
+17%, and someone else 13% (about a minute and a half of the call), so no
+further rule is needed for gallery calls like this one. hints.txt names
+people; `tune-*/` and `eval-*/` in the repo root are gitignored.
+
+All of it is local, in the session folder. It includes other apps'
+windows, so keep that folder out of any backup that leaves the computer
+(e.g. the sessions backup script) unless that's intended, and turn Record
+for tuning off afterwards.
+
 ## Diagnostics pane (frontend `DiagnosticsPane.tsx`)
 
 A real-time, separate view into *how* each transcript line got its

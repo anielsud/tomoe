@@ -494,6 +494,9 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	cfg.OnMonitorSpeechStart = watcher.Burst
 	if d.cfg.Meeting.RecordForTuning {
 		watcher.SetOnFullFrame(func(id int, jpeg []byte) { _ = lookLog.WriteFull(id, jpeg) })
+		watcher.SetOnWindowShot(func(lookID, windowID int, thumb bool, jpeg []byte) {
+			_ = lookLog.WriteWindowShot(lookID, windowID, thumb, jpeg)
+		})
 	}
 
 	// Diarize during the meeting if that's on (see
