@@ -316,7 +316,7 @@ export default function SettingsPanel() {
             </>
           }
         >
-          {!mac && <Row label="Auto-detect meetings" hint="Start recording when a call starts">{toggle('Meeting', 'AutoDetect')}</Row>}
+          <Row label="Auto-detect meetings" hint="Start recording when an app starts using the microphone and speaker together">{toggle('Meeting', 'AutoDetect')}</Row>
           <Row label="Speaker voice model" hint="Tells voices apart, live and after the meeting. Downloads from Tools if missing">
             <select className="setting-input" value={draft.Meeting.SpeakerModel || 'auto'} onChange={e => set('Meeting', 'SpeakerModel', e.target.value)}>
               <option value="auto">Automatic (English-trained for English, base for other languages)</option>

@@ -6,7 +6,7 @@ end-to-end on real macOS hardware. Video-hint speaker labeling (reading
 Teams' active-speaker ring + name label and attaching a real name to
 an audio cluster) is also built and verified live — a cluster with no
 video hint still falls back to "Person N", exactly like Linux.
-Automatic meeting detection has no macOS implementation yet. See
+Automatic meeting detection works the way Linux's does (see below). See
 [Roadmap](#roadmap) for exactly what's left.
 
 Detailed, porting-relevant implementation notes (real bugs found, root
@@ -29,7 +29,7 @@ the input signal is structurally different per platform:
 
 | | Linux | macOS |
 |---|---|---|
-| Meeting detection | PulseAudio: simultaneous source-output + sink-input from one PID | not yet built (no equivalent signal wired up — see [Roadmap](#roadmap)) |
+| Meeting detection | PulseAudio: simultaneous source-output + sink-input from one PID | CoreAudio: the same signal, from each process's input/output-running flags, polled every second (`internal/meeting/detect_darwin.go`) |
 | Speaker naming signal | none — audio embeddings only | Teams' active-speaker ring + name label (visual, OCR'd) |
 | Speaker naming | `internal/speaker` clusters embeddings → "Person N" | same clustering, unchanged, plus a cluster can be *labeled* by a video hint |
 
@@ -164,18 +164,42 @@ earlier ones.
    there's no known stable API to read a live Teams chat from outside
    the app) plus a `session.Segment`-adjacent data shape for a
    non-speech aside. No design work started.
-6. **Automatic meeting detection.** No macOS equivalent of Linux's
-   PulseAudio dual-stream signal exists — meeting mode has to be
-   started manually today. Explicitly deferred (not started) but
-   scoped: `internal/audiosources.ListActive()` (built for the
-   audio-source picker) already reports when a known meeting app starts
-   producing audio output, which is the same signal Linux's detector
-   uses in spirit (mic+speaker activity from one PID) — reusing it here
-   is the intended path, not a new detection mechanism.
+6. **Automatic meeting detection — built, needs real-call validation.**
+   See [Meeting detection](#meeting-detection). Open: confirm in real
+   Teams, Zoom, Meet and Webex calls that the input stream stays up
+   while muted and goes away when the call ends.
 7. **Window-finding for Zoom/Meet/Webex/Slack.** `internal/videohint`
    only has a window-finder for Teams today; see
    `macos-video-hints.md`'s "Still open" for what each platform would
    need.
+
+## Meeting detection
+
+`auto_detect = true` (set it to `false` for manual starts only) starts
+recording when one app has a microphone stream and a playback stream
+running at once, and stops when its microphone stream ends: Linux's
+signal, read from CoreAudio instead of PulseAudio.
+
+- `internal/audiosources.ListStreams` asks CoreAudio which processes
+  have input or output running (`kAudioProcessPropertyIsRunningInput` /
+  `IsRunningOutput`) and resolves each to the regular app that owns it
+  by walking parent processes, because a browser's audio runs in a
+  helper. System daemons (dictation, Siri) have no owning app and are
+  ignored.
+- `internal/meeting/detect_darwin.go` polls that once a second, diffs
+  the sets, and feeds the shared debounce/start/stop logic in
+  `detect.go` the events PulseAudio would have delivered. Apps already
+  making sound when Tomoe starts are the baseline, as on Linux.
+- Tomoe's own microphone stream is excluded; otherwise every recording
+  would look like a meeting.
+- Platform: bundle ids map Zoom, Slack, Teams, Webex and the main
+  browsers to the names `platform.go` knows. A browser meeting is
+  identified from one of its window titles ("Meet - …"), which needs
+  the Screen Recording permission Tomoe already has; otherwise the
+  platform is "Unknown" and the recording still starts.
+- Checked live: input and output lists, and owning-app resolution, with
+  an app playing audio. Not checked: a real call, so whether Teams,
+  Zoom or Meet keep the input stream up while muted is still open.
 
 ## Linux and macOS: where they differ
 
@@ -186,9 +210,9 @@ transcripts: they are macOS-only additions Linux never had.
 
 **Missing on macOS**
 
-- Automatic meeting detection (`internal/meeting/detect_darwin.go` is a
-  stub, so `auto_detect = true` does nothing) and, for browser meetings,
-  platform identification (Linux reads the window title with `xdotool`).
+- Detection is not yet verified in a real call (see "Meeting detection"
+  below), and tells browser meetings apart only while a window title
+  names the platform.
 - GPU transcription: macOS is CPU-only; the CUDA path (`internal/gpu`,
   `config.EnsureGPULibs`, `make install-gpu`) is Linux-only.
 - Video hints cover Teams only (item 7 below), and tile names are

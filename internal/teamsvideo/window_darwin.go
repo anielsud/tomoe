@@ -319,6 +319,7 @@ func parentPID(pid int32) (int32, error) {
 // video hints watch.
 type WindowInfo struct {
 	ID            WindowID
+	OwnerPID      int
 	Owner, Title  string
 	Width, Height int
 }
@@ -343,7 +344,7 @@ func ListWindows() ([]WindowInfo, error) {
 		if num < 0 || w < 300 || h < 200 {
 			continue
 		}
-		info := WindowInfo{ID: WindowID(num), Width: w, Height: h}
+		info := WindowInfo{ID: WindowID(num), OwnerPID: int(C.window_owner_pid(windows, idx)), Width: w, Height: h}
 		if p := C.window_owner_name(windows, idx); p != nil {
 			info.Owner = C.GoString(p)
 			C.free(unsafe.Pointer(p))

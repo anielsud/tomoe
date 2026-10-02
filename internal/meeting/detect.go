@@ -84,7 +84,7 @@ func (d *Detector) Start(ctx context.Context) error {
 	d.mu.Unlock()
 
 	if err := pulseInit(); err != nil {
-		return fmt.Errorf("PulseAudio init failed: %w", err)
+		return fmt.Errorf("audio stream monitor init failed: %w", err)
 	}
 
 	// Set this detector as the active instance for callbacks
@@ -92,7 +92,7 @@ func (d *Detector) Start(ctx context.Context) error {
 
 	if err := pulseSubscribe(); err != nil {
 		pulseCleanup()
-		return fmt.Errorf("PulseAudio subscribe failed: %w", err)
+		return fmt.Errorf("audio stream monitor subscribe failed: %w", err)
 	}
 
 	// Start event loop in a goroutine

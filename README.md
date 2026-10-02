@@ -128,7 +128,7 @@ speaker_threshold = 0.65           # cosine similarity for a confident speaker m
 max_speech_duration = 30.0         # longest utterance (s) before it's cut; each utterance gets one speaker label
 min_silence_duration = 0.5         # pause (s) that ends an utterance
 auto_save = true
-auto_detect = true
+auto_detect = true                 # start recording when an app uses the mic and speaker together (Linux: PulseAudio, macOS: CoreAudio); false = manual only
 sticky_grace_window = 3.0          # seconds a near-miss can still join the last speaker
 sticky_threshold_margin = 0        # how near a near-miss must be; 0 = sticky rule off (experimental)
 min_assign_duration = 0            # segments shorter than this (s) join the last speaker; 0 = off (experimental)
