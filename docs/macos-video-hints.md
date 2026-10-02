@@ -317,14 +317,21 @@ each session records enough to see which cases happen in real calls
 - `looks.jsonl` gets the full window list (`windows`: owner, title, pid,
   size, layer, front-to-back order) when the set of windows changes (at
   most every 5 s) and every 30 s.
-- `windows/<look>-<window>.jpg` is a full-size picture of every Teams
-  window, and `windows/<look>-<window>-thumb.jpg` a 320 px thumbnail of up
-  to 12 other windows, taken when a Teams window appeared, went, changed
-  title or size, or moved in the Teams stacking order, and every 30 s.
-- full frames are also saved when the captured window's size changes
-  (before, a look that found "the same thing" within 10 s reused the last
-  picture, so a new layout with no ring went unsaved). Pictures are saved
-  whether or not a ring, name or call is found.
+- the watched window's full frame is kept for every look that looks
+  different from the last one kept (see below), whatever was found in it.
+- `windows/<look>-<window>.jpg` is a full-size picture of each other
+  Teams window, looked at every second and kept when it's the first of
+  that window, its size changed, it looks different, or 30 s have passed;
+  `windows/<look>-<window>-thumb.jpg` is a 320 px thumbnail of up to 12
+  other apps' windows, taken when the Teams windows change and every 30 s.
+- "Looks different" means the mean brightness change per cell on a 48x27
+  grid exceeds `keepDiff` (12, on 0-255), at most one picture a second.
+  Calibrated on 181 frames from a real call: consecutive frames differ by
+  a median of 6.3, p90 16, p99 26, max 111, so ordinary video motion
+  stays mostly under it and a layout change does not. A size change
+  always keeps. No dwell time is needed: a new view is kept on the next
+  look (about 0.35 s). Pictures are saved whether or not a ring, name or
+  call is found.
 
 All of it is local, in the session folder. It includes other apps'
 windows, so keep that folder out of any backup that leaves the computer
