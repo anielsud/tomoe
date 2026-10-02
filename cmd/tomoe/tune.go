@@ -32,7 +32,7 @@ var tuneCmd = &cobra.Command{
 	Short: "Find the best speaker-naming and diarization settings from a recorded session",
 	Long: "Replays a session recorded with record_for_tuning against a reviewed Teams transcript of the\n" +
 		"same meeting: sweeps how names are attributed, how often the meeting window is looked at, the\n" +
-		"fingerprint stride and the clustering constraints, and scores each by speaker accuracy, names\n" +
+		"fingerprint stride, and scores each by speaker accuracy, names\n" +
 		"right and wrong, and CPU. Sparser looks and strides are simulated by thinning the recording.",
 	Args: cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
@@ -65,7 +65,6 @@ type tuneLook struct {
 type tuneResult struct {
 	Stride       int                `json:"stride"`
 	LookInterval float64            `json:"look_interval_seconds"` // 0: every recorded look
-	Constraints  bool               `json:"constraints"`
 	Names        diarize.NameParams `json:"names"`
 
 	SpeakerAcc float64 `json:"speaker_word_accuracy"`
@@ -190,8 +189,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	}
 	intervals := []float64{0, 0.7, 1, 2, 5}
 
-	// Stage 1: naming rules, at each look rate, recorded stride, no
-	// constraints.
+	// Stage 1: naming rules, at each look rate, recorded stride.
 	base := clusterStride(prep, info, info.Stride)
 	var stage1 []tuneResult
 	for _, iv := range intervals {
@@ -201,7 +199,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 				for _, share := range []float64{0.5, 0.6, 0.75} {
 					for _, bucket := range []float64{2, 5, 10} {
 						np := diarize.NameParams{Lag: lag, Bucket: bucket, MinReads: minReads, MinShare: share}
-						r := sc.score(base, hints, np, false)
+						r := sc.score(base, hints, np)
 						r.Stride, r.LookInterval, r.HintCPU = info.Stride, iv, cpu
 						stage1 = append(stage1, r)
 					}
@@ -212,22 +210,20 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	sort.SliceStable(stage1, func(i, j int) bool { return stage1[i].nameScore() > stage1[j].nameScore() })
 	best := stage1[0].Names
 
-	// Stage 2: stride, look rate and constraints with the best rules.
+	// Stage 2: stride and look rate with the best rules.
 	var stage2 []tuneResult
 	for _, st := range strides {
 		cs := clusterStride(prep, info, st)
 		for _, iv := range intervals {
 			hints, cpu := thinLooks(looks, iv, duration)
-			for _, constrain := range []bool{false, true} {
-				r := sc.score(cs, hints, best, constrain)
-				r.Stride, r.LookInterval, r.HintCPU = st, iv, cpu
-				stage2 = append(stage2, r)
-			}
+			r := sc.score(cs, hints, best)
+			r.Stride, r.LookInterval, r.HintCPU = st, iv, cpu
+			stage2 = append(stage2, r)
 		}
 	}
 	def := diarize.DefaultNameParams()
 	hints, cpu := thinLooks(looks, 0, duration)
-	current := sc.score(base, hints, def, true)
+	current := sc.score(base, hints, def)
 	current.Stride, current.HintCPU = info.Stride, cpu
 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
@@ -237,7 +233,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	if err := os.WriteFile(filepath.Join(outDir, "tune.txt"), []byte(text), 0o644); err != nil {
 		return err
 	}
-	js, _ := json.MarshalIndent(map[string]any{"current": current, "names": stage1, "stride_rate_constraints": stage2}, "", "  ")
+	js, _ := json.MarshalIndent(map[string]any{"current": current, "names": stage1, "stride_rate": stage2}, "", "  ")
 	if err := os.WriteFile(filepath.Join(outDir, "tune.json"), js, 0o644); err != nil {
 		return err
 	}
@@ -345,19 +341,8 @@ type tuneScorer struct {
 	info   diarize.StreamInfo
 }
 
-func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.NameParams, constrain bool) tuneResult {
-	clusters := sc.clusters
-	if constrain && len(hints) > 0 {
-		streamHints := make([]diarize.Hint, 0, len(hints))
-		for _, h := range hints {
-			if h.Name != "" {
-				streamHints = append(streamHints, diarize.Hint{T: h.T - s.info.Offset, Name: h.Name})
-			}
-		}
-		relaxed := max(0.2, s.info.Params.MergeSimilarity-0.2)
-		clusters = diarize.ApplyHintConstraints(sc.prep.Embeddings, clusters, diarize.HintedPairs(sc.prep, streamHints, np.Lag), relaxed)
-	}
-	turns := sc.prep.ReconstructClusters(clusters, s.info.Params)
+func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.NameParams) tuneResult {
+	turns := sc.prep.ReconstructClusters(sc.clusters, s.info.Params)
 	for i := range turns {
 		turns[i].Start += s.info.Offset
 		turns[i].End += s.info.Offset
@@ -374,7 +359,7 @@ func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.N
 	split, _ := session.SplitByDiarization(append([]session.Segment(nil), s.segs...), turns, labels)
 	words := segmentSpeakers(split)
 	mapping := eval.ScoreSpeakers(s.ref, segmentsLabeled(split), 1.0).Mapping
-	r := tuneResult{Constraints: constrain, Names: np, Named: len(names), Embeddings: len(sc.prep.Embeddings)}
+	r := tuneResult{Names: np, Named: len(names), Embeddings: len(sc.prep.Embeddings)}
 	r.SpeakerAcc = s.align.Score(words, mapping).Accuracy()
 	var right, wrong, none, total int
 	for i, w := range words {
@@ -407,19 +392,19 @@ func formatTune(sess *session.Session, current tuneResult, names, rest []tuneRes
 	fmt.Fprintln(&b, "(approximate when thinned: fewer looks reuse known tiles less). Only final labels are scored here.")
 	fmt.Fprintln(&b)
 	row := func(r tuneResult) string {
-		return fmt.Sprintf("  lag %4.2f  reads %d  share %.2f  bucket %4.1f | stride %d  looks %4.1f  constraints %-5v | speakers %s  names %s / %s / %s  named %2d | hint CPU %5.1f%%  fingerprints %d",
-			r.Names.Lag, r.Names.MinReads, r.Names.MinShare, r.Names.Bucket, r.Stride, r.LookInterval, r.Constraints,
+		return fmt.Sprintf("  lag %4.2f  reads %d  share %.2f  bucket %4.1f | stride %d  looks %4.1f | speakers %s  names %s / %s / %s  named %2d | hint CPU %5.1f%%  fingerprints %d",
+			r.Names.Lag, r.Names.MinReads, r.Names.MinShare, r.Names.Bucket, r.Stride, r.LookInterval,
 			pct(r.SpeakerAcc), pct(r.NameRight), pct(r.NameWrong), pct(r.Unnamed), r.Named, 100*r.HintCPU, r.Embeddings)
 	}
 	fmt.Fprintln(&b, "Current defaults:")
 	fmt.Fprintln(&b, row(current))
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, "Naming rules (recorded stride, no constraints), best 20:")
+	fmt.Fprintln(&b, "Naming rules (recorded stride), best 20:")
 	for _, r := range names[:min(20, len(names))] {
 		fmt.Fprintln(&b, row(r))
 	}
 	fmt.Fprintln(&b)
-	fmt.Fprintln(&b, "Stride, look rate and constraints, with the best naming rules:")
+	fmt.Fprintln(&b, "Stride and look rate, with the best naming rules:")
 	for _, r := range rest {
 		fmt.Fprintln(&b, row(r))
 	}

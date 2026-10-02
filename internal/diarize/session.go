@@ -78,7 +78,6 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	}
 	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
-	sc.Hints = d.streamHints
 	sc.OnSpeakerChange = opts.OnSpeakerChange
 	if d.stream, err = NewStream(sc); err != nil {
 		return nil, err
@@ -271,20 +270,6 @@ func (d *SessionDiarizer) AddCandidates(t float64, names []string) {
 	d.lock.Lock()
 	d.hints = append(d.hints, Hint{T: t, Candidates: append([]string(nil), names...)})
 	d.lock.Unlock()
-}
-
-// streamHints is StreamConfig.Hints: the single-name hints in stream time
-// (clustering constraints need to know who, not who-of-several).
-func (d *SessionDiarizer) streamHints() []Hint {
-	d.lock.Lock()
-	defer d.lock.Unlock()
-	out := make([]Hint, 0, len(d.hints))
-	for _, h := range d.hints {
-		if h.Name != "" {
-			out = append(out, Hint{T: h.T - d.offset, Name: h.Name})
-		}
-	}
-	return out
 }
 
 // NeedsNames reports whether anyone who spoke in the last minute has no

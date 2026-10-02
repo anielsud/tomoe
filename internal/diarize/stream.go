@@ -26,10 +26,6 @@ type StreamConfig struct {
 	// OnTimeline, if set, receives each recluster's timeline. Called on
 	// the Stream's own goroutine; it must not call back into the Stream.
 	OnTimeline func(Timeline)
-	// Hints, if set, returns the meeting window's name reads so far, in
-	// stream time; reclusters split and merge clusters by them (see
-	// applyHintConstraints).
-	Hints func() []Hint
 	// OnSpeakerChange, if set, is called when a window shows a voice
 	// starting that wasn't talking just before: a cheap, early speaker
 	// change signal, before any clustering. On the Stream's goroutine;
@@ -293,12 +289,6 @@ func (s *Stream) recluster(final bool) Timeline {
 		clusters := p.Cluster(s.cfg.Params.Threshold, s.cfg.Params.NumClusters)
 		if s.cfg.Params.MergeSimilarity > 0 {
 			clusters = p.MergeClusters(clusters, s.cfg.Params.MergeSimilarity)
-		}
-		if s.cfg.Hints != nil {
-			if hints := s.cfg.Hints(); len(hints) > 0 {
-				relaxed := max(0.2, s.cfg.Params.MergeSimilarity-0.2)
-				clusters = applyHintConstraints(embs, clusters, hintedPairs(p, hints), relaxed)
-			}
 		}
 		ids := s.stable.Assign(pairs, clusters)
 		for _, t := range p.ReconstructClusters(clusters, s.cfg.Params) {
