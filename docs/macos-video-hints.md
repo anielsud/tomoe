@@ -405,14 +405,24 @@ stretches when the watched window wasn't repainting (from looks marked
 frames replayed through it) with the names the ring gave and, with
 `--ref`, who the reference has speaking then; and how often the name under
 the ring was the reference's speaker at that second, overall, with the
-window repainting or not, and the worst minutes. On the 82-minute call:
-26% of named looks disagree overall, 53% while the window wasn't
-repainting and 23% while it was. Part of the 23% is the reference's
-coarse timing (a turn runs to the next one's start) and the host's own
-speech, which has no ring, but the worst minutes outside stale stretches
-show the same pattern (one name held while another person speaks): not
-yet explained. hints.txt names people; `tune-*/` and `eval-*/` in the repo
-root are gitignored.
+window repainting or not, the worst minutes, and who the reference had
+speaking when no ring was found. A reference turn is taken to last as long
+as its words take to say (a Teams export has only start times; letting a
+turn run to the next start credited a one-word "Yeah" with everything the
+previous speaker said after it, which first made rings look missed when
+they weren't).
+
+On the 82-minute call: 18% of named looks disagree with the reference
+overall, 51% while the window wasn't repainting, 15% while it was. Of the
+looks while it was repainting, 85% agree, 10.7% are the host speaking
+(Teams doesn't ring your own tile, so the highlight stays on the last
+remote speaker; harmless, since such a read only votes for a remote voice
+talking at that moment and there is none) and 4.4% are another remote
+person speaking (ring lag at speaker changes and the reference's timing).
+Looks that found no ring were the host speaking 70% of the time, nobody
+17%, and someone else 13% (about a minute and a half of the call), so no
+further rule is needed for gallery calls like this one. hints.txt names
+people; `tune-*/` and `eval-*/` in the repo root are gitignored.
 
 All of it is local, in the session folder. It includes other apps'
 windows, so keep that folder out of any backup that leaves the computer

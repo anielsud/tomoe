@@ -150,8 +150,29 @@ func hintReport(dir string, sess *session.Session, looks []videohint.Look, ref *
 	fmt.Fprintf(&b, "  all:                     %s\n", pct(all))
 	fmt.Fprintf(&b, "  window repainting:       %s\n", pct(live))
 	fmt.Fprintf(&b, "  window not repainting:   %s\n", pct(stale))
-	fmt.Fprintln(&b, "  (a reference turn runs to the next one's start, so pauses and quick interjections")
-	fmt.Fprintln(&b, "   blur the edges; the session's own mic speaker has no ring and reads as disagreement)")
+	fmt.Fprintln(&b, "  (a reference turn lasts as long as its words take to say, so timing is approximate;")
+	fmt.Fprintln(&b, "   the session's own mic speaker has no ring and reads as disagreement)")
+	// Looks that found no ring: who was speaking then? Mostly the host
+	// (whose own tile Teams doesn't ring) or nobody is fine; someone else
+	// is a missed ring.
+	noRing := map[string]int{}
+	for _, l := range looks {
+		if l.Stage != videohint.StageNoRingMatch {
+			continue
+		}
+		t := at(l.Time)
+		if t < ref.Turns[0].Start || t > ref.Turns[len(ref.Turns)-1].End {
+			continue
+		}
+		sp := refSpeakersAt(ref, t)
+		switch len(sp) {
+		case 0:
+			noRing["(nobody)"]++
+		default:
+			noRing[sp[0]]++
+		}
+	}
+	fmt.Fprintf(&b, "  no ring found, reference speaker then: %s\n", countsLine(noRing))
 	var mins []int
 	for m := range perMinute {
 		mins = append(mins, m)
@@ -168,11 +189,22 @@ func hintReport(dir string, sess *session.Session, looks []videohint.Look, ref *
 	return b.String()
 }
 
+// spokenEnd is when a reference turn's words were most likely finished:
+// its start plus the time its words take to say (about 2.5 words a
+// second, plus a second), but not past the turn's own end. A Teams export
+// gives only start times, so a turn otherwise runs until the next one
+// starts: a one-word interjection ("Yeah") would claim all of whatever the
+// previous speaker went on to say until the next interjection. Turns may
+// overlap this way, as speech does.
+func spokenEnd(tr eval.Turn) float64 {
+	return min(tr.End, tr.Start+float64(len(eval.Words(tr.Text)))/2.5+1)
+}
+
 // refSpeakersAt is who the reference has speaking at t (session seconds).
 func refSpeakersAt(ref *eval.Reference, t float64) []string {
 	var out []string
 	for _, tr := range ref.Turns {
-		if t >= tr.Start && t < tr.End {
+		if t >= tr.Start && t < spokenEnd(tr) {
 			out = append(out, tr.Speaker)
 		}
 	}
@@ -183,7 +215,7 @@ func refSpeakersAt(ref *eval.Reference, t float64) []string {
 func refSpeakersDuring(ref *eval.Reference, from, to float64) string {
 	secs := map[string]int{}
 	for _, tr := range ref.Turns {
-		if lo, hi := max(tr.Start, from), min(tr.End, to); hi > lo {
+		if lo, hi := max(tr.Start, from), min(spokenEnd(tr), to); hi > lo {
 			secs[tr.Speaker] += int(hi - lo + 0.5)
 		}
 	}
