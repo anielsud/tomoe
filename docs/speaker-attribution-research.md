@@ -416,6 +416,25 @@ about 77% is the most "right" can reach.
   tried, and wrong names rose from about 2.5% to 5.5–6%. They were
   "reasoned, not tuned" until now. `video_hint_constraints` (default
   false) controls them; names are still voted onto clusters either way.
+- **Splitting is the harmful half** (same session, default naming rules,
+  one half of the constraints switched on at a time):
+
+  | Constraints | Speakers right | Names right / wrong |
+  |---|---|---|
+  | Neither | 96.8% | 72.5% / 2.6% |
+  | Merge only (clusters dominated by one name, voices at least 0.3 alike) | 96.7% | 72.4% / 2.5% |
+  | Split only (a cluster with two confident names) | 93.0% | 70.2% / 5.2% |
+  | Both, merge threshold raised from 0.3 to 0.5 | 93.0% | 70.2% / 5.2% |
+  | Both (the old default) | 92.8% | 70.0% / 5.7% |
+
+  Merging changed nothing here and raising its threshold changed nothing;
+  the whole loss comes from splitting. The mechanism isn't shown. A name
+  read that is wrong or late (the highlight stays on one person through
+  another's short interjection, as seen at 10:17-10:19 in this call) tags
+  the wrong person's voice, and a cluster with two such names is split.
+  Both halves are off with `video_hint_constraints = false`; merge-only
+  would score the same here, so it's off too until there's a meeting where
+  it helps.
 - **The vote rules barely matter**: lag, reads, share and bucket changes
   moved names right by under 1 point (73.4–73.5% across the top 20).
 - **Looks can be much sparser for the saved transcript**: one look every
