@@ -367,8 +367,8 @@ of the 82-minute call (10:12:58-10:18:54 and 10:26:30-10:30:55, 621 s in
 all) had a timer that never changed, and in both the highlight sat on one
 person while others spoke (Teams' transcript has three speakers in the
 second one; the ring said the same name for every look). Those stale reads
-were also what the clustering constraints split on (see
-speaker-attribution-research.md). The watcher now hashes the timer region
+were what the clustering constraints (since removed) split on; see
+speaker-attribution-research.md. The watcher now hashes the timer region
 at the toolbar's left edge each look; unchanged for 4 s means the
 interface isn't repainting, the look is marked `ui_frozen` and no name is
 read from it. Replayed over the call's saved frames it flags exactly those
