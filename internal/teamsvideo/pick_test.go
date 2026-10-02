@@ -33,3 +33,19 @@ func TestPickMeetingWindow(t *testing.T) {
 		t.Errorf("empty list picked %d", i)
 	}
 }
+
+func TestMeetingCandidatesFrontToBack(t *testing.T) {
+	recs := []WindowRecord{
+		{ID: 1, Owner: "Microsoft Teams", Title: "Meeting compact view | X | Microsoft Teams", Layer: 19},
+		{ID: 2, Owner: "Microsoft Teams", Title: "Chat | A | Microsoft Teams"},
+		{ID: 3, Owner: "Finder", Title: "Downloads"},
+		{ID: 4, Owner: "Microsoft Teams", Title: "X | Microsoft Teams"},
+	}
+	got := MeetingCandidates(recs)
+	if len(got) != 2 || got[0] != 0 || got[1] != 3 {
+		t.Fatalf("candidates %v, want [0 3]: compact view first, then the call window", got)
+	}
+	if i, _ := PickMeetingWindow(recs); i != got[0] {
+		t.Errorf("PickMeetingWindow picked %d, want the first candidate %d", i, got[0])
+	}
+}

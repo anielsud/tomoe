@@ -90,6 +90,11 @@ static int32_t window_owner_pid(CFArrayRef windows, CFIndex i) {
     return dict_get_int(w, kCGWindowOwnerPID);
 }
 
+static int32_t window_sharing_state(CFArrayRef windows, CFIndex i) {
+    CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
+    return dict_get_int(w, kCGWindowSharingState);
+}
+
 static int32_t window_layer(CFArrayRef windows, CFIndex i) {
     CFDictionaryRef w = (CFDictionaryRef)CFArrayGetValueAtIndex(windows, i);
     return dict_get_int(w, kCGWindowLayer);
@@ -181,12 +186,13 @@ func ListAllWindows() ([]WindowRecord, error) {
 	for i := 0; i < n; i++ {
 		idx := C.CFIndex(i)
 		w := WindowRecord{
-			ID:     int(int32(C.window_number(windows, idx))),
-			PID:    int(int32(C.window_owner_pid(windows, idx))),
-			Layer:  int(int32(C.window_layer(windows, idx))),
-			Width:  int(C.window_bounds_width(windows, idx)),
-			Height: int(C.window_bounds_height(windows, idx)),
-			Order:  i,
+			ID:      int(int32(C.window_number(windows, idx))),
+			PID:     int(int32(C.window_owner_pid(windows, idx))),
+			Layer:   int(int32(C.window_layer(windows, idx))),
+			Sharing: int(int32(C.window_sharing_state(windows, idx))),
+			Width:   int(C.window_bounds_width(windows, idx)),
+			Height:  int(C.window_bounds_height(windows, idx)),
+			Order:   i,
 		}
 		if p := C.window_owner_name(windows, idx); p != nil {
 			w.Owner = C.GoString(p)
