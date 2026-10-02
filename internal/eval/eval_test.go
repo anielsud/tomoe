@@ -300,16 +300,16 @@ func TestWords_TeamsAndParakeetFormattingAgree(t *testing.T) {
 const reviewedTranscript = `Review
 Host: X
 
-Sathya Narayanan  10:56
+Sam Rivera  10:56
 If I recall the first one was about decisions.
 
-Rupali Jain 11:08
+Jordan Lee 11:08
 Oh there was the feedback one, yes
 
-Sathya Narayanan 11:08
+Sam Rivera 11:08
 when we were originally doing decision scope to session scope is the change that we made and then more words here
 
-Rupali Jain  11:30
+Jordan Lee  11:30
 Is this an indication?
 Stanley said we meet at 3:00
 Notaname 11:40
@@ -324,7 +324,7 @@ func TestParse_LooseHeadersOverlapsAndWarnings(t *testing.T) {
 	// 11:08 turns overlap: the interjection ends after its own estimated
 	// length, the main speaker runs to the next turn.
 	rup, sat := ref.Turns[1], ref.Turns[2]
-	if rup.Speaker != "Rupali Jain" || sat.Speaker != "Sathya Narayanan" || rup.Start != 668 || sat.Start != 668 {
+	if rup.Speaker != "Jordan Lee" || sat.Speaker != "Sam Rivera" || rup.Start != 668 || sat.Start != 668 {
 		t.Fatalf("overlap turns = %+v, %+v", rup, sat)
 	}
 	if sat.End != 690 || rup.End >= sat.End || rup.End <= rup.Start {
@@ -359,7 +359,7 @@ func TestScoreAnnotatedOverlaps(t *testing.T) {
 		{668, 670, "P2", "oh there was the feedback one yes"},
 		{668, 690, "P1", "when we were originally doing decision scope"},
 	}
-	s := ScoreAnnotatedOverlaps(ref, hyp, map[string]string{"P1": "Sathya Narayanan", "P2": "Rupali Jain"}, 3)
+	s := ScoreAnnotatedOverlaps(ref, hyp, map[string]string{"P1": "Sam Rivera", "P2": "Jordan Lee"}, 3)
 	if s.Interjections != 1 || s.Found != 1 || s.RightSpeaker != 1 || s.DetectedSeconds <= 0 || s.Seconds <= 0 {
 		t.Errorf("overlaps = %+v", s)
 	}

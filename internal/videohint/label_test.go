@@ -3,7 +3,7 @@ package videohint
 import "testing"
 
 func TestCleanOCRNameDropsSymbolScraps(t *testing.T) {
-	for in, want := range map[string]string{"Kevin Li •.•": "Kevin Li", "Kevin Li *•.": "Kevin Li", "Amit Tripathi fo": "Amit Tripathi", "Ana Lopez": "Ana Lopez"} {
+	for in, want := range map[string]string{"Alex Kim •.•": "Alex Kim", "Alex Kim *•.": "Alex Kim", "Priya Desai fo": "Priya Desai", "Ana Lopez": "Ana Lopez"} {
 		if got := cleanOCRName(in); got != want {
 			t.Errorf("cleanOCRName(%q) = %q, want %q", in, got, want)
 		}
@@ -97,9 +97,9 @@ func TestCleanOCRName(t *testing.T) {
 	}{
 		{"Devin Dobrowolski Priv", "Devin Dobrowolski"},
 		{"Devin Dobrowolski Privacy", "Devin Dobrowolski"},
-		{"Nazanin Ramezani Muted", "Nazanin Ramezani"},
-		{"Nazanin Ramezani Recording", "Nazanin Ramezani"},
-		{"Christian Stanton", "Christian Stanton"}, // no noise word, unchanged
+		{"Natalia Ramirez Muted", "Natalia Ramirez"},
+		{"Natalia Ramirez Recording", "Natalia Ramirez"},
+		{"Daniel Stone", "Daniel Stone"}, // no noise word, unchanged
 		{"Privacy", "Privacy"},                     // single word alone is never stripped
 		{"  Devin Dobrowolski Priv  ", "Devin Dobrowolski"},
 	}

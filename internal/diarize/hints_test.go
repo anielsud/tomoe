@@ -7,23 +7,23 @@ import (
 )
 
 func TestCanonicalNamesFoldsTruncations(t *testing.T) {
-	c := canonicalNames([]string{"Nazanin Rame…", "Nazanin Ramezani", "Ana", "Bo"})
-	if got := c["Nazanin Rame…"]; got != "Nazanin Ramezani" {
+	c := canonicalNames([]string{"Natalia Rami…", "Natalia Ramirez", "Ana", "Bo"})
+	if got := c["Natalia Rami…"]; got != "Natalia Ramirez" {
 		t.Errorf("truncated name -> %q, want the full name", got)
 	}
 	if c["Ana"] != "Ana" || c["Bo"] != "Bo" {
 		t.Errorf("short names changed: %v", c)
 	}
 	// A one-letter misread folds into the spelling read most.
-	c = canonicalNames([]string{"Shafqat Islam", "Shafqat Islam", "Shafgat Islam"})
-	if got := c["Shafgat Islam"]; got != "Shafqat Islam" {
-		t.Errorf("misread -> %q, want Shafqat Islam", got)
+	c = canonicalNames([]string{"Rafael Ortiz", "Rafael Ortiz", "Rafael Ortlz"})
+	if got := c["Rafael Ortlz"]; got != "Rafael Ortiz" {
+		t.Errorf("misread -> %q, want Rafael Ortiz", got)
 	}
 	// A longer spelling with junk after the name doesn't beat the name
 	// read most (it wasn't truncated).
-	c = canonicalNames([]string{"Kevin Li", "Kevin Li", "Kevin Li", "Kevin Li x"})
-	if got := c["Kevin Li x"]; got != "Kevin Li" {
-		t.Errorf("junk-extended read -> %q, want Kevin Li", got)
+	c = canonicalNames([]string{"Alex Kim", "Alex Kim", "Alex Kim", "Alex Kim x"})
+	if got := c["Alex Kim x"]; got != "Alex Kim" {
+		t.Errorf("junk-extended read -> %q, want Alex Kim", got)
 	}
 	// Different people stay apart.
 	c = canonicalNames([]string{"Alex Atzberger", "Alex Ambrose"})
