@@ -246,8 +246,8 @@ Each read is a `Hint` (session time, name). `nameSpeakers`:
    Hints during silence or overlapping speech don't vote;
 3. counts reads of a name within 5 s as one, and names a speaker only
    with at least 2 independent reads and 60% of that speaker's reads;
-4. folds spellings together: truncations ("Nazanin Rame…") and one- or
-   two-letter OCR misreads ("Shafgat") become the most-read spelling;
+4. folds spellings together: truncations ("Natalia Rami…") and one- or
+   two-letter OCR misreads ("Ortlz") become the most-read spelling;
 5. resolves several lit tiles by elimination: a speaker whose name is
    among them is confirmed, otherwise names other speakers already have
    are ruled out and a single remaining name votes. If any lit tile's
@@ -320,9 +320,9 @@ callers/tests already use).
 
 The speaker label itself already carries everything the view needs:
 `Tracker.label()` embeds a resolved hint in parens (`"Person 1
-(Kevin)"`), so `DiagnosticsPane` parses that back out and combines it
-with `Decision` to render `"Kevin [Person 1, OCR]"` (a hint exists, but
-this segment's own decision wasn't a fresh confident match) or `"Kevin
+(Alex)"`), so `DiagnosticsPane` parses that back out and combines it
+with `Decision` to render `"Alex [Person 1, OCR]"` (a hint exists, but
+this segment's own decision wasn't a fresh confident match) or `"Alex
 [Person 1, OCR+Centroid match]"` (this segment's audio independently
 re-confirmed the same identity this instant) — no cross-referencing
 the video-hint event stream needed.

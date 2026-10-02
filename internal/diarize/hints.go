@@ -53,8 +53,8 @@ func normalizeName(s string) string {
 }
 
 // canonicalNames maps each name read to one spelling per person. A tile
-// can show "Nazanin Rame…" one time and the full name the next, and OCR
-// misreads a letter now and then ("Shafgat"), so names fold together when
+// can show "Natalia Rami…" one time and the full name the next, and OCR
+// misreads a letter now and then ("Ortlz"), so names fold together when
 // one is a prefix of the other (at least 4 characters) or they differ by
 // a letter or two; each group is spelled the way it was read most often
 // (ties: the longer).
@@ -105,7 +105,7 @@ func canonicalNames(names []string) map[string]string {
 			heads = append(heads, k)
 		}
 	}
-	// A head that was read truncated ("Nazanin Rame…") takes the fullest
+	// A head that was read truncated ("Natalia Rami…") takes the fullest
 	// spelling its group was read with; otherwise the most-read spelling
 	// stands (a longer one is more likely OCR junk than the real name).
 	spelling := map[string]string{}

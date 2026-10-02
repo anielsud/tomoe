@@ -319,7 +319,7 @@ rules are in [macos-video-hints.md](macos-video-hints.md).
 | Several rings, gallery | 5 | A purple virtual background passing the color test (8–13 candidates) | Border-shape test: 4 of 5 frames now one ring; the fifth has 3 really lit tiles |
 
 Names read correctly on all three frame types once icon scraps after a
-name ("… fo") were stripped; one-letter misreads ("Shafgat") are folded
+name ("… fo") were stripped; one-letter misreads ("Ortlz") are folded
 into the most-read spelling. Per look on an Apple Silicon desktop: ring
 detection 4 ms, thumbnail 2 ms, full frame 21 ms (when something
 changed), reading a name 16 ms (when needed), plus the capture.
@@ -338,8 +338,8 @@ one remote speaker), from `tomoe tune` without a reference:
 So checking every second costs about 2.5% of a core and changes almost
 nothing; the learning rate's 7.8% is only paid while someone needs
 naming. It also found two bugs, since fixed: an icon read as text after
-the name ("Kevin Li •.•") won the spelling, and lines no turn covered kept
-provisional labels ("New speaker", "Kevin Li?") in the saved transcript.
+the name ("Alex Kim •.•") won the spelling, and lines no turn covered kept
+provisional labels ("New speaker", "Alex Kim?") in the saved transcript.
 
 **Not measured yet:** how well names are attributed when there's a
 choice between people, the ring's lag (it never moved in a 1:1 call), and

@@ -130,7 +130,7 @@ func TuningFromSeconds(threshold, stickyGraceWindowSec, stickyThresholdMargin, m
 
 // Tracker performs online speaker clustering using cosine similarity of embeddings.
 // Speakers are labeled "Person 1", "Person 2", etc. — optionally suffixed
-// with a real name in parens (e.g. "Person 2 (Nazanin Rame...)") once a
+// with a real name in parens (e.g. "Person 2 (Natalia Rami...)") once a
 // hint attaches that cluster via SetHintForRecent; see its doc comment.
 type Tracker struct {
 	mu        sync.Mutex
@@ -444,7 +444,7 @@ func (t *Tracker) SetHintForRecent(name string, maxAge time.Duration) bool {
 
 	if existing := t.hints[idx]; existing != "" && isTruncationOf(name, existing) {
 		// A meeting app's active-speaker tile can truncate a long name
-		// (e.g. "Nazanin Rame…") on one read and show it in full on
+		// (e.g. "Natalia Rami…") on one read and show it in full on
 		// another. Without this check, whichever OCR read happens to
 		// land last wins unconditionally -- a later truncated read
 		// would silently clobber an already-attached, more complete

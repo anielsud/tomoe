@@ -108,9 +108,9 @@ func cleanOCRName(raw string) string {
 		}
 	}
 	// A one- or two-letter lowercase scrap after a name is an icon next to
-	// the label read as text (found live: "Amit Tripathi fo" from the
+	// the label read as text (found live: "Priya Desai fo" from the
 	// co-organizer badge), and so is a token with no letters at all
-	// ("Kevin Li •.•"). Names don't end in either.
+	// ("Alex Kim •.•"). Names don't end in either.
 	if (len(last) <= 2 && last == lower) || !strings.ContainsFunc(last, unicode.IsLetter) {
 		return cleanOCRName(strings.Join(words[:len(words)-1], " "))
 	}

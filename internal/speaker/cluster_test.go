@@ -150,7 +150,7 @@ func TestTrackerSetHintForRecent(t *testing.T) {
 	tracker.Assign([]float32{1, 0, 0}, 2*time.Second) // Person 1
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 2, most recently assigned
 
-	if ok := tracker.SetHintForRecent("Nazanin", time.Minute); !ok {
+	if ok := tracker.SetHintForRecent("Natalia", time.Minute); !ok {
 		t.Fatal("SetHintForRecent() = false, want true")
 	}
 
@@ -160,8 +160,8 @@ func TestTrackerSetHintForRecent(t *testing.T) {
 		t.Errorf("Person 1 label = %q, want unchanged %q", label1, "Person 1")
 	}
 	label2, _ := tracker.Assign([]float32{0, 0.99, 0.01}, 2*time.Second)
-	if label2 != "Person 2 (Nazanin)" {
-		t.Errorf("Person 2 label = %q, want %q", label2, "Person 2 (Nazanin)")
+	if label2 != "Person 2 (Natalia)" {
+		t.Errorf("Person 2 label = %q, want %q", label2, "Person 2 (Natalia)")
 	}
 }
 
@@ -169,19 +169,19 @@ func TestTrackerSetHintForRecent_KeepsFullNameOverLaterTruncation(t *testing.T) 
 	tracker := newRulesTracker(0.8)
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 1
 
-	if ok := tracker.SetHintForRecent("Nazanin Ramezani", time.Minute); !ok {
+	if ok := tracker.SetHintForRecent("Natalia Ramirez", time.Minute); !ok {
 		t.Fatal("SetHintForRecent() = false, want true")
 	}
 	// Re-select Person 1 as most recently assigned, then attach a
 	// truncated read of the same name (as a tile label might produce
 	// on a later OCR pass) -- it must not clobber the full name.
 	tracker.Assign([]float32{0, 0.99, 0.01}, 2*time.Second)
-	if ok := tracker.SetHintForRecent("Nazanin Rame…", time.Minute); !ok {
+	if ok := tracker.SetHintForRecent("Natalia Rami…", time.Minute); !ok {
 		t.Fatal("SetHintForRecent() = false, want true")
 	}
 
 	label, _ := tracker.Assign([]float32{0, 0.98, 0.02}, 2*time.Second)
-	if label != "Person 1 (Nazanin Ramezani)" {
+	if label != "Person 1 (Natalia Ramirez)" {
 		t.Errorf("label = %q, want full name kept, got truncated overwrite", label)
 	}
 }
@@ -190,14 +190,14 @@ func TestTrackerSetHintForRecent_UpgradesTruncatedNameToFuller(t *testing.T) {
 	tracker := newRulesTracker(0.8)
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 1
 
-	tracker.SetHintForRecent("Nazanin Rame…", time.Minute)
+	tracker.SetHintForRecent("Natalia Rami…", time.Minute)
 	tracker.Assign([]float32{0, 0.99, 0.01}, 2*time.Second)
-	if ok := tracker.SetHintForRecent("Nazanin Ramezani", time.Minute); !ok {
+	if ok := tracker.SetHintForRecent("Natalia Ramirez", time.Minute); !ok {
 		t.Fatal("SetHintForRecent() = false, want true")
 	}
 
 	label, _ := tracker.Assign([]float32{0, 0.98, 0.02}, 2*time.Second)
-	if label != "Person 1 (Nazanin Ramezani)" {
+	if label != "Person 1 (Natalia Ramirez)" {
 		t.Errorf("label = %q, want the fuller name to replace the truncated one", label)
 	}
 }
@@ -206,7 +206,7 @@ func TestTrackerSetHintForRecent_UnrelatedNameOverwrites(t *testing.T) {
 	tracker := newRulesTracker(0.8)
 	tracker.Assign([]float32{0, 1, 0}, 2*time.Second) // Person 1
 
-	tracker.SetHintForRecent("Nazanin Ramezani", time.Minute)
+	tracker.SetHintForRecent("Natalia Ramirez", time.Minute)
 	tracker.Assign([]float32{0, 0.99, 0.01}, 2*time.Second)
 	if ok := tracker.SetHintForRecent("Colin Whittingham", time.Minute); !ok {
 		t.Fatal("SetHintForRecent() = false, want true")
@@ -237,7 +237,7 @@ func TestTrackerSetHintForRecent_NoSpeakersYet(t *testing.T) {
 func TestTrackerResetClearsHints(t *testing.T) {
 	tracker := NewTracker(0.8)
 	tracker.Assign([]float32{1, 0, 0}, 2*time.Second)
-	tracker.SetHintForRecent("Nazanin", time.Minute)
+	tracker.SetHintForRecent("Natalia", time.Minute)
 	tracker.Reset()
 
 	label, _ := tracker.Assign([]float32{1, 0, 0}, 2*time.Second)
@@ -410,24 +410,24 @@ func TestTrackerShortSegment_PrefersABetterMatchingOtherSpeaker(t *testing.T) {
 
 	// Two already-distinguished speakers, established with confident
 	// matches so each has a real centroid of their own.
-	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1 ("Kevin")
+	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1 ("Alex")
 	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // reinforce Person 1's centroid
 	clock.advance(time.Second)
-	tracker.Assign([]float32{0, 0, 1, 0}, 2*time.Second) // Person 2 ("Shaf")
+	tracker.Assign([]float32{0, 0, 1, 0}, 2*time.Second) // Person 2 ("Rafa")
 	tracker.Assign([]float32{0, 0, 1, 0}, 2*time.Second) // reinforce Person 2's centroid
 
-	// Kevin speaks again, briefly, immediately followed by an
-	// even briefer reply from Shaf -- a real quick back-and-forth.
-	// Without the fix, Shaf's short reply would default to "whoever
-	// spoke last" (Kevin) purely because it's short and recent, even
-	// though it's clearly a much better match for Shaf's own centroid.
+	// Alex speaks again, briefly, immediately followed by an
+	// even briefer reply from Rafa -- a real quick back-and-forth.
+	// Without the fix, Rafa's short reply would default to "whoever
+	// spoke last" (Alex) purely because it's short and recent, even
+	// though it's clearly a much better match for Rafa's own centroid.
 	clock.advance(time.Second)
-	tracker.Assign([]float32{0.99, 0, 0.01, 0}, 2*time.Second) // Kevin again (long enough)
+	tracker.Assign([]float32{0.99, 0, 0.01, 0}, 2*time.Second) // Alex again (long enough)
 
 	clock.advance(time.Second)
-	label, _ := tracker.Assign([]float32{0, 0, 0.99, 0.01}, 300*time.Millisecond) // Shaf's brief reply
+	label, _ := tracker.Assign([]float32{0, 0, 0.99, 0.01}, 300*time.Millisecond) // Rafa's brief reply
 	if label != "Person 2" {
-		t.Errorf("short reply label = %q, want %q (Shaf's own centroid, not blindly Kevin's)", label, "Person 2")
+		t.Errorf("short reply label = %q, want %q (Rafa's own centroid, not blindly Alex's)", label, "Person 2")
 	}
 }
 
@@ -474,7 +474,7 @@ func TestTrackerSetHintForRecent_MergesClustersOnMatchingHint(t *testing.T) {
 	tracker.nowFn = clock.now
 
 	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1
-	tracker.SetHintForRecent("Christian Stanton", time.Minute)
+	tracker.SetHintForRecent("Daniel Stone", time.Minute)
 
 	clock.advance(time.Second)
 	tracker.Assign([]float32{0, 1, 0, 0}, 2*time.Second) // Person 2, a distinct-sounding embedding
@@ -486,7 +486,7 @@ func TestTrackerSetHintForRecent_MergesClustersOnMatchingHint(t *testing.T) {
 	// attached to Person 1 -- independent evidence they're one person,
 	// even though their embeddings didn't cluster together.
 	clock.advance(time.Second)
-	if ok := tracker.SetHintForRecent("Christian Stanton", time.Minute); !ok {
+	if ok := tracker.SetHintForRecent("Daniel Stone", time.Minute); !ok {
 		t.Fatal("SetHintForRecent() = false, want true")
 	}
 
@@ -498,8 +498,8 @@ func TestTrackerSetHintForRecent_MergesClustersOnMatchingHint(t *testing.T) {
 	// resolve to the SAME merged identity.
 	clock.advance(time.Second)
 	label, _ := tracker.Assign([]float32{0, 0.99, 0.01, 0}, 2*time.Second)
-	if label != "Person 1 (Christian Stanton)" {
-		t.Errorf("label after merge = %q, want %q", label, "Person 1 (Christian Stanton)")
+	if label != "Person 1 (Daniel Stone)" {
+		t.Errorf("label after merge = %q, want %q", label, "Person 1 (Daniel Stone)")
 	}
 }
 
@@ -509,17 +509,17 @@ func TestTrackerSetHintForRecent_MergeKeepsMoreCompleteName(t *testing.T) {
 	tracker.nowFn = clock.now
 
 	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1
-	tracker.SetHintForRecent("Christian Rame…", time.Minute)
+	tracker.SetHintForRecent("Daniel Rami…", time.Minute)
 
 	clock.advance(time.Second)
 	tracker.Assign([]float32{0, 1, 0, 0}, 2*time.Second) // Person 2
 
 	clock.advance(time.Second)
-	tracker.SetHintForRecent("Christian Ramezani", time.Minute)
+	tracker.SetHintForRecent("Daniel Ramirez", time.Minute)
 
 	clock.advance(time.Second)
 	label, _ := tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second)
-	if label != "Person 1 (Christian Ramezani)" {
+	if label != "Person 1 (Daniel Ramirez)" {
 		t.Errorf("label after merge = %q, want the fuller name kept", label)
 	}
 }
@@ -530,7 +530,7 @@ func TestTrackerSetHintForRecent_DoesNotMergeUnrelatedNames(t *testing.T) {
 	tracker.nowFn = clock.now
 
 	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1
-	tracker.SetHintForRecent("Christian Stanton", time.Minute)
+	tracker.SetHintForRecent("Daniel Stone", time.Minute)
 
 	clock.advance(time.Second)
 	tracker.Assign([]float32{0, 1, 0, 0}, 2*time.Second) // Person 2
@@ -570,7 +570,7 @@ func TestTrackerSetHintForRecent_MergeDoesNotRenumberUnrelatedClusters(t *testin
 	tracker.nowFn = clock.now
 
 	tracker.Assign([]float32{1, 0, 0, 0}, 2*time.Second) // Person 1
-	tracker.SetHintForRecent("Christian Stanton", time.Minute)
+	tracker.SetHintForRecent("Daniel Stone", time.Minute)
 
 	clock.advance(time.Second)
 	tracker.Assign([]float32{0, 1, 0, 0}, 2*time.Second) // Person 2
@@ -580,7 +580,7 @@ func TestTrackerSetHintForRecent_MergeDoesNotRenumberUnrelatedClusters(t *testin
 
 	clock.advance(time.Second)
 	tracker.Assign([]float32{0, 1, 0, 0}, 2*time.Second)       // re-select Person 2 as most recent
-	tracker.SetHintForRecent("Christian Stanton", time.Minute) // merges Person 2 into Person 1
+	tracker.SetHintForRecent("Daniel Stone", time.Minute) // merges Person 2 into Person 1
 
 	clock.advance(time.Second)
 	label, _ := tracker.Assign([]float32{0, 0, 0.99, 0.01}, 2*time.Second)
@@ -597,7 +597,7 @@ func TestTrackerAssign_NeedsHintUntilOneAttaches(t *testing.T) {
 		t.Error("brand new speaker: needsHint = false, want true")
 	}
 
-	tracker.SetHintForRecent("Nazanin", time.Minute)
+	tracker.SetHintForRecent("Natalia", time.Minute)
 
 	_, needsHint = tracker.Assign([]float32{0.99, 0.01, 0}, 2*time.Second)
 	if needsHint {
@@ -618,13 +618,13 @@ func TestIsTruncationOf(t *testing.T) {
 		short, long string
 		want        bool
 	}{
-		{"Nazanin Rame…", "Nazanin Ramezani", true},
-		{"nazanin rame", "Nazanin Ramezani", true}, // case-insensitive
-		{"Nazanin Ramezani", "Nazanin Ramezani", true},
-		{"Nazanin Ramezani", "Nazanin Rame…", false}, // short is actually longer
-		{"Colin", "Nazanin Ramezani", false},         // not a prefix at all
-		{"", "Nazanin Ramezani", false},
-		{"Nazanin", "", false},
+		{"Natalia Rami…", "Natalia Ramirez", true},
+		{"natalia rami", "Natalia Ramirez", true}, // case-insensitive
+		{"Natalia Ramirez", "Natalia Ramirez", true},
+		{"Natalia Ramirez", "Natalia Rami…", false}, // short is actually longer
+		{"Colin", "Natalia Ramirez", false},         // not a prefix at all
+		{"", "Natalia Ramirez", false},
+		{"Natalia", "", false},
 	}
 	for _, c := range cases {
 		if got := isTruncationOf(c.short, c.long); got != c.want {

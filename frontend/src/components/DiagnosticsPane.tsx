@@ -6,7 +6,7 @@ import { upsertSegment } from '../hooks/useTranscript';
 const MAX_SEGMENTS = 300;
 
 // speaker.Tracker.label() embeds a resolved video-hint name in parens
-// directly in the Speaker string, e.g. "Person 1 (Kevin)" — parsed
+// directly in the Speaker string, e.g. "Person 1 (Alex)" — parsed
 // back out here rather than re-deriving it from anywhere else, so this
 // view never needs its own copy of that logic.
 function parseSpeaker(speaker: string): { base: string; hint: string | null } {

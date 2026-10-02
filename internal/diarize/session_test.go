@@ -42,12 +42,12 @@ func TestLabelNewLocked(t *testing.T) {
 func TestSettleProvisional(t *testing.T) {
 	d := &SessionDiarizer{lock: &sync.Mutex{}, sess: &session.Session{Segments: []session.Segment{
 		{Speaker: NewSpeakerLabel, LiveSpeaker: "Person 4", StartTime: 10.5, EndTime: 11},
-		{Speaker: "Kevin?", LiveSpeaker: "Person 4", StartTime: 100, EndTime: 101},
+		{Speaker: "Alex?", LiveSpeaker: "Person 4", StartTime: 100, EndTime: 101},
 		{Speaker: "Person 1", StartTime: 0, EndTime: 5},
 	}}}
 	turns := []session.DiarizeSegment{{Start: 0, End: 10, Speaker: 0}}
-	d.settleProvisionalLocked(turns, map[int]string{0: "Person 1 (Kevin)"})
-	if got := d.sess.Segments[0].Speaker; got != "Person 1 (Kevin)" {
+	d.settleProvisionalLocked(turns, map[int]string{0: "Person 1 (Alex)"})
+	if got := d.sess.Segments[0].Speaker; got != "Person 1 (Alex)" {
 		t.Errorf("line next to a turn = %q, want its speaker", got)
 	}
 	if got := d.sess.Segments[1].Speaker; got != "Person 4" {
