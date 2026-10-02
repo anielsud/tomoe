@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"time"
+
+	"github.com/sosuke-ai/tomoe-pc/internal/teamsvideo"
 )
 
 // Look is one capture-and-detect attempt by a Watcher: what the meeting
@@ -24,6 +26,14 @@ type Look struct {
 	Detail string     `json:"detail"`
 	// Window is the app (and window title) captured.
 	Window string `json:"window,omitempty"`
+	// WindowID is the window captured, and Pick says why the window rule
+	// chose it (automatic mode): what was picked and what was passed over.
+	WindowID int    `json:"window_id,omitempty"`
+	Pick     string `json:"pick,omitempty"`
+	// Windows is every window on screen, front to back, recorded when the
+	// set changes and every inventoryEvery (Record for tuning); the
+	// pictures are in the session's windows/ folder.
+	Windows []teamsvideo.WindowRecord `json:"windows,omitempty"`
 	// Ring is the active-speaker ring found, if exactly one was.
 	Ring *RingMatch `json:"ring,omitempty"`
 	// Rings are every candidate when more than one was found, and
@@ -131,6 +141,19 @@ func (l *LookLog) Write(look Look) error {
 	defer f.Close()
 	_, err = f.Write(append(line, '\n'))
 	return err
+}
+
+// WriteWindowShot saves a picture of one window from look id's inventory
+// (Record for tuning) as windows/<look>-<window>[-thumb].jpg.
+func (l *LookLog) WriteWindowShot(lookID, windowID int, thumb bool, jpeg []byte) error {
+	if err := os.MkdirAll(filepath.Join(l.dir, "windows"), 0o755); err != nil {
+		return err
+	}
+	name := fmt.Sprintf("%d-%d.jpg", lookID, windowID)
+	if thumb {
+		name = fmt.Sprintf("%d-%d-thumb.jpg", lookID, windowID)
+	}
+	return os.WriteFile(filepath.Join(l.dir, "windows", name), jpeg, 0o644)
 }
 
 // WriteFull saves look id's full-resolution frame (Record for tuning).
