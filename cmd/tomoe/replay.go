@@ -97,6 +97,9 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 		if err := useTransducerDir(status, o.asrModel); err != nil {
 			return err
 		}
+		// Use exactly these files: the model setting would otherwise pick
+		// its own for English (see models.ASRModelFor).
+		cfg.Transcription.Model = models.ASRModelParakeetV3
 		fmt.Printf("Transcribing with %s\n", o.asrModel)
 	}
 	if o.decoding != "" {
