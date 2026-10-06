@@ -92,7 +92,7 @@ func TestCleanOCRName(t *testing.T) {
 		{"Natalia Ramirez Muted", "Natalia Ramirez"},
 		{"Natalia Ramirez Recording", "Natalia Ramirez"},
 		{"Daniel Stone", "Daniel Stone"}, // no noise word, unchanged
-		{"Privacy", "Privacy"},                     // single word alone is never stripped
+		{"Privacy", "Privacy"},           // single word alone is never stripped
 		{"  Devin Dobrowolski Priv  ", "Devin Dobrowolski"},
 	}
 	for _, c := range cases {
