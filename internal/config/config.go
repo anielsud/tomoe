@@ -97,6 +97,13 @@ type MeetingConfig struct {
 	// (`tomoe eval` scores both).
 	SplitOnSpeakerChange bool `toml:"split_on_speaker_change"`
 
+	// MinSpeakerWords gives the lines of any diarized speaker who says
+	// fewer words than this in the whole meeting to a neighbouring
+	// speaker when diarizing during the meeting: such "speakers" are
+	// diarization flickers, each shown as its own "Person N" line (see
+	// session.AbsorbSmallSpeakers). 0 keeps every speaker, as before.
+	MinSpeakerWords int `toml:"min_speaker_words"`
+
 	// SpeakerModel is the speaker embedding model used to tell voices
 	// apart, live and after the meeting: a models.SpeakerModels ID, or
 	// "auto" for the English-trained model in English meetings and the
@@ -200,6 +207,7 @@ func DefaultConfig() *Config {
 			DiarizeDuringMeeting: true,
 			DiarizeStride:        2,
 			DiarizeRecluster:     10,
+			MinSpeakerWords:      20,
 
 			// The sticky-speaker and short-segment rules are off (margin
 			// and duration 0), matching main's clustering, until they're

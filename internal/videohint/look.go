@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
 	"github.com/sosuke-ai/tomoe-pc/internal/teamsvideo"
 )
 
@@ -162,6 +163,27 @@ func (l *LookLog) WriteFull(id int, jpeg []byte) error {
 		return err
 	}
 	return os.WriteFile(filepath.Join(l.dir, "looks", fmt.Sprintf("%d-full.jpg", id)), jpeg, 0o644)
+}
+
+// Accepted is a recorded look's name and candidates as today's reading
+// would keep them: reads from a ring too short to hold a label, or that
+// can't be a name (see plausibleName), are dropped. A name remembered for
+// the tile (FromCache) was read earlier and is kept, as the Watcher does.
+// For replaying looks recorded before those checks existed.
+func (l Look) Accepted() (name string, candidates []string) {
+	label := rules[meeting.PlatformTeams].Label
+	if l.Usable && plausibleName(l.Name) && (l.FromCache || l.Ring == nil || labelFits(*l.Ring, label)) {
+		name = l.Name
+	}
+	if len(l.Candidates) > 1 {
+		candidates = make([]string, len(l.Candidates))
+		for i, c := range l.Candidates {
+			if plausibleName(c) && (i >= len(l.Rings) || labelFits(l.Rings[i], label)) {
+				candidates[i] = c
+			}
+		}
+	}
+	return name, candidates
 }
 
 // ReadLooks returns the looks recorded in dir (without thumbnails), in

@@ -34,7 +34,10 @@ type SessionDiarizer struct {
 	stream *Stream
 	lock   sync.Locker
 	split  bool
-	opts   SessionOptions
+	// minWords is MeetingConfig.MinSpeakerWords, applied to the final
+	// labels.
+	minWords int
+	opts     SessionOptions
 
 	// Set on the pipeline goroutine's first window: the session time the
 	// stream's audio starts at.
@@ -76,7 +79,7 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	if err != nil {
 		return nil, err
 	}
-	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
+	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
 	sc.OnSpeakerChange = opts.OnSpeakerChange
 	if d.stream, err = NewStream(sc); err != nil {
@@ -333,6 +336,7 @@ func (d *SessionDiarizer) Finish(dir string) error {
 		d.relabelLocked()
 	}
 	d.settleProvisionalLocked(tl.Turns, labels)
+	session.AbsorbSmallSpeakers(d.sess.Segments, d.minWords, d.isRenamedLabel)
 	id := d.sess.ID
 	d.lock.Unlock()
 	fmt.Printf("session %s: final speaker labels %.1fs after the meeting ended\n", id, time.Since(began).Seconds())

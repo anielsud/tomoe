@@ -142,10 +142,10 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	var looks []tuneLook
 	for _, l := range recorded {
 		tl := tuneLook{t: l.Time.Sub(sess.CreatedAt).Seconds(), costMs: l.Cost.Capture + l.Cost.Detect + l.Cost.OCR + l.Cost.Encode}
-		if l.Usable && l.Name != "" {
-			tl.name = l.Name
-		} else if len(l.Candidates) > 1 {
-			tl.candidates = l.Candidates
+		if name, candidates := l.Accepted(); name != "" {
+			tl.name = name
+		} else if candidates != nil {
+			tl.candidates = candidates
 		}
 		looks = append(looks, tl)
 	}
@@ -157,7 +157,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	}
 	if refPath == "" {
 		writeHintReport(outDir, dir, sess, recorded, nil)
-		return tuneWithoutRef(sess, segs, prep, info, recorded, looks, duration, outDir, began)
+		return tuneWithoutRef(sess, segs, prep, info, recorded, looks, duration, cfg.Meeting.MinSpeakerWords, outDir, began)
 	}
 
 	f, err := os.Open(refPath)
@@ -181,7 +181,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	fmt.Printf("Reference: %d turns, %d speakers; shifted %+.1fs to match the recording\n", len(ref.Turns), len(ref.Speakers()), refOffset)
 	writeHintReport(outDir, dir, sess, recorded, ref)
 
-	sc := &tuneScorer{ref: ref, align: align, turnOf: turnOf, segs: segs, info: info}
+	sc := &tuneScorer{ref: ref, align: align, turnOf: turnOf, segs: segs, info: info, minWords: cfg.Meeting.MinSpeakerWords}
 
 	strides := []int{info.Stride}
 	for _, s := range []int{2, 3, 5} {
@@ -341,6 +341,8 @@ type tuneScorer struct {
 	turnOf []int
 	segs   []session.Segment
 	info   diarize.StreamInfo
+	// minWords is MeetingConfig.MinSpeakerWords, applied as the app does.
+	minWords int
 }
 
 func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.NameParams) tuneResult {
@@ -359,6 +361,7 @@ func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.N
 		}
 	}
 	split, _ := session.SplitByDiarization(append([]session.Segment(nil), s.segs...), turns, labels)
+	session.AbsorbSmallSpeakers(split, s.minWords, nil)
 	words := segmentSpeakers(split)
 	mapping := eval.ScoreSpeakers(s.ref, segmentsLabeled(split), 1.0).Mapping
 	r := tuneResult{Names: np, Named: len(names), Embeddings: len(sc.prep.Embeddings)}

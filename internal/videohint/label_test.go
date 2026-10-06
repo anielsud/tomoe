@@ -1,6 +1,9 @@
 package videohint
 
-import "testing"
+import (
+	"reflect"
+	"testing"
+)
 
 func TestCleanOCRNameDropsSymbolScraps(t *testing.T) {
 	for in, want := range map[string]string{"Alex Kim •.•": "Alex Kim", "Alex Kim *•.": "Alex Kim", "Priya Desai fo": "Priya Desai", "Ana Lopez": "Ana Lopez"} {
@@ -106,6 +109,56 @@ func TestCleanOCRName(t *testing.T) {
 	for _, c := range cases {
 		if got := cleanOCRName(c.raw); got != c.want {
 			t.Errorf("cleanOCRName(%q) = %q, want %q", c.raw, got, c.want)
+		}
+	}
+}
+
+func TestPlausibleName(t *testing.T) {
+	for name, want := range map[string]bool{
+		"Alex Kim":                      true,
+		"Ana":                           true,
+		"Jo Share":                      true, // one toolbar word is a surname, not the toolbar
+		"ake control Annotate":          false,
+		"Take control Annotate Pop out": false,
+		"Take control":                  false,
+		"E":                             false,
+		"-":                             false,
+		"":                              false,
+	} {
+		if got := plausibleName(name); got != want {
+			t.Errorf("plausibleName(%q) = %v, want %v", name, got, want)
+		}
+	}
+}
+
+func TestRecognizeLabel_RingTooShort(t *testing.T) {
+	// A popup covering the lit tile leaves a ring a few pixels tall; its
+	// label box would sit on the toolbar above.
+	label := LabelRegion{BottomOffset: 52, Height: 40, MaxWidth: 300}
+	pix := make([]byte, 400*300*3)
+	if _, err := RecognizeLabel(pix, 400, 300, RingMatch{X: 10, Y: 100, Width: 129, Height: 6}, label); err != errRingTooShort {
+		t.Errorf("short ring: err %v, want errRingTooShort", err)
+	}
+}
+
+func TestLookAccepted(t *testing.T) {
+	short := RingMatch{X: 728, Y: 97, Width: 129, Height: 6}
+	tile := RingMatch{X: 327, Y: 97, Width: 129, Height: 130}
+	cases := []struct {
+		look Look
+		name string
+		cand []string
+	}{
+		{Look{Usable: true, Name: "Alex Kim", Ring: &tile}, "Alex Kim", nil},
+		{Look{Usable: true, Name: "Alex Kim", Ring: &short}, "", nil},                          // read from the toolbar's position
+		{Look{Usable: true, Name: "Alex Kim", Ring: &short, FromCache: true}, "Alex Kim", nil}, // read earlier from the whole tile
+		{Look{Usable: true, Name: "ake control Annotate", Ring: &tile}, "", nil},
+		{Look{Rings: []RingMatch{tile, short}, Candidates: []string{"Priya Desa...", "Alex Kim"}}, "", []string{"Priya Desa...", ""}},
+	}
+	for i, c := range cases {
+		name, cand := c.look.Accepted()
+		if name != c.name || !reflect.DeepEqual(cand, c.cand) {
+			t.Errorf("case %d: Accepted() = %q, %q; want %q, %q", i, name, cand, c.name, c.cand)
 		}
 	}
 }
