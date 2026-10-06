@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strconv"
 	"sync"
+	"sync/atomic"
 
 	ort "github.com/yalue/onnxruntime_go"
 )
@@ -140,7 +141,8 @@ func chunkStarts(n int, m Meta) []int {
 // active: labels[chunk][frame][speaker] is 0 or 1. Windows are processed in
 // batches, spread over workers goroutines (an ONNX Runtime session is safe
 // to run concurrently).
-func (s *segmenter) segment(samples []float32, workers int) ([][][]int8, error) {
+func (s *segmenter) segment(samples []float32, workers int, progress progressFunc) ([][][]int8, error) {
+	var done atomic.Int64
 	m := s.meta
 	starts := chunkStarts(len(samples), m)
 	labels := make([][][]int8, len(starts))
@@ -161,6 +163,9 @@ func (s *segmenter) segment(samples []float32, workers int) ([][][]int8, error) 
 						firstErr = err
 					}
 					mu.Unlock()
+				}
+				if progress != nil {
+					progress("segmenting", int(done.Add(int64(j.to-j.from))), len(starts))
 				}
 			}
 		}()

@@ -64,6 +64,7 @@ Writes report.txt, scores.json and per-pass transcripts for spot checks to
 		opts.windowSize, _ = cmd.Flags().GetFloat64("window-size")
 		opts.stream, _ = cmd.Flags().GetBool("stream-diarizer")
 		opts.streamStride, _ = cmd.Flags().GetInt("stream-stride")
+		opts.streamSequential, _ = cmd.Flags().GetBool("stream-sequential")
 		opts.streamRecluster, _ = cmd.Flags().GetFloat64("stream-recluster")
 		opts.windowStep, _ = cmd.Flags().GetFloat64("window-step")
 		opts.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
@@ -114,6 +115,7 @@ func init() {
 	evalCmd.Flags().Float64Slice("sweep-thresholds", []float64{0.8, 0.95, 1.1, 1.25}, "Clustering thresholds to sweep")
 	evalCmd.Flags().Float64Slice("sweep-min-on", []float64{0.3, 0.1}, "Shortest speech turns (s) to sweep")
 	evalCmd.Flags().Float64Slice("sweep-merge", []float64{0, 0.45, 0.55, 0.65}, "Post-merge similarity thresholds to sweep (0 = no merge step)")
+	evalCmd.Flags().Bool("stream-sequential", false, "With --diarization-timing stream: one window at a time on one low-priority thread, as during a meeting, instead of the parallel catch-up a meeting that ends behind gets")
 	evalCmd.Flags().String("diarization-timing", "", "Only time diarization, with nothing else running: sherpa or own (post-meeting, at --threads/--workers) or stream (during the meeting, as the app runs it, at --stream-stride)")
 	evalCmd.Flags().Int("workers", 0, "Own diarizer: parallel workers for segmentation and embeddings (default: cores / --threads)")
 	evalCmd.Flags().Float64Slice("probe-prefixes", nil, "Live: also label each utterance from just its first N seconds, for each N (e.g. 1,5,10,20), and score those early labels")
@@ -140,29 +142,30 @@ func init() {
 }
 
 type evalOptions struct {
-	media, ref, out string
-	collar          float64
-	skipDiarization bool
-	runs            []string
-	from, to        float64 // seconds; to 0 = the end
-	threads         int
-	noCache         bool
-	sweep           *sweepOptions    // nil unless --sweep
-	ownSweep        *ownSweepOptions // set with --sweep --own-diarizer
-	online          *onlineOptions   // set with --online
-	embeddingModel  string           // speaker model override, an ID or a path ("" = as configured)
-	probePrefixes   []float64        // live: early-label prefixes to score (s)
-	stream          bool             // diarize during the replay (diarize.Stream)
-	streamStride    int
-	streamRecluster float64
-	windowSize      float64 // live: within-utterance window labels (s)
-	windowStep      float64
-	minSilence      float64 // live utterance bounds (s)
-	maxSpeech       float64
-	diarThreshold   float64 // post-meeting diarization settings for the speaker model
-	diarMerge       float64
-	workers         int    // own diarizer: parallel workers (0 = cores / threads)
-	timeDiarization string // "sherpa" or "own": only time post-meeting diarization
+	media, ref, out  string
+	collar           float64
+	skipDiarization  bool
+	runs             []string
+	from, to         float64 // seconds; to 0 = the end
+	threads          int
+	noCache          bool
+	sweep            *sweepOptions    // nil unless --sweep
+	ownSweep         *ownSweepOptions // set with --sweep --own-diarizer
+	online           *onlineOptions   // set with --online
+	embeddingModel   string           // speaker model override, an ID or a path ("" = as configured)
+	probePrefixes    []float64        // live: early-label prefixes to score (s)
+	stream           bool             // diarize during the replay (diarize.Stream)
+	streamStride     int
+	streamSequential bool
+	streamRecluster  float64
+	windowSize       float64 // live: within-utterance window labels (s)
+	windowStep       float64
+	minSilence       float64 // live utterance bounds (s)
+	maxSpeech        float64
+	diarThreshold    float64 // post-meeting diarization settings for the speaker model
+	diarMerge        float64
+	workers          int    // own diarizer: parallel workers (0 = cores / threads)
+	timeDiarization  string // "sherpa" or "own": only time post-meeting diarization
 }
 
 // evalRun is one pipeline configuration's results.
@@ -358,6 +361,7 @@ func runEval(opts evalOptions) error {
 		if opts.stream {
 			m := cfg.Meeting
 			m.DiarizeStride, m.DiarizeRecluster = opts.streamStride, opts.streamRecluster
+			m.RecordForTuning = false // it would force stride 1 over --stream-stride
 			sc, err := diarize.StreamConfigFor(m, status, "en")
 			if err != nil {
 				return fmt.Errorf("--stream-diarizer: %w", err)
@@ -1079,10 +1083,12 @@ func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.St
 	case "stream":
 		m := cfg.Meeting
 		m.DiarizeStride, m.DiarizeRecluster = opts.streamStride, opts.streamRecluster
+		m.RecordForTuning = false // it would force stride 1 over --stream-stride
 		sc, err := diarize.StreamConfigFor(m, status, "en")
 		if err != nil {
 			return err
 		}
+		sc.NoCatchUp = opts.streamSequential
 		reclusters := 0
 		sc.OnTimeline = func(diarize.Timeline) { reclusters++ }
 		st, err := diarize.NewStream(sc)
@@ -1090,6 +1096,23 @@ func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.St
 			return err
 		}
 		defer st.Close()
+		// Real progress, for watching a long run: the phase and its count.
+		stop := make(chan struct{})
+		defer close(stop)
+		go func() {
+			tick := time.NewTicker(2 * time.Second)
+			defer tick.Stop()
+			for {
+				select {
+				case <-stop:
+					return
+				case <-tick.C:
+					if phase, done, total := st.Progress(); total > 0 {
+						fmt.Printf("progress %s %d/%d\n", phase, done, total)
+					}
+				}
+			}
+		}()
 		for i := 0; i < len(samples); i += 512 {
 			st.Feed(samples[i:min(i+512, len(samples))])
 		}
@@ -1097,8 +1120,15 @@ func timeDiarizationOnly(opts evalOptions, cfg *config.Config, status *models.St
 		if err != nil {
 			return err
 		}
-		fmt.Printf("streaming diarizer (one low-priority thread, every %d windows, recluster every %.0fs): %d reclusters, %d speakers\n",
-			sc.Stride, sc.ReclusterSeconds, reclusters, len(tl.Labels))
+		mode := "parallel catch-up, as after a meeting that ends behind"
+		if sc.NoCatchUp {
+			mode = "one window at a time on one low-priority thread, as during a meeting"
+		}
+		fmt.Printf("streaming diarizer (every %d windows, recluster every %.0fs; %s): %d reclusters, %d speakers\n",
+			sc.Stride, sc.ReclusterSeconds, mode, reclusters, len(tl.Labels))
+		stats := st.Stats()
+		fmt.Printf("  reclusters %.1fs in all, slowest %.2fs; %d windows, %d fingerprints; %d windows caught up in parallel in %.1fs\n",
+			stats.ReclusterTotal, stats.ReclusterMax, stats.Windows, stats.Fingerprints, stats.CatchUpWindows, stats.CatchUpSeconds)
 	default:
 		return fmt.Errorf("--diarization-timing must be sherpa, own or stream")
 	}
