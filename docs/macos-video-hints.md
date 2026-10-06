@@ -110,25 +110,36 @@ proportionally, and one example can't distinguish "scales with the
 container" from "constant size, just measured at one particular
 container size."
 
-## OCR (`ocr_darwin.go`, `ocr_bridge_darwin.m`)
+## OCR (`internal/ocr`, `videohint/ocr.go`)
 
-Vision.framework text recognition (`VNRecognizeTextRequest`), the same
-cgo/Objective-C bridge shape as `internal/guestaudio`. Two real bugs
-found wiring this up:
+Names are read with open models, the same on every platform: PaddleOCR
+PP-OCRv5 text detection and English text recognition (Apache-2.0, in ONNX
+form from RapidOCR v3.9.2, run through the ONNX Runtime Tomoe already
+ships, `internal/onnxrt`). They replace Apple's Vision framework
+(`VNRecognizeTextRequest`), so no part of name reading depends on macOS.
+The models (4.8 MB and 7.9 MB) download with the others when video hints
+are on (Tools, `tomoe init`, `tomoe model download`); each is checked
+against its pinned SHA256 before it's kept.
 
-1. **Autoreleased objects assigned into a `__block` variable without
-   retaining.** This file builds without ARC (manual retain/release,
-   matching the rest of this project's ObjC bridges); Vision hands the
-   completion handler's block autoreleased objects, and assigning one
-   straight into a `__block` var let it get freed before the outer
-   function read it back — segfaulting on every call. Fixed by
-   explicitly retaining in the block and releasing before return.
-2. **Holding a Go slice's backing array by raw pointer across the cgo
-   boundary isn't safe** once anything (like a completion handler) can
-   outlive the call that took the pointer. Switched from
-   `CGDataProviderCreateWithData` (wraps the caller's pointer directly)
-   to `CGDataProviderCreateWithCFData` over an immediately-copied
-   `NSData`.
+Detection matters as much as recognition. A recognizer reads one tight
+line of text; a label crop is a tile's bottom strip with video above it
+and icons beside the name. Fed the crop directly the open recognizer
+read 15% of names right, and tuned crop heuristics reached 95% on the
+meetings they were tuned on but 27% on others (a speaker-view label sits
+elsewhere). Detecting the text lines first and reading the widest one
+(`recognizeName`) is layout-independent. Replayed on five recorded
+sessions (gallery, speaker view, screen share, 1:1 audio and video
+calls), it reads 327 of 329 labels right (99.4%; both misses were other
+text, a "Voice isolation" caption and an icon) at 22-29 ms a label, where
+Vision read 90.7% exactly on the same gallery labels at 17 ms. The 1:1
+toolbar check reads the toolbar's button area (about 145 ms, at most
+every 10 s while no ring is found) and identified every 1:1 call frame
+with no meeting misread as one. Names with letters outside the English
+model's set (accents) would need the Latin model, which read this
+meeting's names slightly worse (it took an icon for an "l").
+
+The earlier Vision bridge's two bugs (autoreleased objects in a `__block`
+variable; a Go pointer held across the cgo boundary) went with it.
 
 **Noise stripping.** Observed live: a real name OCR'd as "Devin
 Dobrowolski Priv" — "Priv" (a truncated "Privacy") came from Teams'
@@ -152,7 +163,7 @@ wrong-window captures made it through live: a 1:1 chat conversation,
 and the post-meeting recording/playback page — both Teams-owned, both
 non-trivially titled, neither an actual call. One of them, worse than
 just wasting a capture, produced a *plausible-looking wrong OCR read*:
-Vision happily read the page's own window-title text off screen and
+The OCR happily read the page's own window-title text off screen and
 returned it as if it were a recognized speaker's name.
 
 Fixed with `DetectCallChrome`: look for the "Leave call" hang-up

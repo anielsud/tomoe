@@ -447,6 +447,9 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		d.tracker.Reset()
 	}
 
+	st := models.NewManager(d.cfg.Transcription.ModelPath).Check()
+	videohint.SetOCRModels(st.OCRModelPath(models.OCRDetector), st.OCRModelPath(models.OCRRecognizer))
+
 	// Screen-based speaker-name hints (macOS only; a no-op on Linux):
 	// the watcher looks at the meeting window, more often while a speaker
 	// needs naming and right after a speaker change. Its looks go to sess,

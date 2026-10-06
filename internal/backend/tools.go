@@ -165,6 +165,11 @@ func (a *App) downloadModels(id string) (string, error) {
 	if err := mgr.DownloadSpeakerModels(cfg.Meeting.SpeakerModel, cfg.MeetingLanguages(), false, progress); err != nil {
 		return "", err
 	}
+	if cfg.Meeting.VideoHintsOn() {
+		if err := mgr.DownloadOCRModels(false, progress); err != nil {
+			return "", err
+		}
+	}
 	if cfg.Transcription.TwoPass {
 		if err := mgr.DownloadEnglishStreaming(false, progress); err != nil {
 			return "", err
@@ -228,6 +233,9 @@ func (a *App) swapEngines(cfg *config.Config) []string {
 	}
 	if cfg.Transcription.TwoPass && bundle.streamingEngine == nil {
 		warnings = append(warnings, "Two-pass is on, but the English streaming model isn't available: open Tools to download it.")
+	}
+	if cfg.Meeting.VideoHintsOn() && !status.OCRReady() {
+		warnings = append(warnings, "Video hints can't read names until the text-reading models are downloaded: open Tools to download them.")
 	}
 	return warnings
 }
@@ -341,6 +349,9 @@ func modelStatuses(cfg *config.Config) []ToolStatus {
 	)
 	if wantsBengali(cfg) {
 		list = append(list, entry("model-bengali", "Bengali Zipformer", "Bengali transcription", false, s.BengaliReady))
+	}
+	if cfg.Meeting.VideoHintsOn() {
+		list = append(list, entry("model-ocr", "Text reading (PP-OCRv5)", "Reading names off the meeting window (video hints)", false, s.OCRReady()))
 	}
 	for i := range list {
 		list[i].Detail += " · " + s.ModelDir

@@ -59,7 +59,9 @@ func (w *Watcher) isOneOnOneCall(fr *frame, at time.Time) bool {
 		return c.call
 	}
 	scale := max(1, fr.scale)
-	strip, sw, sh, err := cropRGB(fr.pix, fr.width, fr.height, 0, callToolbarY0*scale, fr.width, (callToolbarY1-callToolbarY0)*scale)
+	// The buttons sit right of the call timer; the left third holds only
+	// the timer and status icons, so it isn't read.
+	strip, sw, sh, err := cropRGB(fr.pix, fr.width, fr.height, fr.width/3, callToolbarY0*scale, fr.width-fr.width/3, (callToolbarY1-callToolbarY0)*scale)
 	call := false
 	if err == nil {
 		if text, err := RecognizeText(strip, sw, sh); err == nil {
