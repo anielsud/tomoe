@@ -76,6 +76,11 @@ type Config struct {
 	ProbePrefixes []float64
 	Probes        *Probes
 
+	// ReplayProgress, if set, is called by Replay every few seconds of
+	// audio with the analysis windows done and the total, for tools that
+	// report progress. Ignored when capturing live.
+	ReplayProgress func(done, total int)
+
 	// WindowSize and WindowStep (seconds), for measurement only, also
 	// match overlapping windows within each utterance longer than
 	// WindowSize against the known speakers (speaker.Tracker.PeekMatch),

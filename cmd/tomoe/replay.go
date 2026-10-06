@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
@@ -42,13 +43,36 @@ was heard live, but both runs hear the same audio.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out, _ := cmd.Flags().GetString("out")
 		mainThreshold, _ := cmd.Flags().GetFloat64("main-threshold")
-		return runSessionReplay(args[0], out, mainThreshold)
+		var o replayOptions
+		o.asrModel, _ = cmd.Flags().GetString("asr-model")
+		o.decoding, _ = cmd.Flags().GetString("decoding")
+		o.onlyCurrent, _ = cmd.Flags().GetBool("only-current")
+		o.progress, _ = cmd.Flags().GetBool("progress")
+		return runSessionReplay(args[0], out, mainThreshold, o)
 	},
+}
+
+// replayOptions are session replay's settings for testing transcription
+// changes against a session's real audio (see tomoe textdiff).
+type replayOptions struct {
+	// asrModel is a Parakeet-style transducer directory (encoder, decoder,
+	// joiner .onnx and tokens.txt) to transcribe with instead of the
+	// configured one; decoding overrides decoding_method.
+	asrModel string
+	decoding string
+	// onlyCurrent skips the main run; progress prints "progress ..."
+	// lines as the audio is replayed.
+	onlyCurrent bool
+	progress    bool
 }
 
 func init() {
 	sessionReplayCmd.Flags().String("out", "", "Directory for main.txt/current.txt (default: replay-<session-id> in the current directory)")
 	sessionReplayCmd.Flags().Float64("main-threshold", 0, "Speaker threshold for the main run (default: your speaker_threshold)")
+	sessionReplayCmd.Flags().String("asr-model", "", "Transcribe with this transducer model directory (encoder/decoder/joiner .onnx + tokens.txt) instead of the configured Parakeet")
+	sessionReplayCmd.Flags().String("decoding", "", "Decoding method for this replay: greedy_search or modified_beam_search (default: your decoding_method)")
+	sessionReplayCmd.Flags().Bool("only-current", false, "Replay only with your current config (skip the main run)")
+	sessionReplayCmd.Flags().Bool("progress", false, "Print progress lines (\"progress replay <run> <done>/<total>\") while replaying")
 	sessionCmd.AddCommand(sessionReplayCmd)
 }
 
@@ -60,7 +84,7 @@ type replayRun struct {
 	segments []session.Segment
 }
 
-func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
+func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOptions) error {
 	cfg, err := config.Load(config.Path())
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -68,6 +92,15 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 	status := models.NewManager(cfg.Transcription.ModelPath).Check()
 	if !status.Ready() {
 		return fmt.Errorf("transcription models not downloaded (run 'tomoe model download')")
+	}
+	if o.asrModel != "" {
+		if err := useTransducerDir(status, o.asrModel); err != nil {
+			return err
+		}
+		fmt.Printf("Transcribing with %s\n", o.asrModel)
+	}
+	if o.decoding != "" {
+		cfg.Transcription.DecodingMethod = o.decoding
 	}
 
 	sess, err := session.NewStore(config.SessionDir()).Load(sessID)
@@ -99,23 +132,29 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 	if mainThreshold > 0 {
 		baseline.Threshold = mainThreshold
 	}
-	runs := []*replayRun{
-		{name: "main", twoPass: false, tuning: baseline},
-		{name: "current", twoPass: cfg.Transcription.TwoPass && lang == "en", tuning: current},
+	cur := &replayRun{name: "current", twoPass: cfg.Transcription.TwoPass && lang == "en", tuning: current}
+	runs := []*replayRun{{name: "main", twoPass: false, tuning: baseline}, cur}
+	if o.onlyCurrent {
+		runs = []*replayRun{cur}
 	}
 
-	pipe, err := loadOfflinePipeline(cfg, status, lang, monitor != nil, runs[1].twoPass)
+	pipe, err := loadOfflinePipeline(cfg, status, lang, monitor != nil, cur.twoPass)
 	if err != nil {
 		return err
 	}
 	defer pipe.Close()
 	if pipe.streaming == nil {
-		runs[1].twoPass = false
+		cur.twoPass = false
 	}
 
 	fmt.Printf("Replaying %q (%s of audio)...\n", sess.Title, formatDuration(float64(max(len(mic), len(monitor)))/16000))
 	for _, run := range runs {
-		if run.segments, err = live.Replay(pipe.liveConfig(run.tuning, run.twoPass), mic, monitor); err != nil {
+		lc := pipe.liveConfig(run.tuning, run.twoPass)
+		if o.progress {
+			name := run.name
+			lc.ReplayProgress = func(done, total int) { fmt.Printf("progress replay %s %d/%d\n", name, done, total) }
+		}
+		if run.segments, err = live.Replay(lc, mic, monitor); err != nil {
 			return fmt.Errorf("%s run: %w", run.name, err)
 		}
 		sort.SliceStable(run.segments, func(i, j int) bool { return run.segments[i].StartTime < run.segments[j].StartTime })
@@ -132,10 +171,63 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 		if err := os.WriteFile(path, []byte(formatReplayTranscript(run.segments)), 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
 		}
+		// The segments with word timings, for tomoe textdiff.
+		js, _ := json.MarshalIndent(run.segments, "", " ")
+		if err := os.WriteFile(filepath.Join(outDir, run.name+".json"), js, 0o644); err != nil {
+			return fmt.Errorf("writing %s.json: %w", run.name, err)
+		}
 	}
 
-	printReplaySummary(runs)
-	fmt.Printf("\nTranscripts: %s, %s\n", filepath.Join(outDir, "main.txt"), filepath.Join(outDir, "current.txt"))
+	if len(runs) == 2 {
+		printReplaySummary(runs)
+	}
+	fmt.Printf("\nTranscripts in %s\n", outDir)
+	return nil
+}
+
+// useTransducerDir points status's transcription model at dir: its
+// encoder, decoder and joiner .onnx files (the int8 ones if there are
+// both) and tokens.txt.
+func useTransducerDir(status *models.Status, dir string) error {
+	find := func(part string) (string, error) {
+		var plain, int8 string
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return "", err
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if !strings.HasPrefix(n, part) || !strings.HasSuffix(n, ".onnx") {
+				continue
+			}
+			if strings.Contains(n, "int8") {
+				int8 = filepath.Join(dir, n)
+			} else {
+				plain = filepath.Join(dir, n)
+			}
+		}
+		if int8 != "" {
+			return int8, nil
+		}
+		if plain != "" {
+			return plain, nil
+		}
+		return "", fmt.Errorf("no %s*.onnx in %s", part, dir)
+	}
+	var err error
+	if status.EncoderPath, err = find("encoder"); err != nil {
+		return err
+	}
+	if status.DecoderPath, err = find("decoder"); err != nil {
+		return err
+	}
+	if status.JoinerPath, err = find("joiner"); err != nil {
+		return err
+	}
+	status.TokensPath = filepath.Join(dir, "tokens.txt")
+	if _, err := os.Stat(status.TokensPath); err != nil {
+		return fmt.Errorf("no tokens.txt in %s", dir)
+	}
 	return nil
 }
 
