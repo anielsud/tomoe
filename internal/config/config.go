@@ -46,6 +46,11 @@ type TranscriptionConfig struct {
 	// it's spoken, refined by Parakeet once each utterance ends. false
 	// keeps single-pass (Parakeet only, text appears per utterance).
 	TwoPass bool `toml:"two_pass"`
+	// Model is the transcription model: "auto" (the default) uses the
+	// English-only Parakeet v2 for English, which is more accurate there,
+	// and the multilingual v3 for other languages; "parakeet-v3" uses v3
+	// for everything, as before (models.ASRModels).
+	Model string `toml:"model"`
 }
 
 // OutputConfig holds output behavior settings.
@@ -178,6 +183,7 @@ func DefaultConfig() *Config {
 			// Off, as on main: two-pass is opt-in until it has been
 			// tuned on real recordings (see `tomoe session replay`).
 			TwoPass: false,
+			Model:   "auto",
 		},
 		Output: OutputConfig{
 			AutoPaste:      true,

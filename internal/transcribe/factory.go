@@ -12,15 +12,27 @@ import (
 // per-language engines. Otherwise returns an EngineSet with just the default
 // (Parakeet) engine.
 func NewEngineSetFromConfig(cfg Config, status *models.Status, multiCfg *config.MultilingualConfig) (*EngineSet, error) {
+	defaultLang := "en"
+	if multiCfg != nil && multiCfg.DefaultLang != "" {
+		defaultLang = multiCfg.DefaultLang
+	}
+
+	// The Parakeet model for the default language: the English-only one
+	// for English when the setting asks for it and it's downloaded.
+	if status != nil {
+		m, fellBack := status.ASRModelFor(cfg.Model, defaultLang)
+		if m.ID != models.ASRModels[0].ID {
+			cfg.EncoderPath, cfg.DecoderPath, cfg.JoinerPath, cfg.TokensPath = status.ASRModelFiles(m)
+		}
+		if fellBack {
+			fmt.Printf("Transcription model %s isn't downloaded; using %s\n", models.ResolveASRModel(cfg.Model, defaultLang).Name, m.Name)
+		}
+	}
+
 	// Create base Parakeet engine
 	parakeet, err := NewEngine(cfg)
 	if err != nil {
 		return nil, err
-	}
-
-	defaultLang := "en"
-	if multiCfg != nil && multiCfg.DefaultLang != "" {
-		defaultLang = multiCfg.DefaultLang
 	}
 
 	engines := map[string]Engine{defaultLang: parakeet}

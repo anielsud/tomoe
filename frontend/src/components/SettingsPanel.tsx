@@ -262,6 +262,13 @@ export default function SettingsPanel() {
 
         <Group title="Transcription" applies="reload">
           <Row label="Two-pass (English meetings)" hint="Live text while people speak, refined per utterance">{toggle('Transcription', 'TwoPass')}</Row>
+          <Row label="Transcription model" hint="Automatic uses the English-only model in English, which is more accurate there">
+            <select className="setting-input" value={draft.Transcription.Model || 'auto'} onChange={e => set('Transcription', 'Model', e.target.value)}>
+              <option value="auto">Automatic (English-only for English, multilingual for other languages)</option>
+              <option value="parakeet-v2-en">Parakeet v2, English only</option>
+              <option value="parakeet-v3">Parakeet v3, 25 languages</option>
+            </select>
+          </Row>
           {!mac && <Row label="Use NVIDIA GPU" hint="Needs CUDA libraries (see Tools)">{toggle('Transcription', 'GPUEnabled')}</Row>}
           <Row label="Decoding method" hint="Beam search is needed for hotwords">
             <select className="setting-input" value={draft.Transcription.DecodingMethod} onChange={e => set('Transcription', 'DecodingMethod', e.target.value)}>

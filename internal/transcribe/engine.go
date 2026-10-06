@@ -39,4 +39,9 @@ type Config struct {
 	MaxActivePaths int     // used with modified_beam_search
 	HotwordsFile   string  // path to hotwords file (one word/phrase per line)
 	HotwordsScore  float32 // boost score for hotwords (e.g. 1.5)
+	// Model is the transcription model setting (config
+	// transcription.model). NewEngineSetFromConfig uses the model it
+	// picks for the default language, if downloaded, in place of the
+	// paths above.
+	Model string
 }

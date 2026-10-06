@@ -165,6 +165,9 @@ func (a *App) downloadModels(id string) (string, error) {
 	if err := mgr.DownloadSpeakerModels(cfg.Meeting.SpeakerModel, cfg.MeetingLanguages(), false, progress); err != nil {
 		return "", err
 	}
+	if err := mgr.DownloadASRModels(cfg.Transcription.Model, cfg.MeetingLanguages(), false, progress); err != nil {
+		return "", err
+	}
 	if cfg.Meeting.VideoHintsOn() {
 		if err := mgr.DownloadOCRModels(false, progress); err != nil {
 			return "", err
@@ -229,6 +232,11 @@ func (a *App) swapEngines(cfg *config.Config) []string {
 	for _, sm := range models.SpeakerModelsNeeded(cfg.Meeting.SpeakerModel, cfg.MeetingLanguages()) {
 		if !status.SpeakerModelReady(sm) {
 			warnings = append(warnings, fmt.Sprintf("The speaker model %s isn't downloaded, so meetings use the base model until it is: open Tools to download it.", sm.Name))
+		}
+	}
+	for _, am := range models.ASRModelsNeeded(cfg.Transcription.Model, cfg.MeetingLanguages()) {
+		if !status.ASRModelReady(am) {
+			warnings = append(warnings, fmt.Sprintf("The transcription model %s isn't downloaded, so transcription uses %s until it is: open Tools to download it.", am.Name, models.ASRModels[0].Name))
 		}
 	}
 	if cfg.Transcription.TwoPass && bundle.streamingEngine == nil {
@@ -343,6 +351,9 @@ func modelStatuses(cfg *config.Config) []ToolStatus {
 		if sm.ID != models.SpeakerModels[0].ID {
 			list = append(list, entry("model-speaker-"+sm.ID, "Speaker embedding: "+sm.Name, "Telling speakers apart in "+speakerModelUse(cfg, sm)+" meetings (Settings, Speaker model)", false, s.SpeakerModelReady(sm)))
 		}
+	}
+	for _, am := range models.ASRModelsNeeded(cfg.Transcription.Model, cfg.MeetingLanguages()) {
+		list = append(list, entry("model-asr-"+am.ID, "Transcription: "+am.Name, "More accurate English transcription (config: transcription.model)", false, s.ASRModelReady(am)))
 	}
 	list = append(list,
 		entry("model-segmentation", "Speaker segmentation", "Relabeling speakers after a meeting is saved", false, s.SpeakerSegmentationReady),
