@@ -74,6 +74,16 @@ type tuneResult struct {
 	Named      int     `json:"speakers_named"`
 	HintCPU    float64 `json:"hint_cpu"` // share of one core the looks took
 	Embeddings int     `json:"embeddings"`
+
+	// Short turns: right speaker for words in reference turns of 1-3 and
+	// 4-15 words. Small: speakers left with fewer than 20 words (lines
+	// shown under a speaker who's barely there). MinVoiceSeconds and
+	// MinWords are the small-speaker rules applied (0: off).
+	Short13         float64 `json:"short_1_3"`
+	Short415        float64 `json:"short_4_15"`
+	Small           int     `json:"small_speakers"`
+	MinVoiceSeconds float64 `json:"min_voice_seconds"`
+	MinWords        int     `json:"min_words"`
 }
 
 // nameScore ranks settings: right names count, wrong names count double
@@ -225,17 +235,37 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	}
 	def := diarize.DefaultNameParams()
 	hints, cpu := thinLooks(looks, 0, duration)
-	current := sc.score(base, hints, def)
+	app := base
+	app.clusters = base.prep.AbsorbSmallClusters(base.clusters, info.Params, cfg.Meeting.MinSpeakerSeconds)
+	current := sc.score(app, hints, def)
 	current.Stride, current.HintCPU = info.Stride, cpu
+
+	// Stage 3: small speakers, absorbed by voice (into the most similar
+	// larger cluster) and/or by neighbouring line, current naming rules.
+	var stage3 []tuneResult
+	for _, minWords := range []int{0, cfg.Meeting.MinSpeakerWords} {
+		lines := *sc
+		lines.minWords = minWords
+		for _, secs := range []float64{0, 1, 2, 3, 5, 8, 12} {
+			cs := base
+			cs.clusters = base.prep.AbsorbSmallClusters(base.clusters, info.Params, secs)
+			r := lines.score(cs, hints, def)
+			r.Stride, r.HintCPU, r.MinVoiceSeconds = info.Stride, cpu, secs
+			stage3 = append(stage3, r)
+		}
+		if minWords == 0 && cfg.Meeting.MinSpeakerWords == 0 {
+			break
+		}
+	}
 
 	if err := os.MkdirAll(outDir, 0o755); err != nil {
 		return err
 	}
-	text := formatTune(sess, current, stage1, stage2)
+	text := formatTune(sess, current, stage1, stage2) + formatSmallSpeakers(stage3)
 	if err := os.WriteFile(filepath.Join(outDir, "tune.txt"), []byte(text), 0o644); err != nil {
 		return err
 	}
-	js, _ := json.MarshalIndent(map[string]any{"current": current, "names": stage1, "stride_rate": stage2}, "", "  ")
+	js, _ := json.MarshalIndent(map[string]any{"current": current, "names": stage1, "stride_rate": stage2, "small_speakers": stage3}, "", "  ")
 	if err := os.WriteFile(filepath.Join(outDir, "tune.json"), js, 0o644); err != nil {
 		return err
 	}
@@ -364,8 +394,17 @@ func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.N
 	session.AbsorbSmallSpeakers(split, s.minWords, nil)
 	words := segmentSpeakers(split)
 	mapping := eval.ScoreSpeakers(s.ref, segmentsLabeled(split), 1.0).Mapping
-	r := tuneResult{Names: np, Named: len(names), Embeddings: len(sc.prep.Embeddings)}
-	r.SpeakerAcc = s.align.Score(words, mapping).Accuracy()
+	r := tuneResult{Names: np, Named: len(names), Embeddings: len(sc.prep.Embeddings), MinWords: s.minWords, Small: smallSpeakers(split, 20)}
+	ws := s.align.Score(words, mapping)
+	r.SpeakerAcc = ws.Accuracy()
+	for _, b := range ws.Buckets {
+		switch b.MaxWords {
+		case 3:
+			r.Short13 = b.Accuracy()
+		case 15:
+			r.Short415 = b.Accuracy()
+		}
+	}
 	var right, wrong, none, total int
 	for i, w := range words {
 		t := s.turnOf[i]
@@ -414,4 +453,36 @@ func formatTune(sess *session.Session, current tuneResult, names, rest []tuneRes
 		fmt.Fprintln(&b, row(r))
 	}
 	return b.String()
+}
+
+// formatSmallSpeakers reports stage 3 of tune: the small-speaker rules.
+func formatSmallSpeakers(rs []tuneResult) string {
+	var b strings.Builder
+	fmt.Fprintln(&b, "\nSmall speakers (current naming rules, every look, recorded stride). voice: clusters speaking less than")
+	fmt.Fprintln(&b, "N seconds in all join the most similar larger cluster; lines: speakers under N words take the neighbouring")
+	fmt.Fprintln(&b, "line's speaker. small: speakers left with under 20 words. 1-3 / 4-15: right speaker in reference turns that long.")
+	for _, r := range rs {
+		fmt.Fprintf(&b, "  voice %4.1f s  lines %2d w | speakers %s  1-3 %s  4-15 %s | names %s / %s / %s | small %2d\n",
+			r.MinVoiceSeconds, r.MinWords, pct(r.SpeakerAcc), pct(r.Short13), pct(r.Short415),
+			pct(r.NameRight), pct(r.NameWrong), pct(r.Unnamed), r.Small)
+	}
+	return b.String()
+}
+
+// smallSpeakers counts the diarized speakers with fewer than minWords
+// words.
+func smallSpeakers(segs []session.Segment, minWords int) int {
+	words := map[string]int{}
+	for _, s := range segs {
+		if session.Diarizable(s) {
+			words[s.Speaker] += len(strings.Fields(s.Text))
+		}
+	}
+	n := 0
+	for _, w := range words {
+		if w < minWords {
+			n++
+		}
+	}
+	return n
 }

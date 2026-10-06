@@ -218,3 +218,82 @@ func mergeByCentroid(embs [][]float32, clusters []int, minSimilarity float64) []
 	}
 	return compactLabels(len(clusters), func(i int) int { return root(clusters[i]) })
 }
+
+// AbsorbSmallClusters gives every window of a cluster that speaks for less
+// than minSeconds in all (by the turns params reconstructs) to the larger
+// cluster whose mean voice it's most like. Such clusters are mostly
+// flickers: a moment of one person's voice the fingerprints placed apart
+// (see session.AbsorbSmallSpeakers, which does the same by neighbouring
+// line instead of by voice). minSeconds <= 0, or no cluster that large,
+// leaves clusters as they are.
+func (p *Prepared) AbsorbSmallClusters(clusters []int, params Params, minSeconds float64) []int {
+	if minSeconds <= 0 || len(clusters) == 0 {
+		return clusters
+	}
+	k := 0
+	for _, c := range clusters {
+		k = max(k, c+1)
+	}
+	spoke := make([]float64, k)
+	for _, t := range p.turns(clusters, params) {
+		spoke[t.Speaker] += t.End - t.Start
+	}
+	return absorbByVoice(p.Embeddings, clusters, spoke, minSeconds)
+}
+
+// absorbByVoice is AbsorbSmallClusters given how long each cluster spoke.
+func absorbByVoice(embs [][]float32, clusters []int, spoke []float64, minSeconds float64) []int {
+	k := len(spoke)
+	dim := len(embs[0])
+	sums := make([][]float64, k)
+	anyLarge := false
+	for c := range sums {
+		if spoke[c] >= minSeconds {
+			sums[c] = make([]float64, dim)
+			anyLarge = true
+		}
+	}
+	if !anyLarge {
+		return clusters
+	}
+	for i, c := range clusters {
+		if sums[c] != nil {
+			for j, v := range embs[i] {
+				sums[c][j] += float64(v)
+			}
+		}
+	}
+	for _, s := range sums {
+		if s != nil {
+			var n float64
+			for _, v := range s {
+				n += v * v
+			}
+			n = math.Sqrt(n)
+			for j := range s {
+				s[j] /= n
+			}
+		}
+	}
+	out := append([]int(nil), clusters...)
+	for i, c := range clusters {
+		if sums[c] != nil {
+			continue
+		}
+		best, bestSim := c, math.Inf(-1)
+		for b, s := range sums {
+			if s == nil {
+				continue
+			}
+			var dot float64
+			for j, v := range embs[i] {
+				dot += float64(v) * s[j]
+			}
+			if dot > bestSim {
+				best, bestSim = b, dot
+			}
+		}
+		out[i] = best
+	}
+	return out
+}

@@ -553,9 +553,34 @@ of words:
    name, right about two times in three overall but mostly wrong in B
    (eight people trading short turns), so wrong names rise 0.2–0.4 points
    in A–C. Absorbing only when both neighbours are the same speaker left
-   some stray lines and saved about 0.1 point, so it wasn't worth it. A
-   cluster-level version that picks the nearest voice instead of the
-   nearest line should do better.
+   some stray lines and saved about 0.1 point, so it wasn't worth it.
+
+   **By voice, then by line.** `Prepared.AbsorbSmallClusters` gives every
+   window of a cluster heard for under N seconds to the larger cluster
+   with the most similar mean voice, in the final timeline only (a new
+   voice must be free to start small during the meeting). `tomoe tune`'s
+   "Small speakers" sweep, speakers right / 1–3 word turns / 4–15 word
+   turns / names wrong / speakers left with under 20 words:
+
+   | Meeting | Neither | Voice 2 s | Lines 20 w | Voice 2 s + lines 20 w |
+   |---|---|---|---|---|
+   | A | 97.6 / 34 / 92.7 / 1.4 / 23 | 97.8 / 36 / 93.3 / 1.5 / 11 | 98.2 / 41 / 94.7 / 1.6 / 0 | 98.3 / 43 / 94.9 / 1.5 / 0 |
+   | B | 95.7 / 41 / 88.7 / 3.5 / 11 | 95.7 / 41 / 88.9 / 3.7 / 5 | 95.8 / 41 / 88.9 / 3.9 / 0 | 95.8 / 41 / 88.9 / 3.9 / 0 |
+   | C | 97.4 / 27 / 87.2 / 1.5 / 22 | 97.7 / 33 / 90.7 / 1.8 / 7 | 98.0 / 31 / 89.6 / 1.7 / 0 | 98.0 / 35 / 90.9 / 1.7 / 0 |
+   | D | 99.8 / – / 100 / 0.1 / 6 | 99.9 / – / 100 / 0.1 / 2 | 99.9 / – / 100 / 0.1 / 0 | 99.9 / – / 100 / 0.1 / 0 |
+
+   Both together match or beat lines alone on every column in every
+   meeting, so both ship (`min_speaker_seconds = 2`,
+   `min_speaker_words = 20`). Larger voice floors (5–12 s) helped A
+   (4–15 words 96%) but added wrong names in B (4.0%).
+
+   **Do short turns cluster at all?** Barely. Whatever the rule, words in
+   1–3 word reference turns get the right speaker 27–43% of the time and
+   4–15 word turns 87–93%; a second of speech doesn't make a reliable
+   fingerprint. The small clusters are a different thing: in all four
+   meetings nearly every one held a single person who already had a
+   large cluster (an over-split fragment, not a new voice), which is why
+   pointing them at the nearest voice works.
 2. **Toolbar text read as a name** (D, 2.9% of words, one speaker's whole
    cluster). A Teams popup ("Limited call features") covered most of the
    lit tile, so the ring was found as a 129×6 px strip. `LabelRect` puts

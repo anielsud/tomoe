@@ -103,6 +103,11 @@ type MeetingConfig struct {
 	// diarization flickers, each shown as its own "Person N" line (see
 	// session.AbsorbSmallSpeakers). 0 keeps every speaker, as before.
 	MinSpeakerWords int `toml:"min_speaker_words"`
+	// MinSpeakerSeconds does the same by voice, first: a diarized speaker
+	// heard for less than this in the whole meeting joins the speaker
+	// whose voice is most like theirs (diarize.Prepared.AbsorbSmallClusters).
+	// Final labels only, when diarizing during the meeting. 0 turns it off.
+	MinSpeakerSeconds float64 `toml:"min_speaker_seconds"`
 
 	// SpeakerModel is the speaker embedding model used to tell voices
 	// apart, live and after the meeting: a models.SpeakerModels ID, or
@@ -208,6 +213,7 @@ func DefaultConfig() *Config {
 			DiarizeStride:        2,
 			DiarizeRecluster:     10,
 			MinSpeakerWords:      20,
+			MinSpeakerSeconds:    2,
 
 			// The sticky-speaker and short-segment rules are off (margin
 			// and duration 0), matching main's clustering, until they're

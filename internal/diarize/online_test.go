@@ -82,3 +82,24 @@ func TestTurnsLeaveUnvotedFramesUnlabeled(t *testing.T) {
 		t.Error("the fingerprinted window's frames got no turn")
 	}
 }
+
+func TestAbsorbByVoice(t *testing.T) {
+	embs := [][]float32{
+		{1, 0}, {1, 0.1}, // cluster 0: voice A, 30 s
+		{0, 1}, {0.1, 1}, // cluster 1: voice B, 20 s
+		{0.9, 0.2}, // cluster 2: 1 s, sounds like A
+		{0.2, 0.9}, // cluster 3: 1.5 s, sounds like B
+	}
+	clusters := []int{0, 0, 1, 1, 2, 3}
+	spoke := []float64{30, 20, 1, 1.5}
+	got := absorbByVoice(embs, clusters, spoke, 2)
+	want := []int{0, 0, 1, 1, 0, 1}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("absorbByVoice = %v, want %v", got, want)
+		}
+	}
+	if got := absorbByVoice(embs, clusters, []float64{1, 1, 1, 1}, 2); got[4] != 2 {
+		t.Errorf("no large cluster: windows moved anyway: %v", got)
+	}
+}
