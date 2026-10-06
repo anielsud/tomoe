@@ -8,6 +8,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/vocab"
 )
 
 // offlinePipeline holds the models an offline run of the live pipeline
@@ -44,7 +45,7 @@ func loadOfflinePipelineThreads(cfg *config.Config, status *models.Status, lang 
 		UseGPU:         cfg.Transcription.GPUEnabled,
 		DecodingMethod: cfg.Transcription.DecodingMethod,
 		MaxActivePaths: cfg.Transcription.MaxActivePaths,
-		HotwordsFile:   cfg.Transcription.HotwordsFile,
+		HotwordsFile:   vocab.ForApp(cfg),
 		HotwordsScore:  cfg.Transcription.HotwordsScore,
 		NumThreads:     threads,
 	}, status, &cfg.Multilingual)

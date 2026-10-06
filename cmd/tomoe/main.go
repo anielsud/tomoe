@@ -23,6 +23,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/vocab"
 )
 
 // cliDownloadProgress returns a models.ProgressFunc that drives one
@@ -106,7 +107,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		UseGPU:         cfg.Transcription.GPUEnabled,
 		DecodingMethod: cfg.Transcription.DecodingMethod,
 		MaxActivePaths: cfg.Transcription.MaxActivePaths,
-		HotwordsFile:   cfg.Transcription.HotwordsFile,
+		HotwordsFile:   vocab.ForApp(cfg),
 		HotwordsScore:  cfg.Transcription.HotwordsScore,
 	}, status, &cfg.Multilingual)
 	if err != nil {
@@ -469,7 +470,7 @@ var transcribeCmd = &cobra.Command{
 			UseGPU:         useGPU,
 			DecodingMethod: cfg.Transcription.DecodingMethod,
 			MaxActivePaths: cfg.Transcription.MaxActivePaths,
-			HotwordsFile:   cfg.Transcription.HotwordsFile,
+			HotwordsFile:   vocab.ForApp(cfg),
 			HotwordsScore:  cfg.Transcription.HotwordsScore,
 		}, status, &cfg.Multilingual)
 		if err != nil {

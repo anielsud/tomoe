@@ -36,6 +36,25 @@ func NewEngine(cfg Config) (Engine, error) {
 		decodingMethod = cfg.DecodingMethod
 	}
 
+	// Hotwords only steer beam search, and only once sherpa-onnx can split
+	// them into the model's tokens (see bpeVocabFor).
+	var modelingUnit, bpeVocab string
+	maxActivePaths := cfg.MaxActivePaths
+	if cfg.HotwordsFile != "" {
+		if v, err := bpeVocabFor(cfg.TokensPath); err != nil {
+			fmt.Printf("Warning: hotwords off, couldn't build the model's vocabulary: %v\n", err)
+			cfg.HotwordsFile = ""
+		} else {
+			modelingUnit, bpeVocab = "bpe", v
+			if decodingMethod != "modified_beam_search" {
+				decodingMethod = "modified_beam_search"
+			}
+			if maxActivePaths <= 0 {
+				maxActivePaths = 4
+			}
+		}
+	}
+
 	recognizerConfig := &sherpa.OfflineRecognizerConfig{
 		FeatConfig: sherpa.FeatureConfig{
 			SampleRate: sampleRate,
@@ -47,13 +66,15 @@ func NewEngine(cfg Config) (Engine, error) {
 				Decoder: cfg.DecoderPath,
 				Joiner:  cfg.JoinerPath,
 			},
-			Tokens:     cfg.TokensPath,
-			NumThreads: numThreads,
-			Provider:   provider,
-			ModelType:  "nemo_transducer",
+			Tokens:       cfg.TokensPath,
+			NumThreads:   numThreads,
+			Provider:     provider,
+			ModelType:    "nemo_transducer",
+			ModelingUnit: modelingUnit,
+			BpeVocab:     bpeVocab,
 		},
 		DecodingMethod: decodingMethod,
-		MaxActivePaths: cfg.MaxActivePaths,
+		MaxActivePaths: maxActivePaths,
 		HotwordsFile:   cfg.HotwordsFile,
 		HotwordsScore:  cfg.HotwordsScore,
 	}

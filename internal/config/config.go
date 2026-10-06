@@ -46,6 +46,14 @@ type TranscriptionConfig struct {
 	// it's spoken, refined by Parakeet once each utterance ends. false
 	// keeps single-pass (Parakeet only, text appears per utterance).
 	TwoPass bool `toml:"two_pass"`
+	// VocabularyFile is a word list (one word or phrase per line) that
+	// transcription is steered towards: names and terms the model
+	// mishears. "" reads vocabulary.txt next to config.toml if it exists.
+	// VocabularyNames adds the people named in recent meetings and the
+	// computer account's own name. Either one turns on beam search with
+	// hotwords (see internal/vocab); with neither, nothing changes.
+	VocabularyFile  string `toml:"vocabulary_file"`
+	VocabularyNames bool   `toml:"vocabulary_names"`
 }
 
 // OutputConfig holds output behavior settings.
@@ -380,4 +388,17 @@ func (c *Config) MeetingLanguages() []string {
 		}
 	}
 	return langs
+}
+
+// VocabularyPath is the vocabulary list to read: VocabularyFile, else
+// vocabulary.txt next to config.toml if it exists, else "".
+func (c *Config) VocabularyPath() string {
+	if c.Transcription.VocabularyFile != "" {
+		return c.Transcription.VocabularyFile
+	}
+	p := filepath.Join(filepath.Dir(Path()), "vocabulary.txt")
+	if _, err := os.Stat(p); err == nil {
+		return p
+	}
+	return ""
 }

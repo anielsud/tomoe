@@ -16,6 +16,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
+	"github.com/sosuke-ai/tomoe-pc/internal/vocab"
 )
 
 // sessionReplayCmd re-runs a saved session's recorded audio through the live
@@ -42,13 +43,17 @@ was heard live, but both runs hear the same audio.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out, _ := cmd.Flags().GetString("out")
 		mainThreshold, _ := cmd.Flags().GetFloat64("main-threshold")
-		return runSessionReplay(args[0], out, mainThreshold)
+		vocabFile, _ := cmd.Flags().GetString("vocabulary")
+		names, _ := cmd.Flags().GetBool("names")
+		return runSessionReplay(args[0], out, mainThreshold, vocabFile, names)
 	},
 }
 
 func init() {
 	sessionReplayCmd.Flags().String("out", "", "Directory for main.txt/current.txt (default: replay-<session-id> in the current directory)")
 	sessionReplayCmd.Flags().Float64("main-threshold", 0, "Speaker threshold for the main run (default: your speaker_threshold)")
+	sessionReplayCmd.Flags().String("vocabulary", "", "Steer transcription towards this word list (one per line) instead of your configured vocabulary")
+	sessionReplayCmd.Flags().Bool("names", false, "Also steer towards the people named in sessions saved before this one, and your account name: the names the app would have had")
 	sessionCmd.AddCommand(sessionReplayCmd)
 }
 
@@ -60,7 +65,7 @@ type replayRun struct {
 	segments []session.Segment
 }
 
-func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
+func runSessionReplay(sessID, outDir string, mainThreshold float64, vocabFile string, names bool) error {
 	cfg, err := config.Load(config.Path())
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -76,6 +81,25 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 	}
 	if sess.AudioPath == "" {
 		return fmt.Errorf("session %q has no recorded audio", sess.Title)
+	}
+	if vocabFile != "" || names {
+		// Only what this replay asks for, as of the meeting's start.
+		src := vocab.Sources{AccountName: names}
+		if vocabFile != "" {
+			src.Files = []string{vocabFile}
+		}
+		if names {
+			src.SessionsDir, src.Before = config.SessionDir(), sess.CreatedAt
+		}
+		words := vocab.Build(src)
+		path := filepath.Join(os.TempDir(), "tomoe-replay-hotwords-"+sess.ID+".txt")
+		if ok, err := vocab.Write(words, path); err != nil {
+			return err
+		} else if ok {
+			cfg.Transcription.HotwordsFile = path
+		}
+		cfg.Transcription.VocabularyFile, cfg.Transcription.VocabularyNames = "", false
+		fmt.Printf("Vocabulary: %d words and names\n", len(words))
 	}
 	mic, monitor, err := loadReplayTracks(sess)
 	if err != nil {

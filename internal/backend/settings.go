@@ -120,9 +120,6 @@ func (a *App) ApplySettings(cfg config.Config) (*ApplyResult, error) {
 		result.Applied = append(result.Applied, "Tray menu")
 	}
 	result.Later = plan.later
-	if next.Transcription.HotwordsFile != "" && next.Transcription.DecodingMethod != "modified_beam_search" {
-		result.Warnings = append(result.Warnings, "Hotwords are only used with beam search decoding")
-	}
 	// The toolbar's language picker (and anything else showing config)
 	// reloads on this.
 	wailsRuntime.EventsEmit(a.ctx, "settings:applied", nil)

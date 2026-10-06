@@ -28,6 +28,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
 	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
+	"github.com/sosuke-ai/tomoe-pc/internal/vocab"
 )
 
 // App is the Wails backend, bound to the frontend via bindings.
@@ -305,7 +306,7 @@ func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
 			UseGPU:         cfg.Transcription.GPUEnabled,
 			DecodingMethod: cfg.Transcription.DecodingMethod,
 			MaxActivePaths: cfg.Transcription.MaxActivePaths,
-			HotwordsFile:   cfg.Transcription.HotwordsFile,
+			HotwordsFile:   vocab.ForApp(cfg),
 			HotwordsScore:  cfg.Transcription.HotwordsScore,
 		}, status, &cfg.Multilingual)
 		if err == nil {
