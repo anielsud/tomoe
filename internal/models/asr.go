@@ -6,16 +6,24 @@ import (
 	"path/filepath"
 )
 
-// ASRModel is a Parakeet-style transcription model (encoder, decoder,
-// joiner, tokens.txt in one archive directory). The first is the original,
-// multilingual one: every install has it and every non-English language
-// uses it.
+// ASRModel is a transcription model in one archive directory. The first
+// is the original, multilingual Parakeet: every install has it and every
+// language without a better model uses it.
 type ASRModel struct {
 	ID     string // config value, e.g. "parakeet-v2-en"
 	Name   string // shown in Tools
+	Kind   string // ASRKindTransducer or ASRKindCohere: which engine loads it
 	Subdir string // directory the archive extracts to
 	URL    string
 }
+
+// Model kinds: a Parakeet-style transducer (encoder, decoder, joiner,
+// tokens.txt; word timestamps) or Cohere Transcribe (encoder, decoder,
+// tokens.txt; no timestamps).
+const (
+	ASRKindTransducer = "transducer"
+	ASRKindCohere     = "cohere"
+)
 
 // Transcription model IDs. ASRModelAuto picks by language (see
 // ResolveASRModel).
@@ -23,6 +31,7 @@ const (
 	ASRModelAuto         = "auto"
 	ASRModelParakeetV3   = "parakeet-v3"
 	ASRModelParakeetV2En = "parakeet-v2-en"
+	ASRModelCohere       = "cohere-transcribe"
 )
 
 // ASRModels are the selectable transcription models.
@@ -30,17 +39,30 @@ var ASRModels = []ASRModel{
 	{
 		ID:     ASRModelParakeetV3,
 		Name:   "Parakeet TDT 0.6B v3 INT8 (25 languages)",
+		Kind:   ASRKindTransducer,
 		Subdir: ParakeetSubdir,
 		URL:    ParakeetArchiveURL,
 	},
 	{
-		// English only, and more accurate in English: on four recorded
-		// meetings it fixed about a third of v3's meaning-changing errors
-		// (docs/transcription-accuracy-research.md).
+		// English only, and more accurate in English than v3: on four
+		// recorded meetings it fixed about a third of v3's
+		// meaning-changing errors (docs/transcription-accuracy-research.md).
 		ID:     ASRModelParakeetV2En,
 		Name:   "Parakeet TDT 0.6B v2 INT8 (English)",
+		Kind:   ASRKindTransducer,
 		Subdir: "sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8",
 		URL:    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-nemo-parakeet-tdt-0.6b-v2-int8.tar.bz2",
+	},
+	{
+		// The most accurate in English of eleven models compared on four
+		// recorded meetings: 41% of v3's judged errors fixed against 33%
+		// for v2, terms and names markedly better, at about 3x v2's decode
+		// time (docs/transcription-accuracy-research.md). Apache-2.0.
+		ID:     ASRModelCohere,
+		Name:   "Cohere Transcribe INT8 (14 languages)",
+		Kind:   ASRKindCohere,
+		Subdir: "sherpa-onnx-cohere-transcribe-14-lang-int8-2026-04-01",
+		URL:    "https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-cohere-transcribe-14-lang-int8-2026-04-01.tar.bz2",
 	},
 }
 
@@ -55,28 +77,36 @@ func ASRModelByID(id string) (ASRModel, bool) {
 }
 
 // ResolveASRModel is the model setting (a model ID, or "auto"/"") picks
-// for lang: automatic means the English model for English and the
-// multilingual one for everything else. An unknown setting falls back to
-// automatic.
+// for lang: automatic means Cohere Transcribe for English and the
+// multilingual Parakeet for everything else. An unknown setting falls back
+// to automatic.
 func ResolveASRModel(setting, lang string) ASRModel {
 	if m, ok := ASRModelByID(setting); ok {
 		return m
 	}
 	if lang == "" || lang == "en" {
-		m, _ := ASRModelByID(ASRModelParakeetV2En)
+		m, _ := ASRModelByID(ASRModelCohere)
 		return m
 	}
 	return ASRModels[0]
 }
 
-// ASRModelFiles are model's encoder, decoder, joiner and tokens paths.
+// ASRModelDir is where model is extracted.
+func (s *Status) ASRModelDir(m ASRModel) string { return filepath.Join(s.ModelDir, m.Subdir) }
+
+// ASRModelFiles are a transducer model's encoder, decoder, joiner and
+// tokens paths.
 func (s *Status) ASRModelFiles(m ASRModel) (encoder, decoder, joiner, tokens string) {
-	dir := filepath.Join(s.ModelDir, m.Subdir)
+	dir := s.ASRModelDir(m)
 	return filepath.Join(dir, encoderFile), filepath.Join(dir, decoderFile), filepath.Join(dir, joinerFile), filepath.Join(dir, tokensFile)
 }
 
 // ASRModelReady reports whether model is downloaded.
 func (s *Status) ASRModelReady(m ASRModel) bool {
+	if m.Kind == ASRKindCohere {
+		dir := s.ASRModelDir(m)
+		return allFilesExist(filepath.Join(dir, encoderFile), filepath.Join(dir, decoderFile), filepath.Join(dir, tokensFile))
+	}
 	e, d, j, t := s.ASRModelFiles(m)
 	return allFilesExist(e, d, j, t)
 }

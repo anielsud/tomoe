@@ -17,20 +17,27 @@ func NewEngineSetFromConfig(cfg Config, status *models.Status, multiCfg *config.
 		defaultLang = multiCfg.DefaultLang
 	}
 
-	// The Parakeet model for the default language: the English-only one
-	// for English when the setting asks for it and it's downloaded.
+	// The model for the default language, as the setting picks it, if
+	// downloaded (else the multilingual Parakeet).
+	asr := models.ASRModels[0]
 	if status != nil {
-		m, fellBack := status.ASRModelFor(cfg.Model, defaultLang)
-		if m.ID != models.ASRModels[0].ID {
-			cfg.EncoderPath, cfg.DecoderPath, cfg.JoinerPath, cfg.TokensPath = status.ASRModelFiles(m)
+		var fellBack bool
+		asr, fellBack = status.ASRModelFor(cfg.Model, defaultLang)
+		if asr.Kind == models.ASRKindTransducer && asr.ID != models.ASRModels[0].ID {
+			cfg.EncoderPath, cfg.DecoderPath, cfg.JoinerPath, cfg.TokensPath = status.ASRModelFiles(asr)
 		}
 		if fellBack {
-			fmt.Printf("Transcription model %s isn't downloaded; using %s\n", models.ResolveASRModel(cfg.Model, defaultLang).Name, m.Name)
+			fmt.Printf("Transcription model %s isn't downloaded; using %s\n", models.ResolveASRModel(cfg.Model, defaultLang).Name, asr.Name)
 		}
 	}
 
-	// Create base Parakeet engine
-	parakeet, err := NewEngine(cfg)
+	var parakeet Engine
+	var err error
+	if asr.Kind == models.ASRKindCohere {
+		parakeet, err = NewCohereEngine(status.ASRModelDir(asr), defaultLang, cfg.NumThreads, cfg.VADPath)
+	} else {
+		parakeet, err = NewEngine(cfg)
+	}
 	if err != nil {
 		return nil, err
 	}

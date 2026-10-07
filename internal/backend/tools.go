@@ -353,7 +353,7 @@ func modelStatuses(cfg *config.Config) []ToolStatus {
 		}
 	}
 	for _, am := range models.ASRModelsNeeded(cfg.Transcription.Model, cfg.MeetingLanguages()) {
-		list = append(list, entry("model-asr-"+am.ID, "Transcription: "+am.Name, "More accurate English transcription (config: transcription.model)", false, s.ASRModelReady(am)))
+		list = append(list, entry("model-asr-"+am.ID, "Transcription: "+am.Name, "More accurate transcription (config: transcription.model)", false, s.ASRModelReady(am)))
 	}
 	list = append(list,
 		entry("model-segmentation", "Speaker segmentation", "Relabeling speakers after a meeting is saved", false, s.SpeakerSegmentationReady),
