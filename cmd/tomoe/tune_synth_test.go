@@ -87,7 +87,7 @@ func TestTuneSynthetic(t *testing.T) {
 		}
 		log.Write(l)
 	}
-	if err := runTune(sess.ID, refPath, filepath.Join(os.Getenv("TUNE_OUT")), 0, true, 2); err != nil {
+	if err := runTune(sess.ID, refPath, filepath.Join(os.Getenv("TUNE_OUT")), 0, true, 2, "", false); err != nil {
 		t.Fatal(err)
 	}
 }
