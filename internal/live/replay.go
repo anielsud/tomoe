@@ -90,6 +90,10 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 	final := make(map[string]session.Segment)
 	pass1 := make(map[string]string)
 	record := func(seg session.Segment) {
+		if seg.Status == session.StatusRemoved {
+			delete(final, seg.ID)
+			return
+		}
 		if _, seen := final[seg.ID]; !seen {
 			order = append(order, seg.ID)
 		}
@@ -144,7 +148,9 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 
 	segs := make([]session.Segment, 0, len(order))
 	for _, id := range order {
-		segs = append(segs, final[id])
+		if seg, ok := final[id]; ok {
+			segs = append(segs, seg)
+		}
 	}
 	return &ReplayResult{Segments: segs, Pass1Text: pass1}, nil
 }

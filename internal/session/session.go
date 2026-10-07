@@ -32,7 +32,8 @@ type Segment struct {
 	// is done, Text is pass 1's finished-but-unrefined text, and a
 	// higher-quality re-decode is in flight). A later update carrying
 	// the same ID and Status "" supersedes either. See internal/live's
-	// two-pass pipeline.
+	// two-pass pipeline. StatusRemoved withdraws a segment already shown
+	// (its audio turned out to be noise); it's never stored.
 	Status string `json:"status,omitempty"`
 	// Decision is which rule inside speaker.Tracker.Assign produced
 	// Speaker for this segment ("confident", "sticky", "short-segment",
@@ -73,14 +74,19 @@ type Word struct {
 	End   float64 `json:"e"`
 }
 
+// StatusRemoved is the Segment.Status that withdraws a segment.
+const StatusRemoved = "removed"
+
 // statusRank orders Segment.Status values by how settled the text is:
-// "live" < "pending" < "" (final).
+// "live" < "pending" < "" (final) < removed.
 func statusRank(status string) int {
 	switch status {
 	case "live":
 		return 0
 	case "pending":
 		return 1
+	case StatusRemoved:
+		return 3
 	default:
 		return 2
 	}
@@ -98,9 +104,16 @@ func (s *Session) UpsertSegment(seg Segment) {
 		if s.Segments[i].ID != seg.ID {
 			continue
 		}
+		if seg.Status == StatusRemoved {
+			s.Segments = append(s.Segments[:i], s.Segments[i+1:]...)
+			return
+		}
 		if statusRank(s.Segments[i].Status) <= statusRank(seg.Status) {
 			s.Segments[i] = seg
 		}
+		return
+	}
+	if seg.Status == StatusRemoved {
 		return
 	}
 	at := len(s.Segments)

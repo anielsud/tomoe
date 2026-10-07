@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"sort"
+	"strings"
 )
 
 // ExportMarkdown writes the session as Markdown to w.
@@ -32,9 +34,9 @@ func ExportMarkdown(sess *Session, w io.Writer) error {
 
 	_, _ = fmt.Fprint(w, "\n")
 
-	for _, seg := range sess.Segments {
+	for _, p := range Paragraphs(sess.Segments) {
 		_, err = fmt.Fprintf(w, "**[%s] %s:** %s\n\n",
-			formatTimestamp(seg.StartTime), seg.Speaker, seg.Text)
+			formatTimestamp(p.StartTime), p.Speaker, p.Text)
 		if err != nil {
 			return err
 		}
@@ -69,9 +71,9 @@ func ExportPlainText(sess *Session, w io.Writer) error {
 
 	_, _ = fmt.Fprint(w, "\n")
 
-	for _, seg := range sess.Segments {
+	for _, p := range Paragraphs(sess.Segments) {
 		_, err = fmt.Fprintf(w, "[%s] %s: %s\n",
-			formatTimestamp(seg.StartTime), seg.Speaker, seg.Text)
+			formatTimestamp(p.StartTime), p.Speaker, p.Text)
 		if err != nil {
 			return err
 		}
@@ -136,4 +138,34 @@ func formatDuration(seconds float64) string {
 		return fmt.Sprintf("%dm%02ds", m, s)
 	}
 	return fmt.Sprintf("%ds", s)
+}
+
+// A Paragraph is consecutive lines by one speaker, shown and exported as
+// one block: the speech detector ends a line at every half-second pause,
+// so one turn is often several lines.
+type Paragraph struct {
+	Speaker            string
+	StartTime, EndTime float64
+	Text               string
+}
+
+// Paragraphs joins consecutive segments (in time order) with the same
+// speaker into paragraphs.
+func Paragraphs(segs []Segment) []Paragraph {
+	sorted := append([]Segment(nil), segs...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].StartTime < sorted[j].StartTime })
+	var out []Paragraph
+	for _, s := range sorted {
+		text := strings.TrimSpace(s.Text)
+		if text == "" {
+			continue
+		}
+		if n := len(out); n > 0 && out[n-1].Speaker == s.Speaker {
+			out[n-1].Text += " " + text
+			out[n-1].EndTime = max(out[n-1].EndTime, s.EndTime)
+			continue
+		}
+		out = append(out, Paragraph{Speaker: s.Speaker, StartTime: s.StartTime, EndTime: s.EndTime, Text: text})
+	}
+	return out
 }

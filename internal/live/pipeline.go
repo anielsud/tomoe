@@ -3,6 +3,8 @@ package live
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -296,11 +298,74 @@ func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceT
 			continue
 		}
 
+		if c.dropNoise(source, segment.Samples, streamSess, live) {
+			continue
+		}
 		// Apply DSP pipeline
 		samples := audio.ProcessPipeline(segment.Samples, vadSampleRate, -40)
 		c.handleSegment(source, samples, streamSess, live)
 	}
 }
+
+// dropNoise reports whether a completed VAD segment's raw audio (before the
+// DSP pipeline, which normalizes every segment to full scale) is quieter
+// than Config.MinSpeechLevelDB, and if so drops it, withdrawing the live
+// line if one is showing. Room noise the detector mistook for speech is
+// otherwise normalized up and transcribed as invented words.
+func (c *Coordinator) dropNoise(source SourceType, raw []float32, streamSess transcribe.StreamingSession, live *liveState) bool {
+	level := levelDB(raw)
+	if !c.tooQuiet(source, level) {
+		return false
+	}
+	if live.id != "" {
+		select {
+		case c.segmentUpdateCh <- session.Segment{ID: live.id, Source: string(source), Status: session.StatusRemoved}:
+		default:
+		}
+	}
+	if streamSess != nil {
+		streamSess.Reset()
+	}
+	live.reset()
+	return true
+}
+
+// tooQuiet reports whether an utterance at level (dBFS) is below the
+// fixed floor (Config.MinSpeechLevelDB) or, on the mic, more than
+// Config.MicLevelMarginDB below the user's own typical level: the
+// microphone is the user's, so faint speech on it is someone or
+// something further away (found live: background sounds 25–35 dB below
+// the user's voice transcribed as "Wow." and "I'm gonna go to bed" and
+// labeled You). Utterances that pass count toward the typical level.
+func (c *Coordinator) tooQuiet(source SourceType, level float64) bool {
+	if c.cfg.MinSpeechLevelDB < 0 && level < c.cfg.MinSpeechLevelDB {
+		return true
+	}
+	if source != SourceMic || c.cfg.MicLevelMarginDB <= 0 {
+		return false
+	}
+	c.levelMu.Lock()
+	defer c.levelMu.Unlock()
+	if n := len(c.micLevels); n >= micLevelsBeforeGate {
+		sorted := append([]float64(nil), c.micLevels...)
+		sort.Float64s(sorted)
+		if level < sorted[n/2]-c.cfg.MicLevelMarginDB {
+			return true
+		}
+	}
+	c.micLevels = append(c.micLevels, level)
+	if len(c.micLevels) > micLevelsKept {
+		c.micLevels = c.micLevels[1:]
+	}
+	return false
+}
+
+// The mic's typical level is the median of its last micLevelsKept
+// utterances, once there are micLevelsBeforeGate of them.
+const (
+	micLevelsBeforeGate = 8
+	micLevelsKept       = 100
+)
 
 // handleSegment transcribes one completed VAD segment (already DSP
 // processed). Split out of drainVAD so it can be tested without a VAD
@@ -703,4 +768,20 @@ func hasSignal(window []float32) bool {
 		}
 	}
 	return false
+}
+
+// levelDB is samples' RMS level in dBFS (-200 for silence).
+func levelDB(samples []float32) float64 {
+	if len(samples) == 0 {
+		return -200
+	}
+	var sum float64
+	for _, v := range samples {
+		sum += float64(v) * float64(v)
+	}
+	rms := math.Sqrt(sum / float64(len(samples)))
+	if rms == 0 {
+		return -200
+	}
+	return 20 * math.Log10(rms)
 }
