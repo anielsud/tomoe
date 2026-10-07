@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/spf13/cobra"
@@ -17,6 +18,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
+	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
 )
 
 // sessionReplayCmd re-runs a saved session's recorded audio through the live
@@ -48,6 +50,9 @@ was heard live, but both runs hear the same audio.`,
 		o.decoding, _ = cmd.Flags().GetString("decoding")
 		o.onlyCurrent, _ = cmd.Flags().GetBool("only-current")
 		o.progress, _ = cmd.Flags().GetBool("progress")
+		o.asrKind, _ = cmd.Flags().GetString("asr-kind")
+		o.singlePass, _ = cmd.Flags().GetBool("single-pass")
+		o.threads, _ = cmd.Flags().GetInt("threads")
 		return runSessionReplay(args[0], out, mainThreshold, o)
 	},
 }
@@ -64,6 +69,12 @@ type replayOptions struct {
 	// lines as the audio is replayed.
 	onlyCurrent bool
 	progress    bool
+	// asrKind loads asrModel as another model family (see
+	// transcribe.CandidateKinds); singlePass turns two-pass off, so only
+	// the model under test writes text; threads is its CPU threads.
+	asrKind    string
+	singlePass bool
+	threads    int
 }
 
 func init() {
@@ -73,6 +84,9 @@ func init() {
 	sessionReplayCmd.Flags().String("decoding", "", "Decoding method for this replay: greedy_search or modified_beam_search (default: your decoding_method)")
 	sessionReplayCmd.Flags().Bool("only-current", false, "Replay only with your current config (skip the main run)")
 	sessionReplayCmd.Flags().Bool("progress", false, "Print progress lines (\"progress replay <run> <done>/<total>\") while replaying")
+	sessionReplayCmd.Flags().String("asr-kind", "", "With --asr-model: the model family ("+strings.Join(transcribe.CandidateKinds, ", ")+"); default a Parakeet-style transducer")
+	sessionReplayCmd.Flags().Bool("single-pass", false, "Turn two-pass off for this replay, so only the transcription model writes text")
+	sessionReplayCmd.Flags().Int("threads", 0, "CPU threads for the transcription model (default: the engine's)")
 	sessionCmd.AddCommand(sessionReplayCmd)
 }
 
@@ -93,7 +107,7 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 	if !status.Ready() {
 		return fmt.Errorf("transcription models not downloaded (run 'tomoe model download')")
 	}
-	if o.asrModel != "" {
+	if o.asrModel != "" && o.asrKind == "" {
 		if err := useTransducerDir(status, o.asrModel); err != nil {
 			return err
 		}
@@ -135,7 +149,7 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 	if mainThreshold > 0 {
 		baseline.Threshold = mainThreshold
 	}
-	cur := &replayRun{name: "current", twoPass: cfg.Transcription.TwoPass && lang == "en", tuning: current}
+	cur := &replayRun{name: "current", twoPass: cfg.Transcription.TwoPass && lang == "en" && !o.singlePass, tuning: current}
 	runs := []*replayRun{{name: "main", twoPass: false, tuning: baseline}, cur}
 	if o.onlyCurrent {
 		runs = []*replayRun{cur}
@@ -149,6 +163,18 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 	if pipe.streaming == nil {
 		cur.twoPass = false
 	}
+	timed := &timedEngine{}
+	if o.asrKind != "" {
+		eng, err := transcribe.NewCandidateEngine(o.asrKind, o.asrModel, o.threads)
+		if err != nil {
+			return err
+		}
+		defer eng.Close()
+		pipe.engine = eng
+		fmt.Printf("Transcribing with %s model %s\n", o.asrKind, o.asrModel)
+	}
+	timed.Engine = pipe.engine
+	pipe.engine = timed
 
 	fmt.Printf("Replaying %q (%s of audio)...\n", sess.Title, formatDuration(float64(max(len(mic), len(monitor)))/16000))
 	for _, run := range runs {
@@ -186,7 +212,9 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 	if len(runs) == 2 {
 		printReplaySummary(runs)
 	}
-	fmt.Printf("\nTranscripts in %s\n", outDir)
+	audio := float64(max(len(mic), len(monitor))) / 16000
+	fmt.Printf("\nDecode time: %.1fs for %d utterances (%.1f%% of the audio's length)\n", timed.secs, timed.n, 100*timed.secs/max(1, audio))
+	fmt.Printf("Transcripts in %s\n", outDir)
 	return nil
 }
 
@@ -393,4 +421,20 @@ func speakerAgreement(a, b []session.Segment) (agreed, total float64) {
 		agreed += overlap[p]
 	}
 	return agreed, total
+}
+
+// timedEngine adds up the time spent in TranscribeDirect, for comparing
+// models' speed in a replay.
+type timedEngine struct {
+	transcribe.Engine
+	secs float64
+	n    int
+}
+
+func (t *timedEngine) TranscribeDirect(samples []float32) (*transcribe.Result, error) {
+	began := time.Now()
+	r, err := t.Engine.TranscribeDirect(samples)
+	t.secs += time.Since(began).Seconds()
+	t.n++
+	return r, err
 }
