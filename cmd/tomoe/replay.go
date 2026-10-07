@@ -53,6 +53,8 @@ was heard live, but both runs hear the same audio.`,
 		o.asrKind, _ = cmd.Flags().GetString("asr-kind")
 		o.singlePass, _ = cmd.Flags().GetBool("single-pass")
 		o.threads, _ = cmd.Flags().GetInt("threads")
+		o.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
+		o.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
 		return runSessionReplay(args[0], out, mainThreshold, o)
 	},
 }
@@ -75,6 +77,8 @@ type replayOptions struct {
 	asrKind    string
 	singlePass bool
 	threads    int
+	// minSilence and maxSpeech are the utterance bounds (0: the config's).
+	minSilence, maxSpeech float64
 }
 
 func init() {
@@ -86,6 +90,8 @@ func init() {
 	sessionReplayCmd.Flags().Bool("progress", false, "Print progress lines (\"progress replay <run> <done>/<total>\") while replaying")
 	sessionReplayCmd.Flags().String("asr-kind", "", "With --asr-model: the model family ("+strings.Join(transcribe.CandidateKinds, ", ")+"); default a Parakeet-style transducer")
 	sessionReplayCmd.Flags().Bool("single-pass", false, "Turn two-pass off for this replay, so only the transcription model writes text")
+	sessionReplayCmd.Flags().Float64("min-silence", 0, "Pause (s) that ends an utterance (default: your min_silence_duration)")
+	sessionReplayCmd.Flags().Float64("max-speech", 0, "Longest utterance (s) before it's cut (default: your max_speech_duration)")
 	sessionReplayCmd.Flags().Int("threads", 0, "CPU threads for the transcription model (default: the engine's)")
 	sessionCmd.AddCommand(sessionReplayCmd)
 }
@@ -181,6 +187,13 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 		lc := pipe.liveConfig(run.tuning, run.twoPass)
 		lc.MinSpeechLevelDB, lc.MicLevelMarginDB = cfg.Meeting.MinSpeechLevelDB, cfg.Meeting.MicLevelMarginDB
 		lc.TurnMode, lc.TurnMaxSeconds, lc.TurnMaxGap = cfg.Meeting.TurnMode, cfg.Meeting.TurnMaxSeconds, cfg.Meeting.TurnMaxGap
+		lc.MinSilenceDuration, lc.MaxSpeechDuration = cfg.Meeting.MinSilenceDuration, cfg.Meeting.MaxSpeechDuration
+		if o.minSilence > 0 {
+			lc.MinSilenceDuration = o.minSilence
+		}
+		if o.maxSpeech > 0 {
+			lc.MaxSpeechDuration = o.maxSpeech
+		}
 		if o.progress {
 			name := run.name
 			lc.ReplayProgress = func(done, total int) { fmt.Printf("progress replay %s %d/%d\n", name, done, total) }
