@@ -634,9 +634,19 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	watcher, hs := a.newHintWatcher()
 	cfg.OnMonitorSpeechStart = watcher.Burst
 
+	// Speaker-change signals end a turn (live.Config.TurnMode): new voices
+	// from the diarizer, highlight moves from the meeting window.
+	changes := &live.ChangeLog{}
+	hs.changes = changes
+	cfg.TurnMode, cfg.TurnMaxSeconds, cfg.TurnMaxGap = a.cfg.Meeting.TurnMode, a.cfg.Meeting.TurnMaxSeconds, a.cfg.Meeting.TurnMaxGap
+	cfg.SpeakerChanged = changes.Between
+
 	var md *diarize.SessionDiarizer
 	if cfg.MonitorCapturer != nil && !cfg.SkipMonitorDiarization {
-		if md = newMeetingDiarizer(a, a.cfg, status, lang, watcher.Burst); md != nil {
+		if md = newMeetingDiarizer(a, a.cfg, status, lang, func(at float64) {
+			watcher.Burst()
+			changes.Add(at)
+		}); md != nil {
 			cfg.MonitorAudio = md.Feed
 		}
 	}

@@ -61,8 +61,9 @@ type SessionOptions struct {
 	// released.
 	OnChanged func([]session.Segment)
 	// OnSpeakerChange is called when a voice starts that wasn't talking
-	// just before (see StreamConfig.OnSpeakerChange).
-	OnSpeakerChange func()
+	// just before (see StreamConfig.OnSpeakerChange), with the session
+	// time of the window that showed it.
+	OnSpeakerChange func(at float64)
 }
 
 // NewSessionDiarizer starts diarizing a meeting in lang, or returns nil and
@@ -78,7 +79,9 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	}
 	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
-	sc.OnSpeakerChange = opts.OnSpeakerChange
+	if opts.OnSpeakerChange != nil {
+		sc.OnSpeakerChange = func(at float64) { opts.OnSpeakerChange(at + d.offset) }
+	}
 	if d.stream, err = NewStream(sc); err != nil {
 		return nil, err
 	}

@@ -117,6 +117,7 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 	for _, run := range runs {
 		lc := pipe.liveConfig(run.tuning, run.twoPass)
 		lc.MinSpeechLevelDB, lc.MicLevelMarginDB = cfg.Meeting.MinSpeechLevelDB, cfg.Meeting.MicLevelMarginDB
+		lc.TurnMode, lc.TurnMaxSeconds, lc.TurnMaxGap = cfg.Meeting.TurnMode, cfg.Meeting.TurnMaxSeconds, cfg.Meeting.TurnMaxGap
 		if run.segments, err = live.Replay(lc, mic, monitor); err != nil {
 			return fmt.Errorf("%s run: %w", run.name, err)
 		}

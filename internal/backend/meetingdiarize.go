@@ -16,7 +16,7 @@ import (
 // records (see diarize.SessionDiarizer), sending relabeled lines to the
 // transcript, or returns nil (logging why, if it was asked for) so the
 // post-meeting pass runs as before.
-func newMeetingDiarizer(a *App, cfg *config.Config, status *models.Status, lang string, onSpeakerChange func()) *diarize.SessionDiarizer {
+func newMeetingDiarizer(a *App, cfg *config.Config, status *models.Status, lang string, onSpeakerChange func(at float64)) *diarize.SessionDiarizer {
 	var d *diarize.SessionDiarizer
 	d, err := diarize.NewSessionDiarizer(cfg.Meeting, status, lang, &a.mu, diarize.SessionOptions{
 		OnChanged: func(changed []session.Segment) {
