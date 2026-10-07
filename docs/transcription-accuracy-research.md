@@ -100,7 +100,67 @@ By kind of judged error (all four, 506 spots):
   got right (overall disagreement falls everywhere, which suggests not).
 - v2 is English-only; other languages (Bengali) keep v3.
 
-## Vocabulary (hotwords): what's needed
+## Bake-off: eleven models (2026-10-07)
+
+Every model sherpa-onnx 1.13.8 can run that handles English, replayed
+through the same pipeline on the same four meetings, single-pass (only
+the model under test writes text), scored as above. Decode time is each
+finalist alone with 4 threads on an Apple Silicon desktop, on one
+35-minute meeting.
+
+| Model | Judged errors fixed | Misheard words | Terms | Names | Names/terms right everywhere | Decode time | Word timestamps |
+|---|---|---|---|---|---|---|---|
+| Cohere Transcribe int8 (14 languages) | **41%** | 44% | **51%** | **28%** | 69% | 7.9% of meeting time | no |
+| Whisper large-v3 | 40% | 43% | 48% | 26% | **70%** | far slower (not timed alone) | no |
+| Whisper turbo | 38% | 41% | 47% | 26% | 68% | 24.7% | no |
+| Whisper distil-large-v3.5 | 38% | 44% | 43% | 23% | 66% | 21.6% | no |
+| Parakeet TDT 0.6B v2 fp16 | 33% | 42% | 34% | 17% | 60% | — | yes |
+| Parakeet TDT 0.6B v2 int8 | 33% | 42% | 35% | 15% | 59% | 2.4% | yes |
+| Qwen3-ASR 0.6B int8 | 28% | 35% | 28% | 23% | 50% | — | no |
+| Qwen3-ASR + vocabulary | 24% | 26% | 26% | 23% | 46% | — | no |
+| Canary 180M flash int8 | 23% | 31% | 24% | 11% | 43% | — | no |
+| FunASR-Nano int8 | 15% | 24% | 10% | 8% | 34% | — | yes |
+| Moonshine base (2026) | 8% | 11% | 8% | 0% | 18% | — | no |
+
+- **Cohere Transcribe is the most accurate and the cheapest of the
+  accurate tier**: about a quarter more judged errors fixed than
+  Parakeet v2, mostly on terms and names, at about 3x its decode time.
+  Apache-2.0. It's now the default for English.
+- The top tier (Cohere, Whisper) differs from Parakeet mostly in
+  vocabulary: misheard ordinary words are close for all of them
+  (41–44%). Names stay hard everywhere (28% at best).
+- int8 Parakeet loses nothing against fp16.
+- **Vocabulary through the model failed both ways tried.** Qwen3-ASR
+  takes hotwords as context, and on short or unclear audio sometimes
+  printed the whole list as the transcript (9 lines in one meeting); it
+  didn't improve names (23% with or without). FunASR-Nano's hotwords
+  changed nothing. Parakeet's hotwords need beam search, whose TDT
+  implementation can loop (below).
+- Running these replays twelve at a time thrashed a 48 GB machine; the
+  replays' memory doesn't show in RSS (compressed). Six to seven at once
+  was the ceiling.
+
+### Word timings for a model without them
+
+Cohere returns text only; Tomoe uses word timings only to split a line
+where diarization hears a different speaker mid-line. Estimating them
+(each word a share of the line in proportion to its length,
+`session.SpreadWords`) against real timings, `tomoe tune` on the four
+meetings:
+
+| Text and timings | Speakers right | 1–3 word turns | 4–15 word turns |
+|---|---|---|---|
+| Parakeet v2, real timings | 98.0% | 33.9% | 92.2% |
+| Parakeet v2, estimated | 97.5% | 34.8% | 91.8% |
+| Cohere, estimated | 97.6% | 36.4% | 92.1% |
+
+Estimated timings cost about half a point of speaker accuracy on
+average (1.4 points in an eight-person meeting of quick exchanges, 0–0.3
+in the others); short turns don't move. Accepted for Cohere; running
+Parakeet alongside for real timings would recover it for about 2.4% more
+of meeting time.
+
+## Vocabulary (hotwords) with Parakeet: blocked upstream
 
 sherpa-onnx can boost hotwords in Parakeet with `modified_beam_search`,
 but only with the tokenizer settings Tomoe doesn't pass yet: without
@@ -109,7 +169,12 @@ and is skipped ("Some hotwords failed to encode"). A vocab generated from
 the model's `tokens.txt` (each token with its negated ID as score) works:
 on a clip where v3 heard a colleague's name as two common words, the
 hotword fixed it at the default score of 1.5 and left the rest of the
-sentence unchanged. Not yet measured across meetings.
+sentence unchanged. Across meetings it couldn't be used: beam search for
+TDT models in sherpa-onnx lacks the greedy decoder's guard for a blank
+with zero duration (issue #3267, fix #3657 unmerged as of 1.13.8), and
+with hotwords a replay spun for two hours on one utterance; beam search
+alone was slightly worse than greedy (more dropped words, more
+hallucinated "Yeah.").
 
 ## Reproducing
 
