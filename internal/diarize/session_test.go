@@ -57,3 +57,35 @@ func TestSettleProvisional(t *testing.T) {
 		t.Errorf("a final label changed: %q", got)
 	}
 }
+
+func TestLabelNewLockedUsesNamedSpeaker(t *testing.T) {
+	// A 1:1: the timeline has named the other person, and the live pass
+	// mints a new cluster for their voice. The meeting window still shows
+	// their name, so the line is theirs, not a provisional new speaker.
+	d := &SessionDiarizer{
+		lock: &sync.Mutex{},
+		timeline: &Timeline{
+			Turns:   []session.DiarizeSegment{{Start: 0, End: 10, Speaker: 0}},
+			Labels:  map[int]string{0: "Person 1"},
+			Through: 10,
+		},
+		liveTo:  map[string]string{},
+		renames: map[int]string{},
+	}
+	// Read while they spoke earlier (naming timeline speaker 0), and now.
+	for _, t := range []float64{1, 3, 5, 7, 9, 13} {
+		d.hints = append(d.hints, Hint{T: t + hintLag, Name: "Ana Lopez"})
+	}
+	seg := session.Segment{Speaker: "Person 7", StartTime: 12, EndTime: 14}
+	d.LabelNewLocked(&seg)
+	if want := "Person 1 (Ana Lopez)"; seg.Speaker != want {
+		t.Errorf("got %q, want %q", seg.Speaker, want)
+	}
+	// Someone the window names but no speaker has yet stays provisional.
+	d.hints[len(d.hints)-1] = Hint{T: 13 + hintLag, Name: "Ben Ito"}
+	seg = session.Segment{Speaker: "Person 8", StartTime: 12, EndTime: 14}
+	d.LabelNewLocked(&seg)
+	if want := "Ben Ito?"; seg.Speaker != want {
+		t.Errorf("unknown name: got %q, want %q", seg.Speaker, want)
+	}
+}
