@@ -111,3 +111,21 @@ func TestNameSpeakersByElimination(t *testing.T) {
 		t.Errorf("speaker 1 named %q despite unread tiles", got[1])
 	}
 }
+
+func TestCanonicalNamesIgnoresTrailingJunk(t *testing.T) {
+	// A name read thousands of times, sometimes cut off, once with a stray
+	// quote: the quote isn't a fuller spelling.
+	names := []string{"Ben Ito…", "Ben Ito\"", "Ana Lopez.", "Ana Lopez."}
+	for i := 0; i < 50; i++ {
+		names = append(names, "Ben Ito", "Ana Lopez")
+	}
+	c := canonicalNames(names)
+	for _, n := range []string{"Ben Ito", "Ben Ito…", "Ben Ito\""} {
+		if c[n] != "Ben Ito" {
+			t.Errorf("%q -> %q, want Ben Ito", n, c[n])
+		}
+	}
+	if c["Ana Lopez."] != "Ana Lopez" {
+		t.Errorf("Ana Lopez. -> %q", c["Ana Lopez."])
+	}
+}
