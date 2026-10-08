@@ -99,6 +99,14 @@ type Config struct {
 	// starting, the meeting window's highlight moving) fell between from
 	// and to (session seconds). Nil: no signal beyond the rules above.
 	SpeakerChanged func(from, to float64) bool
+	// HighlightChanges returns the times in [from, to] at which the
+	// meeting window's highlight moved to another person. When set (and
+	// in TurnMode), an utterance from the meeting audio is cut at each
+	// such moment, HighlightLag seconds earlier (the highlight follows the
+	// voice), so a speaker who cuts in without a pause gets their own
+	// line instead of sharing one with whoever was talking.
+	HighlightChanges func(from, to float64) []float64
+	HighlightLag     float64
 
 	// ProbePrefixes, for measurement only, also labels each utterance
 	// from just its first N seconds for every N listed that's shorter

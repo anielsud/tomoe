@@ -207,7 +207,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	fmt.Printf("Reference: %d turns, %d speakers; shifted %+.1fs to match the recording\n", len(ref.Turns), len(ref.Speakers()), refOffset)
 	writeHintReport(outDir, dir, sess, recorded, ref)
 
-	sc := &tuneScorer{ref: ref, align: align, turnOf: turnOf, segs: segs, info: info, minWords: cfg.Meeting.MinSpeakerWords}
+	sc := &tuneScorer{ref: ref, align: align, turnOf: turnOf, segs: segs, info: info, minWords: cfg.Meeting.MinSpeakerWords, shortLines: cfg.Meeting.HighlightShortLines}
 
 	strides := []int{info.Stride}
 	for _, s := range []int{2, 3, 5} {
@@ -389,6 +389,9 @@ type tuneScorer struct {
 	info   diarize.StreamInfo
 	// minWords is MeetingConfig.MinSpeakerWords, applied as the app does.
 	minWords int
+	// shortLines names short meeting-audio lines from the highlight, as
+	// the app does (diarize.NameShortLines).
+	shortLines bool
 }
 
 func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.NameParams) tuneResult {
@@ -407,6 +410,20 @@ func (s *tuneScorer) score(sc strideClusters, hints []diarize.Hint, np diarize.N
 		}
 	}
 	split, _ := session.SplitByDiarization(append([]session.Segment(nil), s.segs...), turns, labels)
+	if s.shortLines {
+		diarize.NameShortLines(split, hints, func(name string) (string, bool) {
+			found, n := -1, 0
+			for k, nm := range names {
+				if diarize.SameName(nm, name) {
+					found, n = k, n+1
+				}
+			}
+			if n != 1 {
+				return "", false
+			}
+			return labels[found], true
+		})
+	}
 	session.AbsorbSmallSpeakers(split, s.minWords, nil)
 	words := segmentSpeakers(split)
 	mapping := eval.ScoreSpeakers(s.ref, segmentsLabeled(split), 1.0).Mapping

@@ -18,3 +18,14 @@ func TestChangeLog(t *testing.T) {
 		}
 	}
 }
+
+func TestChangeLogTruncatedNames(t *testing.T) {
+	var l ChangeLog
+	l.NameSeen(1, "Jennifer Hem...")
+	l.NameSeen(2, "Jennifer Hem..")
+	l.NameSeen(3, "jennifer hem…")
+	l.NameSeen(4, "Julianne DeVin..")
+	if got := l.NameChangesIn(0, 10); len(got) != 1 || got[0] != 4 {
+		t.Errorf("changes %v, want just the one at 4", got)
+	}
+}

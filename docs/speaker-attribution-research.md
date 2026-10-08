@@ -816,6 +816,121 @@ Only one was an interjection just over the limit (1.16 s).
 The 1–3-word bucket holds 15–60 words per meeting, so the drop there is
 about one word per meeting.
 
+## Speaker boundaries from the meeting window's highlight (2026-10-08)
+
+**Problem.** On a live Zoom call, one participant cut in on another
+without a pause, and a large part of the second person's speech was
+credited to the first. Meeting audio is one mixed channel, and lines
+ended only at pauses (or at a change signal *between* utterances). A
+cut-in with no pause shared one utterance, and so one line and one
+speaker, with whoever was talking. The highlight had followed every
+hand-off within a second or two.
+
+**Three changes:**
+- **Cut at highlight changes** (`split_at_highlight`). A meeting-audio
+  utterance is cut where the highlight moved to another name. The cut is
+  0.5 s earlier, because the highlight trails the voice. Pieces under
+  0.4 s aren't cut off. The first piece keeps its line and speaker; the
+  rest are labelled from their own audio.
+- **Short lines from the highlight** (`highlight_short_lines`). A
+  meeting-audio line of 1.5 s or less goes to the speaker carrying the
+  highlighted name, when every read during it agrees and exactly one
+  speaker has that name. A "Thank you" had gone to the wrong person while
+  the highlight showed the right one throughout. In that call, 34 of 84
+  meeting-audio lines were this short.
+- **Truncated names aren't changes.** A truncated tile reads "Jennifer
+  Hem..." one look and "Jennifer Hem.." the next. The change log compared
+  names exactly, so a 52-minute briefing logged 345 speaker changes, 151
+  of them flipping straight back. Since turn mode shipped, that had been
+  ending turns early. With the highlight cuts, it shredded a monologue
+  (151 → 411 lines). Names are now compared as the naming code does.
+
+**Results**, all three together, against turn mode with interjections
+and padding:
+
+| Meeting | Speakers | 4–15-word turns | Lines |
+|---|---|---|---|
+| A | 97.7 → 97.8 | 93.2 → 92.6 | 306 → 341 |
+| B, fast group | 93.6 → 95.1 | 84.6 → 87.2 | 210 → 279 |
+| C | 97.8 → 98.0 | 90.7 → 89.9 | 254 → 290 |
+| D, briefing | 99.9 → 99.9 | 95.5 → 100 | 151 → 143 |
+| Fast 4-person call | 91.8 → 91.6 | 72.3 → 69.8 | 54 → 72 |
+| Average | 96.2 → 96.5 | 87.3 → 87.9 | |
+
+Judged errors fixed went from 234 to 238. The gain is in the group
+meetings with frequent hand-offs (B had 76 highlight cuts inside
+utterances). The fast 4-person call, whose reference is a hand-corrected
+third-party transcript, dips slightly.
+
+**Lines that still mix two people.** Each reference is placed on the
+recording at the offset `tune` found; the highlight's changes line up best
+at the same offsets. Each meeting-audio line then counts as mixed when a
+second reference speaker covers at least 1 s and 15% of it. The fast
+4-person call has no timed reference and isn't included.
+
+| Meeting | Mixed lines, before → after | Words in the wrong person's part, before → after |
+|---|---|---|
+| A | 21 → 19 | 5.2% → 2.2% |
+| B, fast group | 50 → 41 | 13.5% → 5.4% |
+| C | 21 → 18 | 6.3% → 2.2% |
+| D, briefing | 1 → 2 | 0.2% → 0.1% |
+| Total | 93 of 704 → 80 of 836 | 5.6% → 2.2% |
+
+The meeting-end split by diarization corrects some of these, so the
+remainder (2.2%) is an upper bound on what better word timing could win
+back.
+
+## Finding speaker changes from the spectrum alone (2026-10-08)
+
+Could a plain spectral test find speaker changes, without clustering?
+The test: compare the 1.5 s before and after each point (every 50 ms) and
+flag where they look like different sources. It used 12 MFCCs per 10 ms
+frame (c0 dropped, so loudness doesn't count), quieter frames left out,
+and the classic ΔBIC test (Chen & Gopalakrishnan, 1998) with a
+full-covariance Gaussian on each side. Peaks were at least 1 s apart.
+
+Scored on meeting B (37 min, 214 changes between remote speakers in
+Teams' timed transcript). "Found" is the share of real changes detected;
+"correct" is the share of detections that were real.
+
+| Signal | Detections | Found ±1 s | Correct ±1 s | Found ±2 s | Correct ±2 s |
+|---|---|---|---|---|---|
+| Diarizer new-voice (pyannote segmentation) | 142 | 39% | 53% | 55% | 68% |
+| Highlight change (0.5 s earlier) | 136 | 29% | 42% | 54% | 72% |
+| Both | 278 | 55% | 47% | 75% | 70% |
+| Spectral ΔBIC, top 1% | 52 | 7% | 27% | 16% | 52% |
+| Spectral ΔBIC, top 5% | 191 | 23% | 23% | 43% | 45% |
+| Spectral ΔBIC, top 20% | 539 | 54% | 21% | 75% | 36% |
+| Random guessing | | | 19% | | 39% |
+
+**The spectral test is barely better than chance.** On codec-compressed
+meeting audio, with turns often shorter than its windows, the spectrum
+changes as much within one voice (phonemes, pitch, laughter, the codec)
+as between voices. Classic ΔBIC was built for broadcast news, with long
+turns and clean audio. The learned segmentation model already in the
+pipeline is the version of this idea that works: it was trained to tell
+voices apart, not just spectra. Its new-voice signal and the highlight
+complement each other, together finding 75% of changes within 2 s.
+
+**Separating overlapping voices**, rather than just finding the changes:
+- Trained models exist: SepFormer (SpeechBrain), Conv-TasNet / DPRNN
+  (Asteroid), MossFormer2 (ClearerVoice-Studio), TF-GridNet (ESPnet), and
+  pyannote's joint diarization-and-separation model trained on real
+  meetings (AMI, "PixIT", 2024).
+- sherpa-onnx, which Tomoe runs on, has speech enhancement and music
+  separation but no speaker separation.
+- Most of these models are trained on synthetic two-person mixtures of
+  clean speech, are much heavier than the diarizer, and would be a domain
+  mismatch on codec audio.
+- Remote voices overlap for only 0.2–4% of remote speech, mostly under a
+  second, so separation isn't worth its cost here.
+
+**Cheaper next steps** for finding changes:
+- **Use the segmentation model's per-frame speaker activity** within each
+  window, not just "a new voice at the window's end".
+- **Compare speaker embeddings either side of a point** (the same ERes2Net
+  fingerprints used for clustering), rather than raw spectra.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time

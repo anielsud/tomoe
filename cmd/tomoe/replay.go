@@ -228,7 +228,10 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 			lc.TurnMaxGap = o.turnGap
 		}
 		if lc.TurnMode {
-			lc.SpeakerChanged = signals
+			lc.SpeakerChanged = signals.Between
+			if cfg.Meeting.SplitAtHighlight {
+				lc.HighlightChanges, lc.HighlightLag = signals.NameChangesIn, live.DefaultHighlightLag
+			}
 		}
 		lc.MinSilenceDuration, lc.MaxSpeechDuration = cfg.Meeting.MinSilenceDuration, cfg.Meeting.MaxSpeechDuration
 		if o.minSilence > 0 {
@@ -513,38 +516,31 @@ func (t *timedEngine) TranscribeDirect(samples []float32) (*transcribe.Result, e
 	return r, err
 }
 
-// speakerChangeSignals is live.Config.SpeakerChanged as the app would have
-// had it for sess: new-voice times from its saved diarization windows
-// and/or the moments the meeting window's highlighted name changed.
-func speakerChangeSignals(sess *session.Session, which string) func(from, to float64) bool {
-	var times []float64
+// speakerChangeSignals is the live.ChangeLog the app would have had for
+// sess: new-voice times from its saved diarization windows and/or the
+// moments the meeting window's highlighted name changed.
+func speakerChangeSignals(sess *session.Session, which string) *live.ChangeLog {
+	log := &live.ChangeLog{}
 	dir := filepath.Join(config.SessionDir(), sess.ID)
+	n := 0
 	if which == "diarizer" || which == "both" {
 		if prep, info, err := loadFingerprints(dir); err == nil {
 			for _, t := range prep.NewVoiceTimes() {
-				times = append(times, t+info.Offset)
+				log.Add(t + info.Offset)
+				n++
 			}
 		}
 	}
 	if which == "teams" || which == "both" {
 		if looks, err := videohint.ReadLooks(dir); err == nil {
-			last := ""
 			for _, l := range looks {
-				name, _ := l.Accepted()
-				if name == "" {
-					continue
+				if name, _ := l.Accepted(); name != "" {
+					log.NameSeen(l.Time.Sub(sess.CreatedAt).Seconds(), name)
 				}
-				if last != "" && name != last {
-					times = append(times, l.Time.Sub(sess.CreatedAt).Seconds())
-				}
-				last = name
 			}
+			n += len(log.NameChangesIn(-1, 1e9))
 		}
 	}
-	sort.Float64s(times)
-	fmt.Printf("Turn signals (%s): %d\n", which, len(times))
-	return func(from, to float64) bool {
-		i := sort.SearchFloat64s(times, from)
-		return i < len(times) && times[i] <= to
-	}
+	fmt.Printf("Turn signals (%s): %d\n", which, n)
+	return log
 }
