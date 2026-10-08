@@ -343,7 +343,13 @@ type WindowInfo struct {
 
 // ListWindows returns the on-screen, normal-layer windows at least
 // 300x200, largest first.
-func ListWindows() ([]WindowInfo, error) {
+func ListWindows() ([]WindowInfo, error) { return listWindows(false) }
+
+// ListWindowsWithFloating is ListWindows including small and floating
+// windows (such as a meeting app's thumbnail of a minimized call).
+func ListWindowsWithFloating() ([]WindowInfo, error) { return listWindows(true) }
+
+func listWindows(all bool) ([]WindowInfo, error) {
 	windows := C.list_windows()
 	if C.cfarray_is_null(windows) != 0 {
 		return nil, fmt.Errorf("teamsvideo: CGWindowListCopyWindowInfo returned nil")
@@ -353,12 +359,12 @@ func ListWindows() ([]WindowInfo, error) {
 	n := int(C.window_count(windows))
 	for i := 0; i < n; i++ {
 		idx := C.CFIndex(i)
-		if int32(C.window_layer(windows, idx)) != 0 {
+		if !all && int32(C.window_layer(windows, idx)) != 0 {
 			continue
 		}
 		num := int32(C.window_number(windows, idx))
 		w, h := int(C.window_bounds_width(windows, idx)), int(C.window_bounds_height(windows, idx))
-		if num < 0 || w < 300 || h < 200 {
+		if num < 0 || (!all && (w < 300 || h < 200)) || w <= 0 || h <= 0 {
 			continue
 		}
 		info := WindowInfo{ID: WindowID(num), OwnerPID: int(C.window_owner_pid(windows, idx)), Width: w, Height: h}

@@ -122,7 +122,7 @@ export interface Config {
     StickyThresholdMargin: number;
     MinAssignDuration: number;
     ShortSegmentGraceWindow: number;
-    VideoHintWindow: string; // "" Teams meeting window, "none" off, else an app's name
+    VideoHintWindow: string; // "" Teams or Zoom meeting window, "none" off, else an app's name
     VideoHintLearnInterval: number;
     VideoHintCheckInterval: number;
     SplitOnSpeakerChange: boolean;

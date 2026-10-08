@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sosuke-ai/tomoe-pc/internal/axtree"
 	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
 	"github.com/sosuke-ai/tomoe-pc/internal/teamsvideo"
 )
@@ -45,6 +46,11 @@ type Look struct {
 	// Shapes are the measurements of every ring-colored region near the
 	// detection thresholds, for tuning them offline.
 	Shapes []RingStat `json:"shapes,omitempty"`
+	// Tiles are the meeting app's participant tiles as its accessibility
+	// tree describes them (Zoom), with how much of each one's border was
+	// highlighted; Layout is the view the app says it's showing.
+	Tiles  []Tile `json:"tiles,omitempty"`
+	Layout string `json:"layout,omitempty"`
 	// Cost is what this look took, for measuring the hint layer's CPU
 	// use from a recording.
 	Cost LookCost `json:"cost"`
@@ -62,6 +68,11 @@ type Look struct {
 	// same as look ThumbOf's (same result a moment earlier).
 	Thumb   []byte `json:"-"`
 	ThumbOf int    `json:"thumb_of,omitempty"`
+	// Content is the shared screen when it changed since the last one
+	// kept (a JPEG saved as content/<id>.jpg); ContentRect is where it
+	// was in the frame.
+	Content     []byte       `json:"-"`
+	ContentRect *axtree.Rect `json:"content_rect,omitempty"`
 }
 
 // LookCost is a look's processing time in milliseconds: capturing the
@@ -128,6 +139,14 @@ func (l *LookLog) Write(look Look) error {
 	}
 	if len(look.Thumb) > 0 {
 		if err := os.WriteFile(filepath.Join(l.dir, "looks", fmt.Sprintf("%d.jpg", look.ID)), look.Thumb, 0o644); err != nil {
+			return err
+		}
+	}
+	if len(look.Content) > 0 {
+		if err := os.MkdirAll(filepath.Join(l.dir, "content"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(l.dir, "content", fmt.Sprintf("%d.jpg", look.ID)), look.Content, 0o644); err != nil {
 			return err
 		}
 	}

@@ -162,7 +162,7 @@ type MeetingConfig struct {
 	// CPU (docs/speaker-attribution-research.md). 0.35 restores the old
 	// learning rate, which RecordForTuning still uses.
 	// VideoHintWindow is which window video hints watch: "" finds the
-	// Teams meeting window, "none" turns them off, anything else is an
+	// Teams or Zoom meeting window, "none" turns them off, anything else is an
 	// app's name (its largest window). An app without a rule is still
 	// captured, for writing one from its saved frames.
 	VideoHintWindow string `toml:"video_hint_window"`

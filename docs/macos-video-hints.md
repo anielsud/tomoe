@@ -202,9 +202,9 @@ safer.
 timeline): by default the Teams meeting window, found by title as before;
 `none` turns hints off; or any app's name, whose largest window is
 captured. Video is independent of the audio source. An app without a
-rule (only Teams has one) is still captured and every look recorded,
-marked `no_rule`, so pointing the watcher at, say, Zoom collects frames
-to write Zoom's rule from ("Save for analysis"); nothing is read from
+rule (Teams and Zoom have one) is still captured and every look recorded,
+marked `no_rule`, so pointing the watcher at, say, Meet collects frames
+to write its rule from ("Save for analysis"); nothing is read from
 them until then.
 
 The watcher looks at the window on two clocks:
@@ -470,11 +470,76 @@ and every covered line is relabeled when they change, earlier lines
 included. With the previous pipeline a hint still only labels lines
 emitted after it lands.
 
+## Zoom (`zoom.go`, `internal/axtree`)
+
+Zoom needs no text recognition, because its accessibility tree (what screen
+readers see, read through the macOS Accessibility API) describes the call in
+plain text. This was worked out on one live all-hands call (about 570 people,
+screen sharing, chat busy) on 2026-10-08.
+
+**What the tree gives:**
+- **Tiles.** Each participant tile is an `AXTabGroup` whose description reads
+  "Name, Computer audio unmuted, Video on". A room or a spotlighted video
+  without an audio link reads "Name, No audio connected".
+- **Position.** Each tile's box is given in screen points, on whichever
+  display the window is on.
+- **Layout.** The current view is named on a button: "View options,
+  Speaker", "Side-by-side: Multi-speaker", and so on.
+- **Shared screen.** It's an element described "Share content", with its box.
+- **Chat.** While the chat panel is open, each message is an element
+  described "Sender, text, 10:05 AM". Zoom puts a narrow no-break space
+  (U+202F) before AM/PM. Reactions ("3 users added this reaction") and
+  threads ("replying to …", "2 replies") are there too, but aren't read yet.
+- **Participants panel.** When open, it's a window titled "Participants
+  (N)" with a row for everyone, but only the rows on screen have contents:
+  name, mic and video state.
+- **What isn't there:** nothing in the tree marks who is speaking.
+
+**Who is speaking.** Zoom draws a green border (about RGB 138,200,105 in a
+capture) around the active speaker's tile in the filmstrip and gallery. A
+look maps each tile's box from the tree onto the frame and measures how much
+of a 3-pixel band around it is that green. On the first frame checked, the
+active tile scored 0.33–0.45 and every other tile 0.00. The cutoff is 0.15.
+Speaker view and spotlight show a single tile, which is the speaker.
+
+**Shared screens.** These come from the same tree read and frame as the
+speaker, so they cost no extra captures. The shared screen is cropped out of
+the frame and saved as `content/<look>.jpg` when it changes. The change has
+to be more than 6 (mean brightness, 0–255), and saves are at least 3 s apart.
+
+**Chat and participants aren't captured.** Both need a Zoom panel to be open,
+and even then only the rows on screen are in the tree. Reading them fully
+would mean opening and scrolling the user's panels. A working chat reader
+(it writes `chat.jsonl` while the panel is open) is set aside on the branch
+`zoom-chat`.
+
+**Window states:**
+- **Covered by other windows:** Zoom keeps repainting, unlike Teams.
+  Speaker naming and slides keep working.
+- **Minimized:** the call window leaves the tree and the window list.
+  Zoom shows only a 240×135 floating thumbnail of the shared screen. Tomoe
+  watches that thumbnail (small slides are still a record) and reports no
+  speaker.
+- **Watched window:** never Zoom's home screen ("Zoom Workplace"), which is
+  often its largest window.
+- **Automatic mode:** with the window setting on automatic (`""`), Zoom's
+  call window is watched whenever it's on screen. It only exists during a
+  call, so it takes priority over any Teams window. A minimized Zoom call's
+  thumbnail is used only when no Teams window is open.
+
+**Cost.** Reading the tree takes about 25–30 ms, even with the 570-person
+participants panel open. Looks kept to one every 0.5 s.
+
+**Permission.** Reading the tree needs the Accessibility permission Tomoe
+already has for pasting. Without it, looks report `no_tiles` and say why.
+
 ## Still open
 
-- **Rules for other apps.** Zoom, Meet and Webex windows can be watched
-  and their frames collected, but nothing is read from them until each
-  has a rule (ring color and shape, label position, call chrome).
+- **Rules for other apps.** Meet and Webex windows can be watched and their
+  frames collected, but nothing is read from them until each has a rule.
+  Their accessibility trees haven't been looked at. For Zoom, see above:
+  - chat and participants, which need panels opened and scrolled;
+  - trimming the letterbox and toolbar from saved slides.
 - **Tuned once.** The vote thresholds and the ring lag barely matter
   (one 82-minute, 5-speaker meeting; see speaker-attribution-research.md),
   and one look every 1-2 s loses nothing in the saved transcript against

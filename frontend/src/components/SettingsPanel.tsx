@@ -27,7 +27,7 @@ function WindowSelect({ value, onChange }: { value: string; onChange: (v: string
   useEffect(refresh, []);
   return (
     <select className="setting-input" value={value} onFocus={refresh} onChange={e => onChange(e.target.value)}>
-      <option value="">Teams meeting (automatic)</option>
+      <option value="">Teams or Zoom meeting (automatic)</option>
       <option value="none">Off</option>
       {value && value !== 'none' && !apps.some(a => a.app === value) && <option value={value}>{value}</option>}
       {apps.map(a => <option key={a.app} value={a.app}>{a.app}{a.known ? '' : ' (no rule yet)'}</option>)}
