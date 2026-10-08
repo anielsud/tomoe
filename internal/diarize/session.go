@@ -194,6 +194,18 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 	}
 	live := seg.LiveLabel()
 	label, ok := d.liveTo[live]
+	if (!ok || label == "") && d.timeline != nil {
+		// The live pass doesn't know this voice, but the meeting window
+		// says who's talking: if a timeline speaker already carries that
+		// name, it's them. Without this, a 1:1 showed the other person
+		// under a new provisional label every time the live pass split
+		// off a new cluster for their voice (19 in a 20-minute call).
+		if name := d.hintDuringLocked(seg.StartTime, seg.EndTime); name != "" {
+			if k, found := d.speakerNamedLocked(name); found {
+				label, ok = d.labelFor(k), true
+			}
+		}
+	}
 	if !ok || label == "" {
 		// A voice the timeline hasn't placed yet. The live pass numbers
 		// speakers its own way, so its "Person 5" may be a different
@@ -236,6 +248,19 @@ func (d *SessionDiarizer) labelFor(k int) string {
 		return fmt.Sprintf("Person %d (%s)", k+1, name)
 	}
 	return fmt.Sprintf("Person %d", k+1)
+}
+
+// speakerNamedLocked finds the timeline speaker named name (by the meeting
+// window or the user), if exactly one is.
+func (d *SessionDiarizer) speakerNamedLocked(name string) (int, bool) {
+	found, n := -1, 0
+	for k := range d.timeline.Labels {
+		if SameName(d.renames[k], name) || SameName(d.names[k], name) {
+			found = k
+			n++
+		}
+	}
+	return found, n == 1
 }
 
 func (d *SessionDiarizer) isRenamedLabel(label string) bool {
