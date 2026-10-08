@@ -41,7 +41,9 @@ var tuneCmd = &cobra.Command{
 		offset, _ := cmd.Flags().GetFloat64("ref-offset")
 		threads, _ := cmd.Flags().GetInt("threads")
 		auto := !cmd.Flags().Changed("ref-offset")
-		return runTune(args[0], ref, out, offset, auto, threads)
+		segmentsPath, _ := cmd.Flags().GetString("segments")
+		spreadWords, _ := cmd.Flags().GetBool("spread-words")
+		return runTune(args[0], ref, out, offset, auto, threads, segmentsPath, spreadWords)
 	},
 }
 
@@ -49,6 +51,8 @@ func init() {
 	tuneCmd.Flags().String("ref", "", "Teams transcript of the same meeting (a raw export works: Teams labels speakers from each person's own audio); without it, only what can be measured without an answer key")
 	tuneCmd.Flags().String("out", "", "Output directory (default tune-<session>)")
 	tuneCmd.Flags().Float64("ref-offset", 0, "Seconds to add to the reference's times to match the recording (default: estimated from the text)")
+	tuneCmd.Flags().String("segments", "", "Score this transcript of the session's audio (a replay's .json) instead of the saved one")
+	tuneCmd.Flags().Bool("spread-words", false, "Replace word timings with estimates spread across each line (as for models without timestamps)")
 	tuneCmd.Flags().Int("threads", 2, "Threads per worker if fingerprints have to be computed")
 	rootCmd.AddCommand(tuneCmd)
 }
@@ -90,7 +94,7 @@ type tuneResult struct {
 // against (a wrong name is worse than none).
 func (r tuneResult) nameScore() float64 { return r.NameRight - 2*r.NameWrong }
 
-func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, threads int) error {
+func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, threads int, segmentsPath string, spreadWords bool) error {
 	began := time.Now()
 	cfg, err := config.Load(config.Path())
 	if err != nil {
@@ -107,9 +111,21 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 		outDir = "tune-" + sess.ID[:min(8, len(sess.ID))]
 	}
 
-	// The session's transcribed words, in order.
+	// The session's transcribed words, in order (or another transcript
+	// of the same audio, e.g. a replay with another model).
+	source := sess.Segments
+	if segmentsPath != "" {
+		if source, err = loadTranscriptSegments(segmentsPath); err != nil {
+			return err
+		}
+	}
+	if spreadWords {
+		for i := range source {
+			source[i].Words = session.SpreadWords(source[i].Text, source[i].StartTime, source[i].EndTime)
+		}
+	}
 	var segs []session.Segment
-	for _, s := range sess.Segments {
+	for _, s := range source {
 		if len(s.Words) > 0 {
 			segs = append(segs, s)
 		}

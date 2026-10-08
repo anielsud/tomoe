@@ -143,6 +143,9 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 		}
 		virtual = virtual.Add(replayWindowDuration)
 		collect()
+		if cfg.ReplayProgress != nil && (w%replayProgressEvery == 0 || w == longest-1) {
+			cfg.ReplayProgress(w+1, longest)
+		}
 	}
 	for _, st := range sources {
 		c.finishSource(st)
@@ -160,3 +163,7 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 	}
 	return &ReplayResult{Segments: segs, Pass1Text: pass1}, nil
 }
+
+// replayProgressEvery is how many windows (about 32 s of audio) pass
+// between Config.ReplayProgress calls.
+const replayProgressEvery = 1000

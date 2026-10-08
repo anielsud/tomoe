@@ -1,12 +1,14 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"math"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/spf13/cobra"
@@ -16,6 +18,8 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
+	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
 
 // sessionReplayCmd re-runs a saved session's recorded audio through the live
@@ -42,13 +46,73 @@ was heard live, but both runs hear the same audio.`,
 	RunE: func(cmd *cobra.Command, args []string) error {
 		out, _ := cmd.Flags().GetString("out")
 		mainThreshold, _ := cmd.Flags().GetFloat64("main-threshold")
-		return runSessionReplay(args[0], out, mainThreshold)
+		var o replayOptions
+		o.asrModel, _ = cmd.Flags().GetString("asr-model")
+		o.decoding, _ = cmd.Flags().GetString("decoding")
+		o.onlyCurrent, _ = cmd.Flags().GetBool("only-current")
+		o.progress, _ = cmd.Flags().GetBool("progress")
+		o.asrKind, _ = cmd.Flags().GetString("asr-kind")
+		o.singlePass, _ = cmd.Flags().GetBool("single-pass")
+		o.threads, _ = cmd.Flags().GetInt("threads")
+		o.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
+		o.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
+		if cmd.Flags().Changed("turn-mode") {
+			on, _ := cmd.Flags().GetBool("turn-mode")
+			o.turnMode = &on
+		}
+		o.turnMax, _ = cmd.Flags().GetFloat64("turn-max")
+		o.turnGap, _ = cmd.Flags().GetFloat64("turn-gap")
+		o.turnSignals, _ = cmd.Flags().GetString("turn-signals")
+		return runSessionReplay(args[0], out, mainThreshold, o)
 	},
+}
+
+// replayOptions are session replay's settings for testing transcription
+// changes against a session's real audio (see tomoe textdiff).
+type replayOptions struct {
+	// asrModel is a Parakeet-style transducer directory (encoder, decoder,
+	// joiner .onnx and tokens.txt) to transcribe with instead of the
+	// configured one; decoding overrides decoding_method.
+	asrModel string
+	decoding string
+	// onlyCurrent skips the main run; progress prints "progress ..."
+	// lines as the audio is replayed.
+	onlyCurrent bool
+	progress    bool
+	// asrKind loads asrModel as another model family (see
+	// transcribe.CandidateKinds); singlePass turns two-pass off, so only
+	// the model under test writes text; threads is its CPU threads.
+	asrKind    string
+	singlePass bool
+	threads    int
+	// minSilence and maxSpeech are the utterance bounds (0: the config's).
+	minSilence, maxSpeech float64
+	// turnMode overrides the config's turn_mode when set; turnMax and
+	// turnGap its limits (0: the config's). turnSignals is which
+	// speaker-change signals end a turn, rebuilt from the session's saved
+	// diarization windows and meeting-window looks: "diarizer", "teams",
+	// "both" (as the app had them) or "none".
+	turnMode         *bool
+	turnMax, turnGap float64
+	turnSignals      string
 }
 
 func init() {
 	sessionReplayCmd.Flags().String("out", "", "Directory for main.txt/current.txt (default: replay-<session-id> in the current directory)")
 	sessionReplayCmd.Flags().Float64("main-threshold", 0, "Speaker threshold for the main run (default: your speaker_threshold)")
+	sessionReplayCmd.Flags().String("asr-model", "", "Transcribe with this transducer model directory (encoder/decoder/joiner .onnx + tokens.txt) instead of the configured Parakeet")
+	sessionReplayCmd.Flags().String("decoding", "", "Decoding method for this replay: greedy_search or modified_beam_search (default: your decoding_method)")
+	sessionReplayCmd.Flags().Bool("only-current", false, "Replay only with your current config (skip the main run)")
+	sessionReplayCmd.Flags().Bool("progress", false, "Print progress lines (\"progress replay <run> <done>/<total>\") while replaying")
+	sessionReplayCmd.Flags().String("asr-kind", "", "With --asr-model: the model family ("+strings.Join(transcribe.CandidateKinds, ", ")+"); default a Parakeet-style transducer")
+	sessionReplayCmd.Flags().Bool("single-pass", false, "Turn two-pass off for this replay, so only the transcription model writes text")
+	sessionReplayCmd.Flags().Float64("min-silence", 0, "Pause (s) that ends an utterance (default: your min_silence_duration)")
+	sessionReplayCmd.Flags().Float64("max-speech", 0, "Longest utterance (s) before it's cut (default: your max_speech_duration)")
+	sessionReplayCmd.Flags().Bool("turn-mode", false, "Decode whole speaker turns, or each utterance with =false (default: your turn_mode)")
+	sessionReplayCmd.Flags().Float64("turn-max", 0, "Turn mode: longest line in seconds (default: your turn_max_seconds)")
+	sessionReplayCmd.Flags().Float64("turn-gap", 0, "Turn mode: a pause longer than this many seconds ends a turn (default: your turn_max_gap)")
+	sessionReplayCmd.Flags().String("turn-signals", "both", "Turn mode: speaker-change signals that end a turn, as the app had them: diarizer, teams, both or none")
+	sessionReplayCmd.Flags().Int("threads", 0, "CPU threads for the transcription model (default: the engine's)")
 	sessionCmd.AddCommand(sessionReplayCmd)
 }
 
@@ -60,7 +124,7 @@ type replayRun struct {
 	segments []session.Segment
 }
 
-func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
+func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOptions) error {
 	cfg, err := config.Load(config.Path())
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
@@ -68,6 +132,18 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 	status := models.NewManager(cfg.Transcription.ModelPath).Check()
 	if !status.Ready() {
 		return fmt.Errorf("transcription models not downloaded (run 'tomoe model download')")
+	}
+	if o.asrModel != "" && o.asrKind == "" {
+		if err := useTransducerDir(status, o.asrModel); err != nil {
+			return err
+		}
+		// Use exactly these files: the model setting would otherwise pick
+		// its own for English (see models.ASRModelFor).
+		cfg.Transcription.Model = models.ASRModelParakeetV3
+		fmt.Printf("Transcribing with %s\n", o.asrModel)
+	}
+	if o.decoding != "" {
+		cfg.Transcription.DecodingMethod = o.decoding
 	}
 
 	sess, err := session.NewStore(config.SessionDir()).Load(sessID)
@@ -99,25 +175,62 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 	if mainThreshold > 0 {
 		baseline.Threshold = mainThreshold
 	}
-	runs := []*replayRun{
-		{name: "main", twoPass: false, tuning: baseline},
-		{name: "current", twoPass: cfg.Transcription.TwoPass && lang == "en", tuning: current},
+	cur := &replayRun{name: "current", twoPass: cfg.Transcription.TwoPass && lang == "en" && !o.singlePass, tuning: current}
+	runs := []*replayRun{{name: "main", twoPass: false, tuning: baseline}, cur}
+	if o.onlyCurrent {
+		runs = []*replayRun{cur}
 	}
 
-	pipe, err := loadOfflinePipeline(cfg, status, lang, monitor != nil, runs[1].twoPass)
+	pipe, err := loadOfflinePipeline(cfg, status, lang, monitor != nil, cur.twoPass)
 	if err != nil {
 		return err
 	}
 	defer pipe.Close()
 	if pipe.streaming == nil {
-		runs[1].twoPass = false
+		cur.twoPass = false
 	}
+	timed := &timedEngine{}
+	if o.asrKind != "" {
+		eng, err := transcribe.NewCandidateEngine(o.asrKind, o.asrModel, o.threads)
+		if err != nil {
+			return err
+		}
+		defer eng.Close()
+		pipe.engine = eng
+		fmt.Printf("Transcribing with %s model %s\n", o.asrKind, o.asrModel)
+	}
+	timed.Engine = pipe.engine
+	pipe.engine = timed
 
 	fmt.Printf("Replaying %q (%s of audio)...\n", sess.Title, formatDuration(float64(max(len(mic), len(monitor)))/16000))
+	signals := speakerChangeSignals(sess, o.turnSignals)
 	for _, run := range runs {
 		lc := pipe.liveConfig(run.tuning, run.twoPass)
 		lc.MinSpeechLevelDB, lc.MicLevelMarginDB = cfg.Meeting.MinSpeechLevelDB, cfg.Meeting.MicLevelMarginDB
 		lc.TurnMode, lc.TurnMaxSeconds, lc.TurnMaxGap = cfg.Meeting.TurnMode, cfg.Meeting.TurnMaxSeconds, cfg.Meeting.TurnMaxGap
+		if o.turnMode != nil {
+			lc.TurnMode = *o.turnMode
+		}
+		if o.turnMax > 0 {
+			lc.TurnMaxSeconds = o.turnMax
+		}
+		if o.turnGap > 0 {
+			lc.TurnMaxGap = o.turnGap
+		}
+		if lc.TurnMode {
+			lc.SpeakerChanged = signals
+		}
+		lc.MinSilenceDuration, lc.MaxSpeechDuration = cfg.Meeting.MinSilenceDuration, cfg.Meeting.MaxSpeechDuration
+		if o.minSilence > 0 {
+			lc.MinSilenceDuration = o.minSilence
+		}
+		if o.maxSpeech > 0 {
+			lc.MaxSpeechDuration = o.maxSpeech
+		}
+		if o.progress {
+			name := run.name
+			lc.ReplayProgress = func(done, total int) { fmt.Printf("progress replay %s %d/%d\n", name, done, total) }
+		}
 		if run.segments, err = live.Replay(lc, mic, monitor); err != nil {
 			return fmt.Errorf("%s run: %w", run.name, err)
 		}
@@ -135,10 +248,65 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 		if err := os.WriteFile(path, []byte(formatReplayTranscript(run.segments)), 0o644); err != nil {
 			return fmt.Errorf("writing %s: %w", path, err)
 		}
+		// The segments with word timings, for tomoe textdiff.
+		js, _ := json.MarshalIndent(run.segments, "", " ")
+		if err := os.WriteFile(filepath.Join(outDir, run.name+".json"), js, 0o644); err != nil {
+			return fmt.Errorf("writing %s.json: %w", run.name, err)
+		}
 	}
 
-	printReplaySummary(runs)
-	fmt.Printf("\nTranscripts: %s, %s\n", filepath.Join(outDir, "main.txt"), filepath.Join(outDir, "current.txt"))
+	if len(runs) == 2 {
+		printReplaySummary(runs)
+	}
+	audio := float64(max(len(mic), len(monitor))) / 16000
+	fmt.Printf("\nDecode time: %.1fs for %d utterances (%.1f%% of the audio's length)\n", timed.secs, timed.n, 100*timed.secs/max(1, audio))
+	fmt.Printf("Transcripts in %s\n", outDir)
+	return nil
+}
+
+// useTransducerDir points status's transcription model at dir: its
+// encoder, decoder and joiner .onnx files (the int8 ones if there are
+// both) and tokens.txt.
+func useTransducerDir(status *models.Status, dir string) error {
+	find := func(part string) (string, error) {
+		var plain, int8 string
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			return "", err
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if !strings.HasPrefix(n, part) || !strings.HasSuffix(n, ".onnx") {
+				continue
+			}
+			if strings.Contains(n, "int8") {
+				int8 = filepath.Join(dir, n)
+			} else {
+				plain = filepath.Join(dir, n)
+			}
+		}
+		if int8 != "" {
+			return int8, nil
+		}
+		if plain != "" {
+			return plain, nil
+		}
+		return "", fmt.Errorf("no %s*.onnx in %s", part, dir)
+	}
+	var err error
+	if status.EncoderPath, err = find("encoder"); err != nil {
+		return err
+	}
+	if status.DecoderPath, err = find("decoder"); err != nil {
+		return err
+	}
+	if status.JoinerPath, err = find("joiner"); err != nil {
+		return err
+	}
+	status.TokensPath = filepath.Join(dir, "tokens.txt")
+	if _, err := os.Stat(status.TokensPath); err != nil {
+		return fmt.Errorf("no tokens.txt in %s", dir)
+	}
 	return nil
 }
 
@@ -299,4 +467,56 @@ func speakerAgreement(a, b []session.Segment) (agreed, total float64) {
 		agreed += overlap[p]
 	}
 	return agreed, total
+}
+
+// timedEngine adds up the time spent in TranscribeDirect, for comparing
+// models' speed in a replay.
+type timedEngine struct {
+	transcribe.Engine
+	secs float64
+	n    int
+}
+
+func (t *timedEngine) TranscribeDirect(samples []float32) (*transcribe.Result, error) {
+	began := time.Now()
+	r, err := t.Engine.TranscribeDirect(samples)
+	t.secs += time.Since(began).Seconds()
+	t.n++
+	return r, err
+}
+
+// speakerChangeSignals is live.Config.SpeakerChanged as the app would have
+// had it for sess: new-voice times from its saved diarization windows
+// and/or the moments the meeting window's highlighted name changed.
+func speakerChangeSignals(sess *session.Session, which string) func(from, to float64) bool {
+	var times []float64
+	dir := filepath.Join(config.SessionDir(), sess.ID)
+	if which == "diarizer" || which == "both" {
+		if prep, info, err := loadFingerprints(dir); err == nil {
+			for _, t := range prep.NewVoiceTimes() {
+				times = append(times, t+info.Offset)
+			}
+		}
+	}
+	if which == "teams" || which == "both" {
+		if looks, err := videohint.ReadLooks(dir); err == nil {
+			last := ""
+			for _, l := range looks {
+				name, _ := l.Accepted()
+				if name == "" {
+					continue
+				}
+				if last != "" && name != last {
+					times = append(times, l.Time.Sub(sess.CreatedAt).Seconds())
+				}
+				last = name
+			}
+		}
+	}
+	sort.Float64s(times)
+	fmt.Printf("Turn signals (%s): %d\n", which, len(times))
+	return func(from, to float64) bool {
+		i := sort.SearchFloat64s(times, from)
+		return i < len(times) && times[i] <= to
+	}
 }
