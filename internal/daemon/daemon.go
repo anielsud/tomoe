@@ -469,6 +469,9 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	cfg.TurnMode, cfg.TurnMaxSeconds, cfg.TurnMaxGap = d.cfg.Meeting.TurnMode, d.cfg.Meeting.TurnMaxSeconds, d.cfg.Meeting.TurnMaxGap
 	cfg.DecodePad, cfg.TurnInterjection = d.cfg.Meeting.DecodePad, d.cfg.Meeting.TurnInterjection
 	cfg.SpeakerChanged = changes.Between
+	if d.cfg.Meeting.SplitAtHighlight {
+		cfg.HighlightChanges, cfg.HighlightLag = changes.NameChangesIn, live.DefaultHighlightLag
+	}
 
 	watcher := videohint.NewWatcher(videohint.WatchConfig{
 		Source:        d.cfg.Meeting.VideoHintWindow,

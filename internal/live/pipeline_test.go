@@ -346,3 +346,35 @@ func TestTurnInterjection(t *testing.T) {
 		t.Fatalf("after a real reply: %v, want the mic's 0-9 turn", spans)
 	}
 }
+
+func TestSplitAtHighlight(t *testing.T) {
+	eng := &mockEngine{result: &transcribe.Result{Text: "words"}}
+	log := &ChangeLog{}
+	log.NameSeen(0.5, "Ana")
+	log.NameSeen(3.5, "Ben") // Ben cut in at about 3.0 s
+	log.NameSeen(3.7, "Ben")
+	c := New(Config{Engine: eng, TurnMode: true, TurnMaxGap: 2, TurnMaxSeconds: 30,
+		SpeakerChanged: log.Between, HighlightChanges: log.NameChangesIn, HighlightLag: 0.5})
+	c.addToTurn(SourceMonitor, make([]float32, 6*16000), 0, 6)
+	c.flushTurn(SourceMonitor)
+	var spans [][2]float64
+	for len(c.segmentCh) > 0 {
+		seg := <-c.segmentCh
+		spans = append(spans, [2]float64{seg.StartTime, seg.EndTime})
+	}
+	if len(spans) != 2 || spans[0] != [2]float64{0, 3} || spans[1] != [2]float64{3, 6} {
+		t.Fatalf("lines %v, want 0-3 and 3-6", spans)
+	}
+
+	// A flicker too close to either end doesn't cut.
+	log2 := &ChangeLog{}
+	log2.NameSeen(0, "Ana")
+	log2.NameSeen(6.2, "Ben") // would cut at 5.7: under minHighlightPiece from the end
+	c2 := New(Config{Engine: eng, TurnMode: true, TurnMaxGap: 2, TurnMaxSeconds: 30,
+		SpeakerChanged: log2.Between, HighlightChanges: log2.NameChangesIn, HighlightLag: 0.5})
+	c2.addToTurn(SourceMonitor, make([]float32, 6*16000), 0, 6)
+	c2.flushTurn(SourceMonitor)
+	if n := len(c2.segmentCh); n != 1 {
+		t.Errorf("cut %d lines for a change 0.3 s from the end, want 1", n)
+	}
+}

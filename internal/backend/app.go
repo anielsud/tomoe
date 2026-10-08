@@ -642,6 +642,9 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	cfg.TurnMode, cfg.TurnMaxSeconds, cfg.TurnMaxGap = a.cfg.Meeting.TurnMode, a.cfg.Meeting.TurnMaxSeconds, a.cfg.Meeting.TurnMaxGap
 	cfg.DecodePad, cfg.TurnInterjection = a.cfg.Meeting.DecodePad, a.cfg.Meeting.TurnInterjection
 	cfg.SpeakerChanged = changes.Between
+	if a.cfg.Meeting.SplitAtHighlight {
+		cfg.HighlightChanges, cfg.HighlightLag = changes.NameChangesIn, live.DefaultHighlightLag
+	}
 
 	var md *diarize.SessionDiarizer
 	if cfg.MonitorCapturer != nil && !cfg.SkipMonitorDiarization {

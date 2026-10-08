@@ -850,6 +850,56 @@ type turnPart struct {
 	decision   speaker.AssignDecision
 }
 
+// minHighlightPiece is the shortest piece an utterance is cut into at a
+// highlight change: a flicker of the highlight doesn't shred a line.
+const minHighlightPiece = 0.4
+
+// splitAtHighlight cuts a meeting-audio utterance where the meeting
+// window's highlight moved to someone else (see Config.HighlightChanges).
+// The first piece keeps the utterance's pending line and speaker; the
+// others are new lines whose speaker is worked out from their own audio.
+// Returns nil when there's nothing to cut.
+func (c *Coordinator) splitAtHighlight(source SourceType, u turnPart) []turnPart {
+	if source != SourceMonitor || c.cfg.HighlightChanges == nil || !c.cfg.TurnMode {
+		return nil
+	}
+	lag := c.cfg.HighlightLag
+	var cuts []float64
+	last := u.start
+	for _, t := range c.cfg.HighlightChanges(u.start+lag+minHighlightPiece, u.end+lag-minHighlightPiece) {
+		at := t - lag
+		if at-last >= minHighlightPiece && u.end-at >= minHighlightPiece {
+			cuts = append(cuts, at)
+			last = at
+		}
+	}
+	if len(cuts) == 0 {
+		return nil
+	}
+	var pieces []turnPart
+	from := u.start
+	for i, at := range append(cuts, u.end) {
+		a := int((from - u.start) * vadSampleRate)
+		b := min(len(u.samples), int((at-u.start)*vadSampleRate))
+		if at == u.end {
+			b = len(u.samples)
+		}
+		p := turnPart{samples: u.samples[a:b], start: from, end: at, twoPass: u.twoPass}
+		if i == 0 {
+			p.id, p.pass1, p.speaker, p.decision = u.id, u.pass1, u.speaker, u.decision
+		}
+		pieces = append(pieces, p)
+		from = at
+	}
+	c.turnMu.Lock()
+	if c.turnCuts == nil {
+		c.turnCuts = map[string]int{}
+	}
+	c.turnCuts["highlight change inside an utterance"] += len(cuts)
+	c.turnMu.Unlock()
+	return pieces
+}
+
 // decode transcribes samples with Config.DecodePad seconds of silence on
 // each side, and gives token times relative to samples' own start.
 // Cohere drops the last syllable of audio that stops abruptly ("What'"
@@ -893,6 +943,12 @@ func (c *Coordinator) addToTurn(source SourceType, samples []float32, start, end
 // spoke, a speaker-change signal fell between them, the pause was longer
 // than TurnMaxGap, or the line would pass TurnMaxSeconds.
 func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
+	if pieces := c.splitAtHighlight(source, u); len(pieces) > 1 {
+		for _, p := range pieces {
+			c.addTurnPart(source, p)
+		}
+		return
+	}
 	c.turnMu.Lock()
 	if c.turns == nil {
 		c.turns = map[SourceType]*turnBuf{}
