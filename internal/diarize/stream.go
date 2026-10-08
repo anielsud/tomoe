@@ -40,7 +40,7 @@ type StreamConfig struct {
 	// starting that wasn't talking just before: a cheap, early speaker
 	// change signal, before any clustering. On the Stream's goroutine;
 	// must return quickly.
-	OnSpeakerChange func()
+	OnSpeakerChange func(at float64)
 }
 
 // Timeline is who spoke when, as of a recluster. Speakers are stable IDs
@@ -318,7 +318,7 @@ func (s *Stream) processWindow(window []float32) {
 	}
 	s.labels = append(s.labels, lab[0])
 	if lab[0] != nil && s.cfg.OnSpeakerChange != nil && newVoiceAtEnd(lab[0], float64(s.meta.WindowSize)/float64(s.meta.SampleRate)) {
-		s.cfg.OnSpeakerChange()
+		s.cfg.OnSpeakerChange(float64(c*s.meta.WindowShift+s.meta.WindowSize) / float64(s.meta.SampleRate))
 	}
 	if lab[0] == nil || c%s.cfg.Stride != 0 {
 		return

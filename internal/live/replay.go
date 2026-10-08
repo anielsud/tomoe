@@ -120,6 +120,9 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 			case job := <-c.refineCh:
 				if seg, ok := c.refine(job); ok {
 					record(seg)
+					for _, id := range job.absorb {
+						record(session.Segment{ID: id, Status: session.StatusRemoved})
+					}
 				}
 				continue
 			default:
@@ -151,6 +154,9 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 		if seg, ok := final[id]; ok {
 			segs = append(segs, seg)
 		}
+	}
+	if cfg.TurnMode {
+		fmt.Printf("Turn mode: %v\n", c.TurnCuts())
 	}
 	return &ReplayResult{Segments: segs, Pass1Text: pass1}, nil
 }

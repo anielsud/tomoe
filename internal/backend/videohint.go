@@ -63,6 +63,7 @@ type hintSession struct {
 	diar        *diarize.SessionDiarizer // nil: the previous pipeline (names go to the live tracker)
 	log         *videohint.LookLog
 	watcher     *videohint.Watcher
+	changes     *live.ChangeLog // speaker-change signals for TurnMode
 }
 
 // newHintWatcher creates the session's meeting-window watcher. It runs
@@ -129,6 +130,9 @@ func (a *App) onLook(hs *hintSession, l videohint.Look) {
 		fmt.Printf("videohint: recording look %d: %v\n", l.ID, err)
 	}
 	if l.Usable && l.Name != "" {
+		if hs.changes != nil && hs.coordinator != nil {
+			hs.changes.NameSeen(hs.coordinator.SessionTime(l.Time), l.Name)
+		}
 		if hs.diar != nil {
 			hs.diar.AddHint(hs.coordinator.SessionTime(l.Time), l.Name)
 		} else if a.tracker != nil {

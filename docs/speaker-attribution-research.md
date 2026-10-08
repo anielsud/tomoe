@@ -659,6 +659,45 @@ first tuned meeting said the same.
 Final labels were ready 0.4–5.4 s after each meeting ended, except D:
 83.8 s (52 minutes, mostly long monologues; not investigated yet).
 
+## Turn mode: one decode per speaker turn (2026-10-07)
+
+Each VAD utterance used to become its own line, decoded with only its own
+few seconds of context. Turn mode (`turn_mode`, on by default) holds a
+source's consecutive utterances and decodes them together. A turn ends when:
+
+- the other side speaks;
+- a speaker-change signal arrives (the diarizer hears a new voice, or the
+  Teams highlight shows a different name);
+- a pause passes 2 s (`turn_max_gap`, measured from the last speech);
+- the turn reaches 30 s (`turn_max_seconds`).
+
+Five reference meetings, Cohere Transcribe, replayed with the live signals
+taken from each session's recording:
+
+| | per utterance | turns + signals | turns, no signals |
+|---|---|---|---|
+| judged errors fixed | 209 | 237 | 245 |
+| names + terms right | 69% | 74% | 74% |
+| speaker accuracy | 96.5% | 96.2% | 95.3% |
+| 4–15-word turns | 88.4% | 87.4% | 84.3% |
+| lines | 1787 | 1014 | 878 |
+
+What the numbers show:
+- **Context helps the text.** Longer decodes fix more errors and get more
+  names and terms right.
+- **Speaker accuracy:** without signals, a turn can swallow a quick
+  interjection from another remote speaker, which costs 1.2 points. The
+  speaker-change signals recover most of that.
+- **Per meeting:** on three of the five meetings, speaker accuracy moved
+  0.2 points or less. One group call lost 0.5 points and another lost 1.1;
+  their speaker boundaries were already the weak spot.
+
+`tomoe session replay` applies the turn settings without the live signals,
+so its results match the "no signals" column.
+
+A possible next step: snap a turn's end to the moment the Teams highlight
+moved, rather than the utterance boundary.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time

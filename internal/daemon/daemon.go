@@ -464,6 +464,11 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		lastLook    videohint.Look
 	)
 	learn, check := d.cfg.Meeting.VideoHintTiming()
+	// Speaker-change signals end a turn (live.Config.TurnMode).
+	changes := &live.ChangeLog{}
+	cfg.TurnMode, cfg.TurnMaxSeconds, cfg.TurnMaxGap = d.cfg.Meeting.TurnMode, d.cfg.Meeting.TurnMaxSeconds, d.cfg.Meeting.TurnMaxGap
+	cfg.SpeakerChanged = changes.Between
+
 	watcher := videohint.NewWatcher(videohint.WatchConfig{
 		Source:        d.cfg.Meeting.VideoHintWindow,
 		LearnInterval: learn,
@@ -489,6 +494,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 			if !l.Usable || l.Name == "" {
 				return
 			}
+			changes.NameSeen(coordinator.SessionTime(l.Time), l.Name)
 			if diar != nil {
 				diar.AddHint(coordinator.SessionTime(l.Time), l.Name)
 			} else if d.tracker != nil {
@@ -514,7 +520,10 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 					fmt.Printf("[%s] relabeled: %s\n", formatTimestamp(seg.StartTime), seg.Speaker)
 				}
 			},
-			OnSpeakerChange: watcher.Burst,
+			OnSpeakerChange: func(at float64) {
+				watcher.Burst()
+				changes.Add(at)
+			},
 		})
 		if err != nil {
 			fmt.Printf("diarize during meeting: %v; diarizing after the meeting instead\n", err)
