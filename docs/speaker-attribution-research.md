@@ -412,6 +412,44 @@ reconstruction take about 5 s. Our diarizer embeds every 10 s window per
 local speaker (4841 embeddings for the hour), so it does more of that work
 than sherpa. Fewer or shorter embeddings are the lever if it's to ship.
 
+### Diarizing during the meeting: keeping up, and catching up
+
+A 52-minute briefing with a screen share (2026-10-06) got its final
+labels 84 s after it ended, where nine other meetings that week took
+0.4–5.4 s. The Stream does all its work on one low-priority thread and
+falls behind when the machine is busy; Finish then waits for it to work
+through the backlog one window at a time. Measured on that briefing's
+audio on an idle Apple Silicon desktop (`tomoe eval --diarization-timing
+stream`, which now prints real progress):
+
+| | Time | Share of meeting time |
+|---|---|---|
+| One thread, every window (stride 1, as Record for tuning forces) | 1198 s | 38% |
+| One thread, every 2nd window (stride 2, the default), reclusters excluded | 635 s | 20% |
+| Parallel catch-up of the whole meeting (new) | 199 s | 6% |
+
+- **Fingerprints are the cost.** Segmenting all 3,112 windows in parallel
+  took under 20 s; the rest is speaker fingerprints (about 30 a second in
+  parallel). Reclusters were 88 s of the 1198 s (slowest 0.84 s).
+- At 38% of a core when idle, stride 1 has little headroom once a call,
+  a screen share and the live transcript compete for the efficiency
+  cores; the briefing's 84 s wait means it ended roughly four minutes of
+  audio behind. Stride 2 halves that load.
+- **Catch-up (shipped):** once the meeting has ended the Stream raises its
+  thread back to normal priority (macOS; Linux can't without privileges),
+  skips the intermediate reclusters nobody will see, and, with 30 or more
+  windows left, segments and fingerprints the rest in parallel
+  (`Stream.catchUp`, via `Prepare`). The parallel run produced exactly
+  the same fingerprints (3,567) and speakers (10) as one window at a time,
+  about 6x faster, so an 84 s wait becomes roughly 14 s.
+- The log line at the end of each meeting, and `diarization.json`'s
+  `stats`, now say how far behind the diarizer was at the end and at most,
+  what reclusters cost and what was caught up, so real meetings show
+  where it falls behind.
+- Not done: thinning fingerprints (stride 2 or more) automatically while
+  the Stream is far behind, so it never builds a backlog; it costs about
+  0.3 points per stride step, only while behind.
+
 ## Video hints, tuned on a real meeting (2026-10-02)
 
 `tomoe tune` on a session recorded with Record for tuning (82 minutes, 5

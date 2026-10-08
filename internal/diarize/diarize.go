@@ -5,6 +5,7 @@ import (
 	"math"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
@@ -30,18 +31,26 @@ type Prepared struct {
 // Prepare runs segmentation and embedding extraction over samples (16kHz
 // mono). workers goroutines share the work, each with threads CPU threads.
 func Prepare(samples []float32, segmentationModel, embeddingModel string, workers, threads int) (*Prepared, error) {
+	return prepare(samples, segmentationModel, embeddingModel, workers, threads, nil)
+}
+
+// progressFunc reports work done so far in a phase ("segmenting",
+// "fingerprints") out of its total. Called from worker goroutines.
+type progressFunc func(phase string, done, total int)
+
+func prepare(samples []float32, segmentationModel, embeddingModel string, workers, threads int, progress progressFunc) (*Prepared, error) {
 	seg, err := newSegmenter(segmentationModel, threads)
 	if err != nil {
 		return nil, err
 	}
 	defer seg.close()
-	labels, err := seg.segment(samples, workers)
+	labels, err := seg.segment(samples, workers, progress)
 	if err != nil {
 		return nil, err
 	}
 	p := &Prepared{Meta: seg.meta, NumSamples: len(samples), Labels: labels}
 	pairs, ranges := speakerSampleRanges(labels, seg.meta)
-	embs, valid, err := embedRanges(samples, ranges, embeddingModel, workers)
+	embs, valid, err := embedRanges(samples, ranges, embeddingModel, workers, progress)
 	if err != nil {
 		return nil, err
 	}
@@ -111,7 +120,8 @@ func speakerSampleRanges(labels [][][]int8, m Meta) ([]ChunkSpeaker, [][][2]int)
 // (the concatenated audio of its sample ranges), spread over workers
 // goroutines with an embedder each. valid[i] is false where the model
 // returned NaN, which sherpa-onnx also drops.
-func embedRanges(samples []float32, ranges [][][2]int, modelPath string, workers int) ([][]float32, []bool, error) {
+func embedRanges(samples []float32, ranges [][][2]int, modelPath string, workers int, progress progressFunc) ([][]float32, []bool, error) {
+	var done atomic.Int64
 	embs := make([][]float32, len(ranges))
 	valid := make([]bool, len(ranges))
 	jobs := make(chan int)
@@ -146,6 +156,9 @@ func embedRanges(samples []float32, ranges [][][2]int, modelPath string, workers
 				}
 				if normalize(v) {
 					embs[i], valid[i] = v, true
+				}
+				if progress != nil {
+					progress("fingerprints", int(done.Add(1)), len(ranges))
 				}
 			}
 		}(e)

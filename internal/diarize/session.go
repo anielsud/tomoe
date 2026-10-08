@@ -339,7 +339,9 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	session.AbsorbSmallSpeakers(d.sess.Segments, d.minWords, d.isRenamedLabel)
 	id := d.sess.ID
 	d.lock.Unlock()
-	fmt.Printf("session %s: final speaker labels %.1fs after the meeting ended\n", id, time.Since(began).Seconds())
+	st := d.stream.Stats()
+	fmt.Printf("session %s: final speaker labels %.1fs after the meeting ended (diarizer was %.1fs behind then, at most %.1fs; %d reclusters took %.1fs, slowest %.2fs; %d windows, %d fingerprints; %d caught up in parallel in %.1fs)\n",
+		id, time.Since(began).Seconds(), st.BehindAtEnd, st.MaxBehind, st.Reclusters, st.ReclusterTotal, st.ReclusterMax, st.Windows, st.Fingerprints, st.CatchUpWindows, st.CatchUpSeconds)
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil // the labels are applied; the fingerprints are a bonus
@@ -355,7 +357,7 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	// What replaying the fingerprints needs besides them: where the
 	// stream's audio starts in session time, and the settings used.
 	info, _ := json.MarshalIndent(StreamInfo{
-		Offset: d.offset, Stride: d.stream.cfg.Stride, ReclusterSeconds: d.stream.cfg.ReclusterSeconds, Params: d.stream.cfg.Params, MinSpeakerSeconds: d.stream.cfg.MinSpeakerSeconds,
+		Offset: d.offset, Stride: d.stream.cfg.Stride, ReclusterSeconds: d.stream.cfg.ReclusterSeconds, Params: d.stream.cfg.Params, MinSpeakerSeconds: d.stream.cfg.MinSpeakerSeconds, Stats: &st,
 	}, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, "diarization.json"), info, 0o644)
 	return nil
@@ -370,6 +372,8 @@ type StreamInfo struct {
 	ReclusterSeconds  float64 `json:"recluster_seconds"`
 	Params            Params  `json:"params"`
 	MinSpeakerSeconds float64 `json:"min_speaker_seconds,omitempty"`
+	// Stats is how the diarizer kept up during the meeting.
+	Stats *StreamStats `json:"stats,omitempty"`
 }
 
 // Abort stops without using the result (the session never started).

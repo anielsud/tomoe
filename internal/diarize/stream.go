@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"runtime"
 	"sync"
+	"time"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
@@ -23,6 +24,10 @@ type StreamConfig struct {
 	// ReclusterSeconds is how much new audio triggers a recluster.
 	ReclusterSeconds float64
 	Params           Params
+	// NoCatchUp processes a backlog left at Finish one window at a time,
+	// as during the meeting, instead of in parallel: for timing what the
+	// Stream costs while a meeting runs (tomoe eval --stream-sequential).
+	NoCatchUp bool
 	// MinSpeakerSeconds, if > 0, folds clusters that speak for less than
 	// this in all into the most similar larger one, in the final
 	// timeline only (see Prepared.AbsorbSmallClusters): during the meeting
@@ -78,6 +83,59 @@ type Stream struct {
 	sinceRecl   int // windows since the last recluster
 	reclEvery   int
 	processedTo int // next window index
+	stats       StreamStats
+	sawFinish   bool
+
+	// Progress, for tools that report it (see Progress).
+	pmu                 sync.Mutex
+	phase               string
+	phaseDone, phaseAll int
+}
+
+// Progress reports what the Stream is doing and how far along: "windows"
+// (done of the windows fed so far), "catch-up segmenting" and "catch-up
+// fingerprints" after a meeting that ended with a backlog, then "final
+// recluster". Safe to call from any goroutine.
+func (s *Stream) Progress() (phase string, done, total int) {
+	s.pmu.Lock()
+	defer s.pmu.Unlock()
+	return s.phase, s.phaseDone, s.phaseAll
+}
+
+func (s *Stream) setProgress(phase string, done, total int) {
+	s.pmu.Lock()
+	s.phase, s.phaseDone, s.phaseAll = phase, done, total
+	s.pmu.Unlock()
+}
+
+// StreamStats is how well a Stream kept up, for logs and for saving with
+// the session. Seconds throughout; "behind" is audio fed but not yet
+// processed.
+type StreamStats struct {
+	// BehindAtEnd is how far behind it was when Finish was called, and
+	// MaxBehind the most it ever was.
+	BehindAtEnd float64 `json:"behind_at_end_seconds"`
+	MaxBehind   float64 `json:"max_behind_seconds"`
+	// Reclusters counts every clustering (the final one included), with
+	// the time they took in all and the slowest.
+	Reclusters     int     `json:"reclusters"`
+	ReclusterTotal float64 `json:"recluster_total_seconds"`
+	ReclusterMax   float64 `json:"recluster_max_seconds"`
+	// Windows and Fingerprints are how many analysis windows were
+	// segmented and how many fingerprints taken.
+	Windows      int `json:"windows"`
+	Fingerprints int `json:"fingerprints"`
+	// CatchUpWindows were processed in parallel after the meeting ended,
+	// taking CatchUpSeconds (see catchUp); 0 if it kept up.
+	CatchUpWindows int     `json:"catch_up_windows,omitempty"`
+	CatchUpSeconds float64 `json:"catch_up_seconds,omitempty"`
+}
+
+// Stats reports how the Stream kept up. Only valid after Finish.
+func (s *Stream) Stats() StreamStats {
+	st := s.stats
+	st.Windows, st.Fingerprints = s.processedTo, len(s.embs)
+	return st
 }
 
 // NewStream loads the models and starts the Stream's goroutine.
@@ -160,11 +218,35 @@ func (s *Stream) run() {
 			start := s.processedTo * m.WindowShift
 			ready := start+m.WindowSize <= s.fed
 			finished := s.finished
+			behind := float64(s.fed-start) / float64(m.SampleRate)
+			fedWindows := s.processedTo
+			if s.fed >= m.WindowSize {
+				fedWindows = max(fedWindows, (s.fed-m.WindowSize)/m.WindowShift+1)
+			}
+			s.stats.MaxBehind = max(s.stats.MaxBehind, behind)
+			var backlog []float32
+			if finished && !s.sawFinish {
+				// The meeting is over: nothing left to stay out of the
+				// way of, so catch up at normal priority, and on every
+				// core if there's much to do.
+				s.sawFinish, s.stats.BehindAtEnd = true, behind
+				raiseThreadPriority()
+				if !s.cfg.NoCatchUp && (s.fed-start-m.WindowSize)/m.WindowShift+1 >= catchUpWindows {
+					backlog = append([]float32(nil), s.buf[start-s.bufStart:]...)
+				}
+			}
 			var window []float32
 			if ready {
 				window = append([]float32(nil), s.buf[start-s.bufStart:start-s.bufStart+m.WindowSize]...)
 			}
 			s.mu.Unlock()
+			if backlog != nil {
+				if err := s.catchUp(backlog); err == nil {
+					s.final = s.recluster(true)
+					return
+				}
+				// Fall through and catch up one window at a time.
+			}
 			if !ready {
 				if finished {
 					s.finish()
@@ -173,17 +255,55 @@ func (s *Stream) run() {
 				break
 			}
 			s.processWindow(window)
+			s.setProgress("windows", s.processedTo, fedWindows)
 			s.mu.Lock()
 			if drop := s.processedTo*m.WindowShift - s.bufStart; drop > 0 {
 				s.buf = s.buf[drop:]
 				s.bufStart += drop
 			}
 			s.mu.Unlock()
-			if s.sinceRecl >= s.reclEvery*reclusterSpacing(len(s.embs)) {
+			// Once the meeting is over only the final recluster matters.
+			if !finished && s.sinceRecl >= s.reclEvery*reclusterSpacing(len(s.embs)) {
 				s.recluster(false)
 			}
 		}
 	}
+}
+
+// catchUpWindows is the backlog, in windows, past which a Stream that's
+// told to finish processes the rest in parallel (catchUp) rather than one
+// window at a time on its own thread.
+const catchUpWindows = 30
+
+// catchUp segments and fingerprints samples, the audio from the next
+// window to the end, on several cores at once (Prepare), as if each window
+// had been processed in turn. Found live: a 52-minute briefing with a
+// screen share left the one-thread Stream minutes behind, and its final
+// labels came 84 s after the meeting.
+func (s *Stream) catchUp(samples []float32) error {
+	began := time.Now()
+	workers := min(8, max(1, runtime.NumCPU()/2))
+	p, err := prepare(samples, s.cfg.SegmentationModel, s.cfg.EmbeddingModel, workers, 1, func(phase string, done, total int) {
+		s.setProgress("catch-up "+phase, done, total)
+	})
+	if err != nil {
+		fmt.Printf("diarize: parallel catch-up failed, continuing one window at a time: %v\n", err)
+		return err
+	}
+	first := s.processedTo
+	s.labels = append(s.labels, p.Labels...)
+	for i, pair := range p.Pairs {
+		c := first + pair.Chunk
+		if c%s.cfg.Stride != 0 {
+			continue
+		}
+		s.pairs = append(s.pairs, ChunkSpeaker{c, pair.Speaker})
+		s.embs = append(s.embs, p.Embeddings[i])
+	}
+	s.processedTo += len(p.Labels)
+	s.stats.CatchUpWindows = len(p.Labels)
+	s.stats.CatchUpSeconds = time.Since(began).Seconds()
+	return nil
 }
 
 // processWindow segments the next window and embeds its speakers.
@@ -277,7 +397,18 @@ func thin(pairs []ChunkSpeaker, embs [][]float32, limit int) ([]ChunkSpeaker, []
 
 // recluster clusters everything so far and reports the timeline.
 func (s *Stream) recluster(final bool) Timeline {
+	began := time.Now()
+	defer func() {
+		d := time.Since(began).Seconds()
+		s.stats.Reclusters++
+		s.stats.ReclusterTotal += d
+		s.stats.ReclusterMax = max(s.stats.ReclusterMax, d)
+	}()
 	s.sinceRecl = 0
+	if final {
+		s.setProgress("final recluster", 0, 1)
+		defer s.setProgress("done", 1, 1)
+	}
 	m := s.meta
 	n := len(s.labels)
 	numSamples := 0
