@@ -73,9 +73,6 @@ type Look struct {
 	// was in the frame.
 	Content     []byte       `json:"-"`
 	ContentRect *axtree.Rect `json:"content_rect,omitempty"`
-	// Chat is the meeting chat's messages first seen in this look (saved
-	// to chat.jsonl, not with the look).
-	Chat []ChatMessage `json:"-"`
 }
 
 // LookCost is a look's processing time in milliseconds: capturing the
@@ -153,9 +150,6 @@ func (l *LookLog) Write(look Look) error {
 			return err
 		}
 	}
-	if err := appendJSONLines(filepath.Join(l.dir, "chat.jsonl"), look.Chat); err != nil {
-		return err
-	}
 	line, err := json.Marshal(look)
 	if err != nil {
 		return err
@@ -166,28 +160,6 @@ func (l *LookLog) Write(look Look) error {
 	}
 	defer f.Close()
 	_, err = f.Write(append(line, '\n'))
-	return err
-}
-
-// appendJSONLines appends one JSON line per item to path.
-func appendJSONLines[T any](path string, items []T) error {
-	if len(items) == 0 {
-		return nil
-	}
-	var buf bytes.Buffer
-	for _, it := range items {
-		line, err := json.Marshal(it)
-		if err != nil {
-			return err
-		}
-		buf.Write(append(line, '\n'))
-	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	_, err = f.Write(buf.Bytes())
 	return err
 }
 
