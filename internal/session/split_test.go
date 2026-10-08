@@ -104,3 +104,17 @@ func TestSplitByDiarization_NoWordsOrNotDiarizableKeepsOneLine(t *testing.T) {
 		t.Errorf("split = %q (count %d), want %q", got, n, want)
 	}
 }
+
+func TestSpreadWords(t *testing.T) {
+	ws := SpreadWords("a bb ccc", 10, 19)
+	if len(ws) != 3 || ws[0].Start != 10 || ws[2].End != 19 {
+		t.Fatalf("SpreadWords = %+v", ws)
+	}
+	// Longer words get more time: "ccc" (3+1) twice "a" (1+1).
+	if d0, d2 := ws[0].End-ws[0].Start, ws[2].End-ws[2].Start; d2 < 1.9*d0 || d2 > 2.1*d0 {
+		t.Errorf("durations %v and %v, want the second about twice the first", d0, d2)
+	}
+	if SpreadWords("  ", 0, 1) != nil {
+		t.Error("blank text should give nil")
+	}
+}

@@ -35,5 +35,6 @@ func StreamConfigFor(m config.MeetingConfig, status *models.Status, lang string)
 		Stride:            stride,
 		ReclusterSeconds:  recluster,
 		Params:            params,
+		MinSpeakerSeconds: m.MinSpeakerSeconds,
 	}, nil
 }

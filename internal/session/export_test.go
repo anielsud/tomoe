@@ -153,3 +153,28 @@ func TestFormatDuration(t *testing.T) {
 		}
 	}
 }
+
+func TestParagraphs(t *testing.T) {
+	segs := []Segment{
+		{Speaker: "Person 1 (Ana)", Text: "So the plan", StartTime: 0, EndTime: 2},
+		{Speaker: "Person 1 (Ana)", Text: "is to ship it.", StartTime: 2.6, EndTime: 4},
+		{Speaker: "You", Text: "Okay.", StartTime: 4.2, EndTime: 4.6},
+		{Speaker: "Person 1 (Ana)", Text: "On Friday.", StartTime: 5, EndTime: 6},
+		{Speaker: "Person 1 (Ana)", Text: "  ", StartTime: 6.5, EndTime: 7},
+	}
+	ps := Paragraphs(segs)
+	if len(ps) != 3 || ps[0].Text != "So the plan is to ship it." || ps[0].EndTime != 4 || ps[2].Text != "On Friday." {
+		t.Errorf("Paragraphs = %+v", ps)
+	}
+}
+
+func TestUpsertSegmentRemoved(t *testing.T) {
+	s := &Session{}
+	s.UpsertSegment(Segment{ID: "a", Text: "yeah", Status: "live"})
+	s.UpsertSegment(Segment{ID: "b", Text: "hello"})
+	s.UpsertSegment(Segment{ID: "a", Status: StatusRemoved})
+	s.UpsertSegment(Segment{ID: "c", Status: StatusRemoved})
+	if len(s.Segments) != 1 || s.Segments[0].ID != "b" {
+		t.Errorf("segments = %+v, want only b", s.Segments)
+	}
+}

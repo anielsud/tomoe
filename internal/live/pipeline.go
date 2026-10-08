@@ -3,6 +3,8 @@ package live
 import (
 	"context"
 	"fmt"
+	"math"
+	"sort"
 	"strings"
 	"time"
 
@@ -51,6 +53,10 @@ type refinementJob struct {
 
 	unannounced bool
 	embedding   []float32 // unannounced only; see speakerEmbedding
+
+	// absorb are pending lines a TurnMode turn merged into this one,
+	// withdrawn once its text is final.
+	absorb []string
 }
 
 // liveState tracks pass 1's in-progress utterance for one pipeline: the
@@ -84,6 +90,10 @@ type sourceState struct {
 	// (seconds) it's been quiet before that (see Config.OnMonitorSpeechStart).
 	speaking  bool
 	silentFor float64
+	// lastSpeechAt is when (session seconds) the VAD last heard speech:
+	// TurnMode's line is only sent for a long pause once nobody on this
+	// source has spoken for that long.
+	lastSpeechAt float64
 }
 
 // newSourceState creates the VAD and (if configured) pass-1 streaming
@@ -170,6 +180,9 @@ func (c *Coordinator) finishSource(st *sourceState) {
 	st.vad.Flush()
 	c.drainVAD(st.vad, st.source, st.streamSess, &st.live)
 	c.finishLive(st.source, &st.live)
+	if c.cfg.TurnMode {
+		c.flushTurn(st.source)
+	}
 }
 
 // processWindow feeds one audio window through VAD (and pass 1, if
@@ -217,6 +230,10 @@ func (c *Coordinator) processWindow(st *sourceState, window []float32) {
 			st.speaking = isSpeech
 		}
 
+		if isSpeech {
+			st.lastSpeechAt = c.elapsed()
+		}
+
 		// Signal activity when VAD detects ongoing speech
 		if isSpeech {
 			select {
@@ -228,6 +245,9 @@ func (c *Coordinator) processWindow(st *sourceState, window []float32) {
 
 	// Process any completed speech segments
 	c.drainVAD(st.vad, st.source, st.streamSess, &st.live)
+	if c.cfg.TurnMode {
+		c.flushStaleTurn(st.source, st.lastSpeechAt)
+	}
 }
 
 // emitLivePartial publishes pass 1's growing text for the utterance in
@@ -296,11 +316,74 @@ func (c *Coordinator) drainVAD(vad *sherpa.VoiceActivityDetector, source SourceT
 			continue
 		}
 
+		if c.dropNoise(source, segment.Samples, streamSess, live) {
+			continue
+		}
 		// Apply DSP pipeline
 		samples := audio.ProcessPipeline(segment.Samples, vadSampleRate, -40)
 		c.handleSegment(source, samples, streamSess, live)
 	}
 }
+
+// dropNoise reports whether a completed VAD segment's raw audio (before the
+// DSP pipeline, which normalizes every segment to full scale) is quieter
+// than Config.MinSpeechLevelDB, and if so drops it, withdrawing the live
+// line if one is showing. Room noise the detector mistook for speech is
+// otherwise normalized up and transcribed as invented words.
+func (c *Coordinator) dropNoise(source SourceType, raw []float32, streamSess transcribe.StreamingSession, live *liveState) bool {
+	level := levelDB(raw)
+	if !c.tooQuiet(source, level) {
+		return false
+	}
+	if live.id != "" {
+		select {
+		case c.segmentUpdateCh <- session.Segment{ID: live.id, Source: string(source), Status: session.StatusRemoved}:
+		default:
+		}
+	}
+	if streamSess != nil {
+		streamSess.Reset()
+	}
+	live.reset()
+	return true
+}
+
+// tooQuiet reports whether an utterance at level (dBFS) is below the
+// fixed floor (Config.MinSpeechLevelDB) or, on the mic, more than
+// Config.MicLevelMarginDB below the user's own typical level: the
+// microphone is the user's, so faint speech on it is someone or
+// something further away (found live: background sounds 25–35 dB below
+// the user's voice transcribed as "Wow." and "I'm gonna go to bed" and
+// labeled You). Utterances that pass count toward the typical level.
+func (c *Coordinator) tooQuiet(source SourceType, level float64) bool {
+	if c.cfg.MinSpeechLevelDB < 0 && level < c.cfg.MinSpeechLevelDB {
+		return true
+	}
+	if source != SourceMic || c.cfg.MicLevelMarginDB <= 0 {
+		return false
+	}
+	c.levelMu.Lock()
+	defer c.levelMu.Unlock()
+	if n := len(c.micLevels); n >= micLevelsBeforeGate {
+		sorted := append([]float64(nil), c.micLevels...)
+		sort.Float64s(sorted)
+		if level < sorted[n/2]-c.cfg.MicLevelMarginDB {
+			return true
+		}
+	}
+	c.micLevels = append(c.micLevels, level)
+	if len(c.micLevels) > micLevelsKept {
+		c.micLevels = c.micLevels[1:]
+	}
+	return false
+}
+
+// The mic's typical level is the median of its last micLevelsKept
+// utterances, once there are micLevelsBeforeGate of them.
+const (
+	micLevelsBeforeGate = 8
+	micLevelsKept       = 100
+)
 
 // handleSegment transcribes one completed VAD segment (already DSP
 // processed). Split out of drainVAD so it can be tested without a VAD
@@ -311,6 +394,10 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 	startTime := endTime - duration
 
 	if streamSess == nil {
+		if c.cfg.TurnMode {
+			c.addToTurn(source, samples, startTime, endTime)
+			return
+		}
 		c.transcribeSinglePass(source, samples, startTime, endTime)
 		return
 	}
@@ -321,7 +408,11 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 	if text == "" && live.id == "" {
 		// Pass 1 never produced text for this utterance. Pass 2 still gets
 		// a chance at it, the same as single-pass would have.
-		c.queueUnannounced(source, samples, startTime, endTime)
+		if c.cfg.TurnMode {
+			c.addTurnPart(source, turnPart{samples: samples, start: startTime, end: endTime, twoPass: true})
+		} else {
+			c.queueUnannounced(source, samples, startTime, endTime)
+		}
 		live.reset()
 		return
 	}
@@ -365,6 +456,13 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 		}
 	}
 	c.countSegment(source)
+
+	if c.cfg.TurnMode {
+		// The pending line stays until its turn is decoded as a whole.
+		c.addTurnPart(source, turnPart{samples: samples, start: startTime, end: endTime, twoPass: true,
+			id: id, pass1: text, speaker: spk, decision: decision})
+		return
+	}
 
 	select {
 	case c.refineCh <- refinementJob{
@@ -436,7 +534,7 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 		Source:    string(source),
 		Language:  result.Language,
 		Decision:  string(decision),
-		Words:     session.WordsFromTokens(result.Tokens, result.Timestamps, startTime, endTime),
+		Words:     wordsFor(result, startTime, endTime),
 	}
 	select {
 	case c.segmentCh <- seg:
@@ -460,6 +558,13 @@ func (c *Coordinator) finishLive(source SourceType, live *liveState) {
 		text = live.shown
 	}
 	spk, decision := c.assignSpeaker(source, live.audio, live.startTime)
+	if c.cfg.TurnMode {
+		c.addTurnPart(source, turnPart{samples: live.audio, start: live.startTime, end: c.elapsed(), twoPass: true,
+			id: live.id, pass1: text, speaker: spk, decision: decision})
+		c.countSegment(source)
+		live.reset()
+		return
+	}
 	c.refineCh <- refinementJob{
 		id: live.id, samples: live.audio, speaker: spk, decision: decision,
 		startTime: live.startTime, endTime: c.elapsed(), source: source,
@@ -498,7 +603,7 @@ func (c *Coordinator) refineWorker() {
 			c.segmentCh <- seg
 			c.countSegment(job.source)
 		} else {
-			c.segmentUpdateCh <- seg
+			c.emitTurnLines(seg, job.absorb, true)
 		}
 	}
 }
@@ -523,7 +628,7 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 		if result.Language != "" {
 			lang = result.Language
 		}
-		words = session.WordsFromTokens(result.Tokens, result.Timestamps, job.startTime, job.endTime)
+		words = wordsFor(result, job.startTime, job.endTime)
 	}
 	if text == "" {
 		return session.Segment{}, false
@@ -703,4 +808,258 @@ func hasSignal(window []float32) bool {
 		}
 	}
 	return false
+}
+
+// levelDB is samples' RMS level in dBFS (-200 for silence).
+func levelDB(samples []float32) float64 {
+	if len(samples) == 0 {
+		return -200
+	}
+	var sum float64
+	for _, v := range samples {
+		sum += float64(v) * float64(v)
+	}
+	rms := math.Sqrt(sum / float64(len(samples)))
+	if rms == 0 {
+		return -200
+	}
+	return 20 * math.Log10(rms)
+}
+
+// turnBuf is TurnMode's line being collected for one source.
+type turnBuf struct {
+	samples    []float32
+	start, end float64
+	// Two-pass only: the pending lines shown for its utterances (the
+	// first becomes the turn's line, the rest are withdrawn), their pass-1
+	// text, and the first line's speaker label.
+	twoPass  bool
+	ids      []string
+	pass1    []string
+	speaker  string
+	decision speaker.AssignDecision
+}
+
+// turnPart is one utterance added to a turn.
+type turnPart struct {
+	samples    []float32
+	start, end float64
+	twoPass    bool
+	id, pass1  string // two-pass: its pending line, if one was shown
+	speaker    string
+	decision   speaker.AssignDecision
+}
+
+// turnGapPad is the silence put between collected utterances, so the
+// model hears a pause where there was one.
+const turnGapPad = 0.2
+
+func otherSource(s SourceType) SourceType {
+	if s == SourceMic {
+		return SourceMonitor
+	}
+	return SourceMic
+}
+
+// addToTurn adds a single-pass utterance to its source's turn.
+func (c *Coordinator) addToTurn(source SourceType, samples []float32, start, end float64) {
+	c.addTurnPart(source, turnPart{samples: samples, start: start, end: end})
+}
+
+// addTurnPart adds an utterance to its source's line, first sending the
+// line (and the other source's) on when a turn ended: the other side
+// spoke, a speaker-change signal fell between them, the pause was longer
+// than TurnMaxGap, or the line would pass TurnMaxSeconds.
+func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
+	c.turnMu.Lock()
+	if c.turns == nil {
+		c.turns = map[SourceType]*turnBuf{}
+	}
+	if c.turnCuts == nil {
+		c.turnCuts = map[string]int{}
+	}
+	type sendable struct {
+		source SourceType
+		buf    *turnBuf
+	}
+	var ready []sendable
+	take := func(s SourceType) {
+		if t := c.turns[s]; t != nil && len(t.samples) > 0 {
+			ready = append(ready, sendable{s, t})
+			c.turns[s] = nil
+		}
+	}
+	if o := c.turns[otherSource(source)]; o != nil && len(o.samples) > 0 {
+		take(otherSource(source))
+		c.turnCuts["other side spoke"]++
+	}
+	if t := c.turns[source]; t != nil && len(t.samples) > 0 {
+		maxSecs, maxGap := c.turnLimits()
+		changed := c.cfg.SpeakerChanged != nil && source == SourceMonitor && c.cfg.SpeakerChanged(t.end-0.25, u.start+1)
+		cut := true
+		switch {
+		case changed:
+			c.turnCuts["speaker-change signal"]++
+		case u.start-t.end > maxGap:
+			c.turnCuts["pause"]++
+		case (t.end-t.start)+(u.end-u.start) > maxSecs:
+			c.turnCuts["length cap"]++
+		default:
+			c.turnCuts["joined"]++
+			cut = false
+		}
+		if cut {
+			take(source)
+		}
+	}
+	t := c.turns[source]
+	if t == nil {
+		t = &turnBuf{start: u.start, twoPass: u.twoPass, speaker: u.speaker, decision: u.decision}
+		c.turns[source] = t
+	} else {
+		t.samples = append(t.samples, make([]float32, int(turnGapPad*vadSampleRate))...)
+		if t.speaker == "" {
+			t.speaker, t.decision = u.speaker, u.decision
+		}
+	}
+	t.samples = append(t.samples, u.samples...)
+	t.end = u.end
+	if u.id != "" {
+		t.ids = append(t.ids, u.id)
+	}
+	if u.pass1 != "" {
+		t.pass1 = append(t.pass1, u.pass1)
+	}
+	c.turnMu.Unlock()
+	for _, r := range ready {
+		c.sendTurn(r.source, r.buf)
+	}
+}
+
+func (c *Coordinator) turnLimits() (maxSecs, maxGap float64) {
+	maxSecs, maxGap = c.cfg.TurnMaxSeconds, c.cfg.TurnMaxGap
+	if maxSecs <= 0 {
+		maxSecs = 30
+	}
+	if maxGap <= 0 {
+		maxGap = 2
+	}
+	return maxSecs, maxGap
+}
+
+// sendTurn transcribes a finished turn: at once in single-pass mode; in
+// two-pass mode as one refinement job that becomes the turn's first
+// pending line and withdraws the others (see refineWorker).
+func (c *Coordinator) sendTurn(source SourceType, t *turnBuf) {
+	if !t.twoPass {
+		c.transcribeSinglePass(source, t.samples, t.start, t.end)
+		return
+	}
+	job := refinementJob{
+		samples: t.samples, speaker: t.speaker, decision: t.decision,
+		startTime: t.start, endTime: t.end, source: source,
+		pass1Text: strings.Join(t.pass1, " "),
+	}
+	if len(t.ids) == 0 {
+		// Pass 1 showed nothing for this turn: pass 2 introduces it.
+		job.id, job.unannounced = c.nextSegID(), true
+		job.embedding = c.speakerEmbedding(source, t.samples)
+		select {
+		case c.refineCh <- job:
+		default:
+			if seg, ok := c.refine(job); ok {
+				c.segmentCh <- seg
+				c.countSegment(source)
+			}
+		}
+		return
+	}
+	job.id, job.absorb = t.ids[0], t.ids[1:]
+	select {
+	case c.refineCh <- job:
+	default:
+		// Refinement queue backed up: the joined pass-1 text stands.
+		c.emitTurnLines(session.Segment{
+			ID: job.id, Speaker: t.speaker, Text: job.pass1Text, StartTime: t.start, EndTime: t.end,
+			Source: string(source), Language: "en", Decision: string(t.decision),
+		}, job.absorb, false)
+	}
+}
+
+// emitTurnLines sends a turn's final line (as an update of its first
+// pending line) and withdraws the pending lines it absorbed. block waits
+// for room on the channel (the refinement worker); the live pipeline
+// doesn't.
+func (c *Coordinator) emitTurnLines(seg session.Segment, absorb []string, block bool) {
+	send := func(s session.Segment) {
+		if block {
+			c.segmentUpdateCh <- s
+			return
+		}
+		select {
+		case c.segmentUpdateCh <- s:
+		default:
+		}
+	}
+	send(seg)
+	for _, id := range absorb {
+		send(session.Segment{ID: id, Source: seg.Source, Status: session.StatusRemoved})
+	}
+}
+
+// flushStaleTurn sends source's line once the source has been quiet
+// (no speech since lastSpeech) for longer than the gap that ends a turn,
+// so a finished turn isn't held back until the next utterance. Measured
+// from the last speech, not the line's end: an utterance still being
+// spoken belongs to the turn.
+func (c *Coordinator) flushStaleTurn(source SourceType, lastSpeech float64) {
+	_, maxGap := c.turnLimits()
+	c.turnMu.Lock()
+	t := c.turns[source]
+	if t == nil || len(t.samples) == 0 || c.elapsed()-max(t.end, lastSpeech) <= maxGap {
+		c.turnMu.Unlock()
+		return
+	}
+	c.turns[source] = nil
+	if c.turnCuts == nil {
+		c.turnCuts = map[string]int{}
+	}
+	c.turnCuts["quiet (stale)"]++
+	c.turnMu.Unlock()
+	c.sendTurn(source, t)
+}
+
+// flushTurn sends whatever line source has open (at the end of a session).
+func (c *Coordinator) flushTurn(source SourceType) {
+	c.turnMu.Lock()
+	t := c.turns[source]
+	if c.turns != nil {
+		c.turns[source] = nil
+	}
+	c.turnMu.Unlock()
+	if t != nil && len(t.samples) > 0 {
+		c.sendTurn(source, t)
+	}
+}
+
+// TurnCuts reports how often TurnMode cut a line for each reason, and how
+// often an utterance joined the open line ("joined").
+func (c *Coordinator) TurnCuts() map[string]int {
+	c.turnMu.Lock()
+	defer c.turnMu.Unlock()
+	out := map[string]int{}
+	for k, v := range c.turnCuts {
+		out[k] = v
+	}
+	return out
+}
+
+// wordsFor is a result's word timings: from its token timestamps, or
+// estimated (session.SpreadWords) for a model that returns none, so the
+// line can still be split at a speaker change.
+func wordsFor(result *transcribe.Result, start, end float64) []session.Word {
+	if w := session.WordsFromTokens(result.Tokens, result.Timestamps, start, end); w != nil {
+		return w
+	}
+	return session.SpreadWords(strings.TrimSpace(result.Text), start, end)
 }

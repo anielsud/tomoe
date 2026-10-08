@@ -67,6 +67,30 @@ type Config struct {
 	// a speaker label is based on. 0 means the defaults, 0.5 and 30.
 	MinSilenceDuration float64
 	MaxSpeechDuration  float64
+	// MinSpeechLevelDB drops an utterance whose audio is quieter than this
+	// (RMS, dBFS) before it's transcribed: the speech detector triggers
+	// on room noise near the noise floor and the model then invents words
+	// for it ("Yeah.", "Goodbye"). 0 keeps every utterance.
+	MinSpeechLevelDB float64
+	// MicLevelMarginDB drops mic utterances more than this many dB below
+	// the mic's typical (median) level: the user's own voice is loud on
+	// their microphone; faint speech is background. 0 turns it off.
+	MicLevelMarginDB float64
+
+	// TurnMode (experimental, single-pass only) decodes a speaker's turn
+	// once instead of each utterance: consecutive utterances from one
+	// source collect into one line until the other source speaks, a pause
+	// longer than TurnMaxGap, the line would pass TurnMaxSeconds, or (call
+	// audio) SpeakerChanged reports a change between them. Longer lines
+	// give the model more context; cutting at speaker changes keeps one
+	// speaker per line.
+	TurnMode       bool
+	TurnMaxSeconds float64
+	TurnMaxGap     float64
+	// SpeakerChanged reports whether a speaker-change signal (a new voice
+	// starting, the meeting window's highlight moving) fell between from
+	// and to (session seconds). Nil: no signal beyond the rules above.
+	SpeakerChanged func(from, to float64) bool
 
 	// ProbePrefixes, for measurement only, also labels each utterance
 	// from just its first N seconds for every N listed that's shorter
@@ -134,6 +158,11 @@ type Stats struct {
 
 // Coordinator manages one or two live transcription pipelines (mic + monitor).
 type Coordinator struct {
+	levelMu    sync.Mutex
+	micLevels  []float64 // recent mic utterance levels (see tooQuiet)
+	turnMu     sync.Mutex
+	turns      map[SourceType]*turnBuf // TurnMode's open line per source
+	turnCuts   map[string]int          // why TurnMode sent each line (see TurnCuts)
 	cfg        Config
 	segmentCh  chan session.Segment
 	activityCh chan struct{} // signalled when VAD detects ongoing speech
