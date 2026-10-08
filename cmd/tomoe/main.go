@@ -108,6 +108,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 		MaxActivePaths: cfg.Transcription.MaxActivePaths,
 		HotwordsFile:   cfg.Transcription.HotwordsFile,
 		HotwordsScore:  cfg.Transcription.HotwordsScore,
+		Model:          cfg.Transcription.Model,
 	}, status, &cfg.Multilingual)
 	if err != nil {
 		return fmt.Errorf("creating transcription engine: %w", err)
@@ -383,6 +384,9 @@ var modelDownloadCmd = &cobra.Command{
 		if err := mgr.DownloadSpeakerModels(speakerCfg.Meeting.SpeakerModel, speakerCfg.MeetingLanguages(), force, cliDownloadProgress()); err != nil {
 			return err
 		}
+		if err := mgr.DownloadASRModels(speakerCfg.Transcription.Model, speakerCfg.MeetingLanguages(), force, cliDownloadProgress()); err != nil {
+			return err
+		}
 		if speakerCfg.Meeting.VideoHintsOn() {
 			if err := mgr.DownloadOCRModels(force, cliDownloadProgress()); err != nil {
 				return err
@@ -471,6 +475,7 @@ var transcribeCmd = &cobra.Command{
 			MaxActivePaths: cfg.Transcription.MaxActivePaths,
 			HotwordsFile:   cfg.Transcription.HotwordsFile,
 			HotwordsScore:  cfg.Transcription.HotwordsScore,
+			Model:          cfg.Transcription.Model,
 		}, status, &cfg.Multilingual)
 		if err != nil {
 			return fmt.Errorf("creating transcription engine: %w", err)

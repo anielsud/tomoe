@@ -46,6 +46,12 @@ type TranscriptionConfig struct {
 	// it's spoken, refined by Parakeet once each utterance ends. false
 	// keeps single-pass (Parakeet only, text appears per utterance).
 	TwoPass bool `toml:"two_pass"`
+	// Model is the transcription model: "auto" (the default) uses Cohere
+	// Transcribe for English, the most accurate there of the models
+	// compared, and the multilingual Parakeet v3 for other languages;
+	// "parakeet-v2-en" or "parakeet-v3" pick those instead, and
+	// "parakeet-v3" restores the previous behavior (models.ASRModels).
+	Model string `toml:"model"`
 }
 
 // OutputConfig holds output behavior settings.
@@ -115,6 +121,18 @@ type MeetingConfig struct {
 	// (`tomoe eval` scores both).
 	SplitOnSpeakerChange bool `toml:"split_on_speaker_change"`
 
+	// MinSpeakerWords gives the lines of any diarized speaker who says
+	// fewer words than this in the whole meeting to a neighbouring
+	// speaker when diarizing during the meeting: such "speakers" are
+	// diarization flickers, each shown as its own "Person N" line (see
+	// session.AbsorbSmallSpeakers). 0 keeps every speaker, as before.
+	MinSpeakerWords int `toml:"min_speaker_words"`
+	// MinSpeakerSeconds does the same by voice, first: a diarized speaker
+	// heard for less than this in the whole meeting joins the speaker
+	// whose voice is most like theirs (diarize.Prepared.AbsorbSmallClusters).
+	// Final labels only, when diarizing during the meeting. 0 turns it off.
+	MinSpeakerSeconds float64 `toml:"min_speaker_seconds"`
+
 	// SpeakerModel is the speaker embedding model used to tell voices
 	// apart, live and after the meeting: a models.SpeakerModels ID, or
 	// "auto" for the English-trained model in English meetings and the
@@ -138,7 +156,11 @@ type MeetingConfig struct {
 	// VideoHintLearnInterval is the time between looks at the meeting
 	// window while a speaker still needs naming or right after a speaker
 	// change, and VideoHintCheckInterval the time between looks that only
-	// confirm known names (seconds; see videohint.Watcher).
+	// confirm known names (seconds; see videohint.Watcher). Both default
+	// to 1 s: on five tuned meetings, looking every 1 s named the saved
+	// transcript within 0.1 points of every 0.35 s for about a third of the
+	// CPU (docs/speaker-attribution-research.md). 0.35 restores the old
+	// learning rate, which RecordForTuning still uses.
 	// VideoHintWindow is which window video hints watch: "" finds the
 	// Teams meeting window, "none" turns them off, anything else is an
 	// app's name (its largest window). An app without a rule is still
@@ -150,14 +172,13 @@ type MeetingConfig struct {
 
 	// RecordForTuning records meetings at full detail for working out
 	// the best settings offline (`tomoe eval --session`): video hints
-	// look at the learning rate throughout and keep every distinct full
-	// frame (about 250 MB an hour), and diarization fingerprints every
-	// window. Off by default; costs more CPU and disk while on.
+	// look every tuningLookInterval (or the learning rate, if faster)
+	// throughout, so sparser rates can be simulated, keep every distinct
+	// full frame (about 250 MB an hour), and diarization fingerprints
+	// every window. Off by default; costs more CPU and disk while on.
 	RecordForTuning bool `toml:"record_for_tuning"`
 }
 
-// VideoHintTiming is VideoHintLearnInterval and VideoHintCheckInterval
-// as durations, with defaults for unset values.
 // VideoHintsOn reports whether video hints run: on macOS (the only platform
 // that captures the meeting window) unless switched off. Its text-reading
 // models are only fetched then.
@@ -165,6 +186,14 @@ func (m MeetingConfig) VideoHintsOn() bool {
 	return runtime.GOOS == "darwin" && m.VideoHintWindow != "none"
 }
 
+// tuningLookInterval is the look rate (seconds) RecordForTuning records
+// at: replays can thin a dense recording to any sparser rate, not the
+// reverse.
+const tuningLookInterval = 0.35
+
+// VideoHintTiming is VideoHintLearnInterval and VideoHintCheckInterval
+// as durations, with defaults for unset values; while RecordForTuning,
+// learning is at most tuningLookInterval.
 func (m MeetingConfig) VideoHintTiming() (learn, check time.Duration) {
 	def := DefaultConfig().Meeting
 	l, c := m.VideoHintLearnInterval, m.VideoHintCheckInterval
@@ -173,6 +202,9 @@ func (m MeetingConfig) VideoHintTiming() (learn, check time.Duration) {
 	}
 	if c <= 0 {
 		c = def.VideoHintCheckInterval
+	}
+	if m.RecordForTuning && l > tuningLookInterval {
+		l = tuningLookInterval
 	}
 	return time.Duration(l * float64(time.Second)), time.Duration(c * float64(time.Second))
 }
@@ -196,6 +228,7 @@ func DefaultConfig() *Config {
 			// Off, as on main: two-pass is opt-in until it has been
 			// tuned on real recordings (see `tomoe session replay`).
 			TwoPass: false,
+			Model:   "auto",
 		},
 		Output: OutputConfig{
 			AutoPaste:      true,
@@ -223,6 +256,8 @@ func DefaultConfig() *Config {
 			DiarizeDuringMeeting: true,
 			DiarizeStride:        2,
 			DiarizeRecluster:     10,
+			MinSpeakerWords:      20,
+			MinSpeakerSeconds:    2,
 
 			// The sticky-speaker and short-segment rules are off (margin
 			// and duration 0), matching main's clustering, until they're
@@ -234,7 +269,7 @@ func DefaultConfig() *Config {
 			MinAssignDuration:       0,
 			ShortSegmentGraceWindow: 15.0,
 
-			VideoHintLearnInterval: 0.35,
+			VideoHintLearnInterval: 1.0,
 			VideoHintCheckInterval: 1.0,
 		},
 	}

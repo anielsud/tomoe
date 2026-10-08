@@ -9,6 +9,10 @@ package diarize
 static int lowerQoS(void) {
 	return pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
 }
+
+static int raiseQoS(void) {
+	return pthread_set_qos_class_self_np(QOS_CLASS_USER_INITIATED, 0);
+}
 */
 import "C"
 
@@ -18,4 +22,12 @@ import "C"
 // its goroutine to the thread.
 func lowerThreadPriority() {
 	_ = C.lowerQoS()
+}
+
+// raiseThreadPriority undoes lowerThreadPriority once nothing interactive
+// is left to make room for (the meeting has ended and the user is waiting
+// for its final labels): user-initiated work, eligible for performance
+// cores.
+func raiseThreadPriority() {
+	_ = C.raiseQoS()
 }

@@ -534,7 +534,7 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 		Source:    string(source),
 		Language:  result.Language,
 		Decision:  string(decision),
-		Words:     session.WordsFromTokens(result.Tokens, result.Timestamps, startTime, endTime),
+		Words:     wordsFor(result, startTime, endTime),
 	}
 	select {
 	case c.segmentCh <- seg:
@@ -628,7 +628,7 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 		if result.Language != "" {
 			lang = result.Language
 		}
-		words = session.WordsFromTokens(result.Tokens, result.Timestamps, job.startTime, job.endTime)
+		words = wordsFor(result, job.startTime, job.endTime)
 	}
 	if text == "" {
 		return session.Segment{}, false
@@ -1052,4 +1052,14 @@ func (c *Coordinator) TurnCuts() map[string]int {
 		out[k] = v
 	}
 	return out
+}
+
+// wordsFor is a result's word timings: from its token timestamps, or
+// estimated (session.SpreadWords) for a model that returns none, so the
+// line can still be split at a speaker change.
+func wordsFor(result *transcribe.Result, start, end float64) []session.Word {
+	if w := session.WordsFromTokens(result.Tokens, result.Timestamps, start, end); w != nil {
+		return w
+	}
+	return session.SpreadWords(strings.TrimSpace(result.Text), start, end)
 }

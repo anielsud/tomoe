@@ -412,6 +412,44 @@ reconstruction take about 5 s. Our diarizer embeds every 10 s window per
 local speaker (4841 embeddings for the hour), so it does more of that work
 than sherpa. Fewer or shorter embeddings are the lever if it's to ship.
 
+### Diarizing during the meeting: keeping up, and catching up
+
+A 52-minute briefing with a screen share (2026-10-06) got its final
+labels 84 s after it ended, where nine other meetings that week took
+0.4–5.4 s. The Stream does all its work on one low-priority thread and
+falls behind when the machine is busy; Finish then waits for it to work
+through the backlog one window at a time. Measured on that briefing's
+audio on an idle Apple Silicon desktop (`tomoe eval --diarization-timing
+stream`, which now prints real progress):
+
+| | Time | Share of meeting time |
+|---|---|---|
+| One thread, every window (stride 1, as Record for tuning forces) | 1198 s | 38% |
+| One thread, every 2nd window (stride 2, the default), reclusters excluded | 635 s | 20% |
+| Parallel catch-up of the whole meeting (new) | 199 s | 6% |
+
+- **Fingerprints are the cost.** Segmenting all 3,112 windows in parallel
+  took under 20 s; the rest is speaker fingerprints (about 30 a second in
+  parallel). Reclusters were 88 s of the 1198 s (slowest 0.84 s).
+- At 38% of a core when idle, stride 1 has little headroom once a call,
+  a screen share and the live transcript compete for the efficiency
+  cores; the briefing's 84 s wait means it ended roughly four minutes of
+  audio behind. Stride 2 halves that load.
+- **Catch-up (shipped):** once the meeting has ended the Stream raises its
+  thread back to normal priority (macOS; Linux can't without privileges),
+  skips the intermediate reclusters nobody will see, and, with 30 or more
+  windows left, segments and fingerprints the rest in parallel
+  (`Stream.catchUp`, via `Prepare`). The parallel run produced exactly
+  the same fingerprints (3,567) and speakers (10) as one window at a time,
+  about 6x faster, so an 84 s wait becomes roughly 14 s.
+- The log line at the end of each meeting, and `diarization.json`'s
+  `stats`, now say how far behind the diarizer was at the end and at most,
+  what reclusters cost and what was caught up, so real meetings show
+  where it falls behind.
+- Not done: thinning fingerprints (stride 2 or more) automatically while
+  the Stream is far behind, so it never builds a backlog; it costs about
+  0.3 points per stride step, only while behind.
+
 ## Video hints, tuned on a real meeting (2026-10-02)
 
 `tomoe tune` on a session recorded with Record for tuning (82 minutes, 5
@@ -484,6 +522,142 @@ about 77% is the most "right" can reach.
   words of about 18,000) barely spoke, so their accuracy is noisy; the
   first 10:33 of the recording has no reference and isn't scored; Teams'
   transcript is itself automatic.
+
+## Ten more meetings (2026-10-05/06)
+
+Ten Teams meetings recorded with Record for tuning on the app's defaults
+(diarizing during the meeting, English model, threshold 0.6, merge 0.5,
+stride 1 because recording for tuning keeps every fingerprint): 7.6 hours
+in all, 1:1s up to a large briefing. Four have a Teams transcript to score
+against (35–58 minutes each, 4–8 speakers); the other six don't (Teams
+didn't transcribe them), but three of those are 1:1s, where every remote
+word belongs to the one other person, so mistakes can be counted without
+a reference.
+
+**Scores on the saved transcripts**, by word aligned to Teams' transcript.
+"Right" counts a name that Teams truncated on the tile (a prefix of the
+full name) as right; "You" is scored as the host.
+
+| Meeting | Speakers | Right | 1–3 word turns | 4–15 | Wrong speaker | Tiny unnamed clusters | Wrong name on a right cluster |
+|---|---|---|---|---|---|---|---|
+| A, 58 min | 4 | 98.6% | 68% | 95.9% | 0.8% | 0.6% | 0 |
+| B, 35 min | 8 | 97.1% | 50% | 93.0% | 2.5% | 0.2% | 0 |
+| C, 50 min | 7 | 98.2% | 56% | 88.6% | 1.0% | 0.6% | 0 |
+| D, 52 min (large briefing) | 6 | 96.9% | (2 words) | 90.9% | 0.0% | 0.1% | 2.9% |
+
+`tomoe tune` on the same four agrees (speakers right 95.7–99.8%, names
+wrong 1.4–3.5%).
+
+What's left, by how much it shows in a transcript rather than by its share
+of words:
+
+1. **Tiny clusters.** Every meeting ends with 5–21 extra speakers that
+   own a few words each: a line split off another person's sentence at a
+   brief diarization flicker (0.3–2 s, 1–6 words), or a short backchannel
+   while the host is talking. They're 0.1–0.6% of words but each is its
+   own "Person N" line, and they appear even in 1:1s (6–8 extra labels in
+   each of the three, all wrong by construction). Cluster numbers reach
+   the low hundreds because each recluster mints new ones.
+   **Simulated fix:** give each line of a cluster with fewer than 15–30
+   words in the whole meeting the speaker of the neighbouring line
+   (previous if it ended within 2 s, else next):
+
+   | Meeting | Before | Absorb < 15 or < 30 words | < 60 words |
+   |---|---|---|---|
+   | A | 98.6% | 99.0% | 99.0% |
+   | B | 97.1% | 97.1% | 96.4% |
+   | C | 98.2% | 98.7% | 98.7% |
+   | D | 96.9% | 97.0% | 97.0% |
+
+   Never worse at 15–30 words, and 1–3 word turns improve (A 68→76%,
+   C 56→59%). At 60 words it swallows a real person who said 43 words
+   (B), so the floor has to stay well under what a quiet participant says.
+   The same rule clears the 1:1s. Done properly it belongs in the
+   diarizer's clustering (a minimum total duration per cluster, the rest
+   reassigned to the nearest centroid) rather than as a relabel.
+
+   **Shipped** as `min_speaker_words = 20` (`session.AbsorbSmallSpeakers`,
+   applied to the final labels when diarizing during the meeting; 0 turns
+   it off). `tomoe tune` on the four meetings, with the toolbar fix below:
+
+   | Meeting | Speakers right | Names right / wrong / none |
+   |---|---|---|
+   | A | 97.6 → 98.2% | 80.7 / 1.4 / 17.9 → 81.2 / 1.6 / 17.3% |
+   | B | 95.7 → 95.8% | 85.4 / 3.5 / 11.0 → 85.6 / 3.9 / 10.5% |
+   | C | 97.4 → 98.0% | 74.3 / 1.5 / 24.2 → 74.8 / 1.7 / 23.6% |
+   | D | 99.8 → 99.9% | 97.0 / 2.9 / 0.1 → 97.1 / 0.1 / 2.9% |
+
+   The cost: absorbed lines that were unnamed now carry a neighbour's
+   name, right about two times in three overall but mostly wrong in B
+   (eight people trading short turns), so wrong names rise 0.2–0.4 points
+   in A–C. Absorbing only when both neighbours are the same speaker left
+   some stray lines and saved about 0.1 point, so it wasn't worth it.
+
+   **By voice, then by line.** `Prepared.AbsorbSmallClusters` gives every
+   window of a cluster heard for under N seconds to the larger cluster
+   with the most similar mean voice, in the final timeline only (a new
+   voice must be free to start small during the meeting). `tomoe tune`'s
+   "Small speakers" sweep, speakers right / 1–3 word turns / 4–15 word
+   turns / names wrong / speakers left with under 20 words:
+
+   | Meeting | Neither | Voice 2 s | Lines 20 w | Voice 2 s + lines 20 w |
+   |---|---|---|---|---|
+   | A | 97.6 / 34 / 92.7 / 1.4 / 23 | 97.8 / 36 / 93.3 / 1.5 / 11 | 98.2 / 41 / 94.7 / 1.6 / 0 | 98.3 / 43 / 94.9 / 1.5 / 0 |
+   | B | 95.7 / 41 / 88.7 / 3.5 / 11 | 95.7 / 41 / 88.9 / 3.7 / 5 | 95.8 / 41 / 88.9 / 3.9 / 0 | 95.8 / 41 / 88.9 / 3.9 / 0 |
+   | C | 97.4 / 27 / 87.2 / 1.5 / 22 | 97.7 / 33 / 90.7 / 1.8 / 7 | 98.0 / 31 / 89.6 / 1.7 / 0 | 98.0 / 35 / 90.9 / 1.7 / 0 |
+   | D | 99.8 / – / 100 / 0.1 / 6 | 99.9 / – / 100 / 0.1 / 2 | 99.9 / – / 100 / 0.1 / 0 | 99.9 / – / 100 / 0.1 / 0 |
+
+   Both together match or beat lines alone on every column in every
+   meeting, so both ship (`min_speaker_seconds = 2`,
+   `min_speaker_words = 20`). Larger voice floors (5–12 s) helped A
+   (4–15 words 96%) but added wrong names in B (4.0%).
+
+   **Do short turns cluster at all?** Barely. Whatever the rule, words in
+   1–3 word reference turns get the right speaker 27–43% of the time and
+   4–15 word turns 87–93%; a second of speech doesn't make a reliable
+   fingerprint. The small clusters are a different thing: in all four
+   meetings nearly every one held a single person who already had a
+   large cluster (an over-split fragment, not a new voice), which is why
+   pointing them at the nearest voice works.
+2. **Toolbar text read as a name** (D, 2.9% of words, one speaker's whole
+   cluster). A Teams popup ("Limited call features") covered most of the
+   lit tile, so the ring was found as a 129×6 px strip. `LabelRect` puts
+   the name box at `ring.Y + ring.Height - BottomOffset`, which for a
+   6 px ring is above the tile, on the call toolbar, and OCR read "Take
+   control | Annotate" as the speaker's name. Fixes: reject (or rebuild
+   from same-row tiles) a ring much shorter than a tile, and drop reads
+   made of Teams' toolbar words (Take control, Annotate, Pop out, Chat,
+   People, Raise, React, View, Notes, Apps, More, Camera, Mic, Share,
+   Leave). **Shipped** both (`labelFits`, `plausibleName`; replays
+   apply them to recorded looks through `Look.Accepted`): D's wrong names
+   fall from 2.9% to 0.1%, and that speaker is left unnamed, since no
+   read of their tile was ever clean. Other junk reads seen and correctly
+   outvoted: single
+   characters ("E", "F", "-"), a shared document's title, a slide's
+   hashtag, and a name with its space dropped (292 reads, folded into the
+   right spelling).
+3. **Truncated names.** Teams cuts long names on the tile ("First Las…");
+   in D, 38% of words carry a truncated name. Right person, unfinished
+   label. The meeting invite's attendee list would complete them when one
+   attendee matches the prefix.
+4. **Same person, two labels.** In six meetings one name sits on two to
+   four clusters ("Person 1 (X)" and "Person 34 (X)"), all but one of
+   them tiny; absorbing tiny clusters removes most. Showing named
+   clusters by name alone would hide the rest.
+5. **Short turns and turn boundaries** remain the main source of wrong
+   speakers (0.8–2.5% of words): 1–3 word turns are right 50–68% of the
+   time, 4–15 word turns 89–96%. Errors cluster where two people trade
+   short turns. Same open problem as before.
+6. Host and remote mixed up: under 0.2% of words.
+
+**Look rate and stride, again.** On all four meetings, one look a second
+scores within 0.1 points of every 0.35 s (names right and wrong) for 3%
+of a core instead of 8–11%; every 2 s loses at most 0.3 points for 1.3–1.9%.
+Stride 2 is within 0.1 points of stride 1 for half the fingerprints. The
+first tuned meeting said the same.
+
+Final labels were ready 0.4–5.4 s after each meeting ended, except D:
+83.8 s (52 minutes, mostly long monologues; not investigated yet).
 
 ## Turn mode: one decode per speaker turn (2026-10-07)
 

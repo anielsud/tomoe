@@ -3,3 +3,5 @@
 package diarize
 
 func lowerThreadPriority() {}
+
+func raiseThreadPriority() {}
