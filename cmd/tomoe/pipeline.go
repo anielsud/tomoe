@@ -46,6 +46,7 @@ func loadOfflinePipelineThreads(cfg *config.Config, status *models.Status, lang 
 		MaxActivePaths: cfg.Transcription.MaxActivePaths,
 		HotwordsFile:   cfg.Transcription.HotwordsFile,
 		HotwordsScore:  cfg.Transcription.HotwordsScore,
+		Model:          cfg.Transcription.Model,
 		NumThreads:     threads,
 	}, status, &cfg.Multilingual)
 	if err != nil {

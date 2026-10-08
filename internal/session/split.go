@@ -179,3 +179,28 @@ func joinWords(ws []Word) string {
 	}
 	return strings.Join(parts, " ")
 }
+
+// SpreadWords estimates word timings for text spoken from start to end,
+// for models that return text without them: each word gets a share of the
+// span in proportion to its length (plus one for the gap after it), so a
+// line can still be split where the speaker changes (SplitByDiarization),
+// at about the right word. Returns nil for empty text.
+func SpreadWords(text string, start, end float64) []Word {
+	fields := strings.Fields(text)
+	if len(fields) == 0 || end <= start {
+		return nil
+	}
+	total := 0
+	for _, f := range fields {
+		total += len([]rune(f)) + 1
+	}
+	words := make([]Word, len(fields))
+	at := start
+	for i, f := range fields {
+		d := (end - start) * float64(len([]rune(f))+1) / float64(total)
+		words[i] = Word{Text: f, Start: math.Round(at*1000) / 1000, End: math.Round((at+d)*1000) / 1000}
+		at += d
+	}
+	words[len(words)-1].End = end
+	return words
+}

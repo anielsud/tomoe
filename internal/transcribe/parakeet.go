@@ -67,27 +67,31 @@ func NewEngine(cfg Config) (Engine, error) {
 	// conflicts with Go's signal handling. Fix it after initialization.
 	sigfix.AfterSherpa()
 
-	var vadConfig *sherpa.VadModelConfig
-	if cfg.VADPath != "" {
-		vadConfig = &sherpa.VadModelConfig{
-			SileroVad: sherpa.SileroVadModelConfig{
-				Model:              cfg.VADPath,
-				Threshold:          0.5,
-				MinSilenceDuration: 0.5,
-				MinSpeechDuration:  0.25,
-				WindowSize:         512,
-				MaxSpeechDuration:  30.0,
-			},
-			SampleRate: sampleRate,
-			NumThreads: 1,
-			Provider:   "cpu",
-		}
-	}
-
 	return &parakeetEngine{
 		recognizer: recognizer,
-		vadConfig:  vadConfig,
+		vadConfig:  vadModelConfig(cfg.VADPath),
 	}, nil
+}
+
+// vadModelConfig is the speech detector TranscribeSamples segments with,
+// or nil without a model.
+func vadModelConfig(path string) *sherpa.VadModelConfig {
+	if path == "" {
+		return nil
+	}
+	return &sherpa.VadModelConfig{
+		SileroVad: sherpa.SileroVadModelConfig{
+			Model:              path,
+			Threshold:          0.5,
+			MinSilenceDuration: 0.5,
+			MinSpeechDuration:  0.25,
+			WindowSize:         512,
+			MaxSpeechDuration:  30.0,
+		},
+		SampleRate: sampleRate,
+		NumThreads: 1,
+		Provider:   "cpu",
+	}
 }
 
 // TranscribeSamples transcribes raw float32 PCM audio at 16kHz.

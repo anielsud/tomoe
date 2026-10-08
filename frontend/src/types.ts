@@ -93,6 +93,8 @@ export interface Config {
     DecodingMethod: string;
     MaxActivePaths: number;
     TwoPass: boolean;
+    // models.ASRModels ID, or "auto".
+    Model: string;
   };
   Output: {
     AutoPaste: boolean;
