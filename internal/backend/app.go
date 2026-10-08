@@ -291,7 +291,7 @@ type engineBundle struct {
 // aren't downloaded (or fail to load) is left nil; callers already treat
 // each piece as optional except engines, which StartSession requires.
 func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
-	b := engineBundle{modelMgr: models.NewManager(cfg.Transcription.ModelPath)}
+	b := engineBundle{modelMgr: models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel)}
 	videohint.SetOCRModels(status.OCRModelPath(models.OCRDetector), status.OCRModelPath(models.OCRRecognizer))
 
 	// Create transcription engine if models are ready
@@ -326,6 +326,7 @@ func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
 			DecoderPath: status.EnglishStreamingDecoderPath,
 			JoinerPath:  status.EnglishStreamingJoinerPath,
 			TokensPath:  status.EnglishStreamingTokensPath,
+			ModelType:   status.EnglishStreamingModelType,
 		})
 		if err == nil {
 			b.streamingEngine = built

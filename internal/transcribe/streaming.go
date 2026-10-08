@@ -67,6 +67,9 @@ type StreamingConfig struct {
 	JoinerPath  string
 	TokensPath  string
 	NumThreads  int
+	// ModelType tells sherpa-onnx how to load the model; "" lets it read
+	// the model's own metadata (NeMo models).
+	ModelType string
 }
 
 // NewStreamingEngine creates a StreamingEngine from a streaming Zipformer
@@ -91,7 +94,7 @@ func NewStreamingEngine(cfg StreamingConfig) (StreamingEngine, error) {
 			Tokens:     cfg.TokensPath,
 			NumThreads: numThreads,
 			Provider:   "cpu",
-			ModelType:  "zipformer2",
+			ModelType:  cfg.ModelType,
 		},
 		DecodingMethod: "greedy_search",
 		// Endpoint detection is deliberately off: internal/live already

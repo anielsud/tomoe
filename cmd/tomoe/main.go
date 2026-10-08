@@ -196,6 +196,7 @@ func runStart(cmd *cobra.Command, args []string) error {
 			DecoderPath: status.EnglishStreamingDecoderPath,
 			JoinerPath:  status.EnglishStreamingJoinerPath,
 			TokensPath:  status.EnglishStreamingTokensPath,
+			ModelType:   status.EnglishStreamingModelType,
 		})
 		if err == nil {
 			opts.StreamingEngine = streamingEngine
@@ -309,7 +310,7 @@ var statusCmd = &cobra.Command{
 		fmt.Println()
 
 		// Models
-		mgr := models.NewManager(config.ModelDir())
+		mgr := models.NewManager(config.ModelDir()).WithLiveModel(liveModelSetting())
 		modelStatus := mgr.Check()
 		fmt.Println(modelStatus)
 		fmt.Println()
@@ -363,7 +364,7 @@ var modelDownloadCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		force, _ := cmd.Flags().GetBool("force")
 		multilingual, _ := cmd.Flags().GetBool("multilingual")
-		mgr := models.NewManager(config.ModelDir())
+		mgr := models.NewManager(config.ModelDir()).WithLiveModel(liveModelSetting())
 
 		if err := mgr.Download(force, cliDownloadProgress()); err != nil {
 			return err
@@ -419,7 +420,7 @@ var modelStatusCmd = &cobra.Command{
 	Use:   "status",
 	Short: "Show downloaded model info and integrity check",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mgr := models.NewManager(config.ModelDir())
+		mgr := models.NewManager(config.ModelDir()).WithLiveModel(liveModelSetting())
 		status := mgr.Check()
 		fmt.Println(status)
 		return nil
@@ -454,7 +455,7 @@ var transcribeCmd = &cobra.Command{
 		}
 
 		// Check model status
-		mgr := models.NewManager(cfg.Transcription.ModelPath)
+		mgr := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel)
 		status := mgr.Check()
 		if !status.Ready() {
 			return fmt.Errorf("models not downloaded (run 'tomoe init' or 'tomoe model download')")
@@ -629,7 +630,7 @@ var sessionRetranscribeCmd = &cobra.Command{
 	Short: "Re-process a session's audio: re-transcribe and identify speakers",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		mgr := models.NewManager(config.ModelDir())
+		mgr := models.NewManager(config.ModelDir()).WithLiveModel(liveModelSetting())
 		status := mgr.Check()
 		if !status.Ready() {
 			return fmt.Errorf("transcription models not downloaded (run 'tomoe model download')")
@@ -737,4 +738,14 @@ func displayServerName() string {
 		return "macOS"
 	}
 	return "unknown"
+}
+
+// liveModelSetting is the configured live model (live_model), for commands
+// that otherwise don't load the config; "" (the default) if it can't be read.
+func liveModelSetting() string {
+	cfg, err := config.Load(config.Path())
+	if err != nil {
+		return ""
+	}
+	return cfg.Transcription.LiveModel
 }

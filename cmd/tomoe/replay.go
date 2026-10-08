@@ -129,7 +129,7 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 	if err != nil {
 		return fmt.Errorf("loading config: %w", err)
 	}
-	status := models.NewManager(cfg.Transcription.ModelPath).Check()
+	status := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel).Check()
 	if !status.Ready() {
 		return fmt.Errorf("transcription models not downloaded (run 'tomoe model download')")
 	}

@@ -40,7 +40,7 @@ func runDiarizeSession(sessID string, forceCPU bool) error {
 		return fmt.Errorf("loading config: %w", err)
 	}
 
-	mgr := models.NewManager(cfg.Transcription.ModelPath)
+	mgr := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel)
 	status := mgr.Check()
 	if !status.DiarizationReady() {
 		return fmt.Errorf("diarization models not available")

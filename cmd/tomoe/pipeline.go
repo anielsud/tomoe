@@ -72,6 +72,7 @@ func loadOfflinePipelineThreads(cfg *config.Config, status *models.Status, lang 
 			DecoderPath: status.EnglishStreamingDecoderPath,
 			JoinerPath:  status.EnglishStreamingJoinerPath,
 			TokensPath:  status.EnglishStreamingTokensPath,
+			ModelType:   status.EnglishStreamingModelType,
 		}); err != nil {
 			p.Close()
 			return nil, fmt.Errorf("loading English streaming model: %w", err)

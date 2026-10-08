@@ -52,6 +52,14 @@ type TranscriptionConfig struct {
 	// "parakeet-v2-en" or "parakeet-v3" pick those instead, and
 	// "parakeet-v3" restores the previous behavior (models.ASRModels).
 	Model string `toml:"model"`
+	// LiveModel is the streaming model for the live text shown while
+	// people speak (two_pass). "auto" is NeMo's streaming FastConformer:
+	// on two meetings it differed from the final text on 25-38% of words
+	// against 41-52% for the previous LibriSpeech Zipformer, for the same
+	// CPU and ~275 MB more memory. "zipformer-2023" restores the previous
+	// model; "nemotron-560" is closer still (18-31%) but needs ~1.9 GB and
+	// three times the CPU (models.LiveModels).
+	LiveModel string `toml:"live_model"`
 }
 
 // OutputConfig holds output behavior settings.
@@ -227,8 +235,9 @@ func DefaultConfig() *Config {
 			MaxActivePaths: 4,
 			// Off, as on main: two-pass is opt-in until it has been
 			// tuned on real recordings (see `tomoe session replay`).
-			TwoPass: false,
-			Model:   "auto",
+			TwoPass:   false,
+			Model:     "auto",
+			LiveModel: "auto",
 		},
 		Output: OutputConfig{
 			AutoPaste:      true,

@@ -58,7 +58,7 @@ func EnsureInitialized(onProgress models.ProgressFunc) (*Result, error) {
 		gpuInfo = gpu.Detect()
 	}
 
-	mgr := models.NewManager(cfg.Transcription.ModelPath)
+	mgr := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel)
 	if err := mgr.Download(false, onProgress); err != nil {
 		return nil, fmt.Errorf("downloading models: %w", err)
 	}
