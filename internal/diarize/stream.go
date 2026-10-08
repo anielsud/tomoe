@@ -23,6 +23,11 @@ type StreamConfig struct {
 	// ReclusterSeconds is how much new audio triggers a recluster.
 	ReclusterSeconds float64
 	Params           Params
+	// MinSpeakerSeconds, if > 0, folds clusters that speak for less than
+	// this in all into the most similar larger one, in the final
+	// timeline only (see Prepared.AbsorbSmallClusters): during the meeting
+	// a new voice has to be free to start small.
+	MinSpeakerSeconds float64
 	// OnTimeline, if set, receives each recluster's timeline. Called on
 	// the Stream's own goroutine; it must not call back into the Stream.
 	OnTimeline func(Timeline)
@@ -289,6 +294,9 @@ func (s *Stream) recluster(final bool) Timeline {
 		clusters := p.Cluster(s.cfg.Params.Threshold, s.cfg.Params.NumClusters)
 		if s.cfg.Params.MergeSimilarity > 0 {
 			clusters = p.MergeClusters(clusters, s.cfg.Params.MergeSimilarity)
+		}
+		if final {
+			clusters = p.AbsorbSmallClusters(clusters, s.cfg.Params, s.cfg.MinSpeakerSeconds)
 		}
 		ids := s.stable.Assign(pairs, clusters)
 		for _, t := range p.ReconstructClusters(clusters, s.cfg.Params) {
