@@ -816,6 +816,52 @@ Only one was an interjection just over the limit (1.16 s).
 The 1–3-word bucket holds 15–60 words per meeting, so the drop there is
 about one word per meeting.
 
+## Speaker boundaries from the meeting window's highlight (2026-10-08)
+
+**Problem.** On a live Zoom call, one participant cut in on another
+without a pause, and a large part of the second person's speech was
+credited to the first. Meeting audio is one mixed channel, and lines
+ended only at pauses (or at a change signal *between* utterances). A
+cut-in with no pause shared one utterance, and so one line and one
+speaker, with whoever was talking. The highlight had followed every
+hand-off within a second or two.
+
+**Three changes:**
+- **Cut at highlight changes** (`split_at_highlight`). A meeting-audio
+  utterance is cut where the highlight moved to another name. The cut is
+  0.5 s earlier, because the highlight trails the voice. Pieces under
+  0.4 s aren't cut off. The first piece keeps its line and speaker; the
+  rest are labelled from their own audio.
+- **Short lines from the highlight** (`highlight_short_lines`). A
+  meeting-audio line of 1.5 s or less goes to the speaker carrying the
+  highlighted name, when every read during it agrees and exactly one
+  speaker has that name. A "Thank you" had gone to the wrong person while
+  the highlight showed the right one throughout. In that call, 34 of 84
+  meeting-audio lines were this short.
+- **Truncated names aren't changes.** A truncated tile reads "Jennifer
+  Hem..." one look and "Jennifer Hem.." the next. The change log compared
+  names exactly, so a 52-minute briefing logged 345 speaker changes, 151
+  of them flipping straight back. Since turn mode shipped, that had been
+  ending turns early. With the highlight cuts, it shredded a monologue
+  (151 → 411 lines). Names are now compared as the naming code does.
+
+**Results**, all three together, against turn mode with interjections
+and padding:
+
+| Meeting | Speakers | 4–15-word turns | Lines |
+|---|---|---|---|
+| A | 97.7 → 97.8 | 93.2 → 92.6 | 306 → 341 |
+| B, fast group | 93.6 → 95.1 | 84.6 → 87.2 | 210 → 279 |
+| C | 97.8 → 98.0 | 90.7 → 89.9 | 254 → 290 |
+| D, briefing | 99.9 → 99.9 | 95.5 → 100 | 151 → 143 |
+| Fast 4-person call | 91.8 → 91.6 | 72.3 → 69.8 | 54 → 72 |
+| Average | 96.2 → 96.5 | 87.3 → 87.9 | |
+
+Judged errors fixed went from 234 to 238. The gain is in the group
+meetings with frequent hand-offs (B had 76 highlight cuts inside
+utterances). The fast 4-person call, whose reference is a hand-corrected
+third-party transcript, dips slightly.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time
