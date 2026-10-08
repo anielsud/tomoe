@@ -104,6 +104,12 @@ func (d *Detector) Start(ctx context.Context) error {
 	// Start periodic health check for tracked PIDs
 	go d.healthCheckLoop(ctx)
 
+	// The event loop only reports apps that start or stop audio from now
+	// on, so a meeting already under way when the app launches (or
+	// relaunches mid-call) would never be noticed. Look once now; the
+	// usual debounce still applies.
+	go d.checkForMeeting()
+
 	fmt.Println("meeting: detector started")
 	return nil
 }
