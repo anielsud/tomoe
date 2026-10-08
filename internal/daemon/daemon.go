@@ -467,6 +467,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	// Speaker-change signals end a turn (live.Config.TurnMode).
 	changes := &live.ChangeLog{}
 	cfg.TurnMode, cfg.TurnMaxSeconds, cfg.TurnMaxGap = d.cfg.Meeting.TurnMode, d.cfg.Meeting.TurnMaxSeconds, d.cfg.Meeting.TurnMaxGap
+	cfg.DecodePad = d.cfg.Meeting.DecodePad
 	cfg.SpeakerChanged = changes.Between
 
 	watcher := videohint.NewWatcher(videohint.WatchConfig{

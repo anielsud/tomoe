@@ -513,7 +513,7 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 	began := time.Now()
 	defer c.cfg.Timings.utterance(began)
 	c.transcribeMu.Lock()
-	result, err := c.cfg.Engine.TranscribeDirect(samples)
+	result, err := c.decode(samples)
 	c.transcribeMu.Unlock()
 	c.cfg.Timings.add(&c.timingsOrZero().Decode, began)
 
@@ -616,7 +616,7 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 	began := time.Now()
 	defer c.cfg.Timings.utterance(began)
 	c.transcribeMu.Lock()
-	result, err := c.cfg.Engine.TranscribeDirect(job.samples)
+	result, err := c.decode(job.samples)
 	c.transcribeMu.Unlock()
 	c.cfg.Timings.add(&c.timingsOrZero().Decode, began)
 
@@ -848,6 +848,28 @@ type turnPart struct {
 	id, pass1  string // two-pass: its pending line, if one was shown
 	speaker    string
 	decision   speaker.AssignDecision
+}
+
+// decode transcribes samples with Config.DecodePad seconds of silence on
+// each side, and gives token times relative to samples' own start.
+// Cohere drops the last syllable of audio that stops abruptly ("What'"
+// for "What's up?"); the silence lets it finish the word.
+func (c *Coordinator) decode(samples []float32) (*transcribe.Result, error) {
+	n := int(c.cfg.DecodePad * vadSampleRate)
+	if n <= 0 {
+		return c.cfg.Engine.TranscribeDirect(samples)
+	}
+	padded := make([]float32, n, len(samples)+2*n)
+	padded = append(padded, samples...)
+	padded = append(padded, make([]float32, n)...)
+	result, err := c.cfg.Engine.TranscribeDirect(padded)
+	if result != nil {
+		shift := float32(n) / vadSampleRate
+		for i, t := range result.Timestamps {
+			result.Timestamps[i] = max(0, t-shift)
+		}
+	}
+	return result, err
 }
 
 // turnGapPad is the silence put between collected utterances, so the

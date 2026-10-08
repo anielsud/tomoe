@@ -698,6 +698,85 @@ so its results match the "no signals" column.
 A possible next step: snap a turn's end to the moment the Teams highlight
 moved, rather than the utterance boundary.
 
+## How often people talk over each other (2026-10-08)
+
+This sizes the overlap problem before building for it. It covers the four
+meetings with a Teams reference (A–D), the fast four-person call, and a 1:1.
+
+- **Remote over remote:** measured from the diarizer's saved frames. A 50 ms
+  step counts as overlap when the window centred nearest to it hears two or
+  more voices.
+- **Host over remote:** the host's mic lines against the diarizer's remote
+  speech. Mic lines span short pauses, so this overstates it a little.
+
+| Meeting | Remote over remote | Episodes (≥ 1 s) | Host over remote | Episodes (≥ 1 s) |
+|---|---|---|---|---|
+| A, 58 min | 1.9% of remote speech | 62 (10) | 8.9% of host speech | 56 (9) |
+| B, 37 min, fast group | 4.2% | 112 (19) | 14.7% | 52 (5) |
+| C, 50 min | 1.7% | 53 (11) | 8.1% | 84 (17) |
+| D, 52 min briefing | 0.2% | 15 (0) | host silent | n/a |
+| Fast 4-person call, 9 min | 4.4% | 34 (5) | 47.5% (host spoke little) | 18 (2) |
+| 1:1, 23 min | 0.0% | 2 | 6.5% | 42 (5) |
+
+What this shows:
+- **Remote voices overlap rarely by time:** at most 4% of remote speech.
+- **They overlap often by count:** 50–110 times in a group meeting, almost
+  all under a second (backchannels and floor grabs).
+- **The host overlaps more:** 6–15% of the host's speech.
+
+The host's overlaps are on separate channels, so they can be handled
+without separating voices: don't end a turn on the other side's
+interjection. Remote-over-remote overlaps are short enough that attributing
+the moment sensibly matters more than recovering both voices' words.
+
+## Silence around each decode, and the live drafts as a timing source (2026-10-08)
+
+The 5 reference meetings were replayed as the app runs them (two-pass,
+turn mode with live signals, Cohere). The unpadded runs reproduce the
+turn-mode results above exactly: 237 judged errors fixed, 74% names and
+terms, 96.2% speakers.
+
+**Silence around each decode** (`session replay --decode-pad`):
+
+| Padding | Judged errors fixed | Names + terms | Speakers | 4–15-word turns | Lines ending mid-word | Words |
+|---|---|---|---|---|---|---|
+| none | 237 | 74% | 96.2% | 87.4% | 3 | 31,546 |
+| 0.25 s | 235 | 73% | 96.2% | 87.8% | 0 | 31,643 |
+| 0.5 s | 242 | 73% | 96.1% | 87.2% | 1 | 31,681 |
+
+The differences are within replay noise. Padding recovers about 0.3% more
+words but doesn't move the scores. Lines ending mid-word ("shouldn",
+"don'") are too rare in these meetings (0–3 across five) to measure a fix.
+
+A 22-minute 1:1 had 7 such lines live. A replay reproduces 6 of them, so
+they come from transcription, not the live pipeline. With 0.25 s of
+padding there are none, and the words come back:
+- "What'" → "What's up?"
+- "But you shouldn" → "But you shouldn't."
+- "…off. B" → "…off. Bye."
+
+Cohere drops the last syllable of audio that stops abruptly. `decode_pad`
+now defaults to 0.25 s; 0 restores the previous behaviour. Token times
+from models that report them (Parakeet) are shifted back by the pad.
+
+**Live drafts against the final text.** The pass-1 draft (streaming
+Zipformer) reads badly: all capitals, no punctuation, many wrong words.
+But about 70% of the final text's words also appear in it, in order:
+
+| Meeting | Final words in the draft | In runs of 2+ | A run every | Median gap | Longest gap |
+|---|---|---|---|---|---|
+| A | 71% | 67% | 2.8 s | 2 words | 21 words |
+| B | 68% | 64% | 2.8 s | 2 words | 40 words |
+| C | 74% | 71% | 2.7 s | 1 word | 18 words |
+| D | 78% | 74% | 2.6 s | 1 word | 19 words |
+| Fast 4-person call | 64% | 58% | 3.0 s | 2 words | 36 words |
+
+That's dense enough to anchor word timings for a model without them.
+Drafts don't carry word timings today, only each utterance's start and
+end. That alone places each final word in the utterance it came from,
+instead of spreading a 30 s turn's words across its pauses. The streaming
+model can report token times for finer anchors.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time

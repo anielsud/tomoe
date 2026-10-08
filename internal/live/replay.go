@@ -47,6 +47,9 @@ type ReplayResult struct {
 	// utterance ended, by segment ID. Only set with a StreamingEngine, and
 	// only for segments pass 1 produced text for.
 	Pass1Text map[string]string
+	// Drafts are the pass-1 lines as first shown (two-pass only), in the
+	// order they appeared, including those a turn later absorbed.
+	Drafts []session.Segment
 }
 
 // ReplayDetailed is Replay that also reports pass 1's text per segment, for
@@ -89,6 +92,7 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 	var order []string
 	final := make(map[string]session.Segment)
 	pass1 := make(map[string]string)
+	var drafts []session.Segment
 	record := func(seg session.Segment) {
 		if seg.Status == session.StatusRemoved {
 			delete(final, seg.ID)
@@ -99,6 +103,9 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 		}
 		final[seg.ID] = seg
 		if seg.Status == "pending" {
+			if _, seen := pass1[seg.ID]; !seen {
+				drafts = append(drafts, seg)
+			}
 			pass1[seg.ID] = seg.Text
 		}
 	}
@@ -161,7 +168,7 @@ func ReplayDetailed(cfg Config, mic, monitor []float32) (*ReplayResult, error) {
 	if cfg.TurnMode {
 		fmt.Printf("Turn mode: %v\n", c.TurnCuts())
 	}
-	return &ReplayResult{Segments: segs, Pass1Text: pass1}, nil
+	return &ReplayResult{Segments: segs, Pass1Text: pass1, Drafts: drafts}, nil
 }
 
 // replayProgressEvery is how many windows (about 32 s of audio) pass
