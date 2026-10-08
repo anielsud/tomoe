@@ -56,6 +56,7 @@ was heard live, but both runs hear the same audio.`,
 		o.threads, _ = cmd.Flags().GetInt("threads")
 		o.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
 		o.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
+		o.decodePad, _ = cmd.Flags().GetFloat64("decode-pad")
 		if cmd.Flags().Changed("turn-mode") {
 			on, _ := cmd.Flags().GetBool("turn-mode")
 			o.turnMode = &on
@@ -87,6 +88,9 @@ type replayOptions struct {
 	threads    int
 	// minSilence and maxSpeech are the utterance bounds (0: the config's).
 	minSilence, maxSpeech float64
+	// decodePad is seconds of silence around every decode (< 0: the
+	// config's decode_pad).
+	decodePad float64
 	// turnMode overrides the config's turn_mode when set; turnMax and
 	// turnGap its limits (0: the config's). turnSignals is which
 	// speaker-change signals end a turn, rebuilt from the session's saved
@@ -108,6 +112,7 @@ func init() {
 	sessionReplayCmd.Flags().Bool("single-pass", false, "Turn two-pass off for this replay, so only the transcription model writes text")
 	sessionReplayCmd.Flags().Float64("min-silence", 0, "Pause (s) that ends an utterance (default: your min_silence_duration)")
 	sessionReplayCmd.Flags().Float64("max-speech", 0, "Longest utterance (s) before it's cut (default: your max_speech_duration)")
+	sessionReplayCmd.Flags().Float64("decode-pad", -1, "Seconds of silence added before and after every decode (default: your decode_pad)")
 	sessionReplayCmd.Flags().Bool("turn-mode", false, "Decode whole speaker turns, or each utterance with =false (default: your turn_mode)")
 	sessionReplayCmd.Flags().Float64("turn-max", 0, "Turn mode: longest line in seconds (default: your turn_max_seconds)")
 	sessionReplayCmd.Flags().Float64("turn-gap", 0, "Turn mode: a pause longer than this many seconds ends a turn (default: your turn_max_gap)")
@@ -122,6 +127,7 @@ type replayRun struct {
 	twoPass  bool
 	tuning   speaker.Tuning
 	segments []session.Segment
+	drafts   []session.Segment
 }
 
 func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOptions) error {
@@ -231,9 +237,15 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 			name := run.name
 			lc.ReplayProgress = func(done, total int) { fmt.Printf("progress replay %s %d/%d\n", name, done, total) }
 		}
-		if run.segments, err = live.Replay(lc, mic, monitor); err != nil {
+		lc.DecodePad = cfg.Meeting.DecodePad
+		if o.decodePad >= 0 {
+			lc.DecodePad = o.decodePad
+		}
+		res, err := live.ReplayDetailed(lc, mic, monitor)
+		if err != nil {
 			return fmt.Errorf("%s run: %w", run.name, err)
 		}
+		run.segments, run.drafts = res.Segments, res.Drafts
 		sort.SliceStable(run.segments, func(i, j int) bool { return run.segments[i].StartTime < run.segments[j].StartTime })
 	}
 
@@ -252,6 +264,14 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 		js, _ := json.MarshalIndent(run.segments, "", " ")
 		if err := os.WriteFile(filepath.Join(outDir, run.name+".json"), js, 0o644); err != nil {
 			return fmt.Errorf("writing %s.json: %w", run.name, err)
+		}
+		if len(run.drafts) > 0 {
+			// The live (pass-1) lines as first shown, for comparing drafts
+			// with the final text.
+			js, _ := json.MarshalIndent(run.drafts, "", " ")
+			if err := os.WriteFile(filepath.Join(outDir, run.name+".drafts.json"), js, 0o644); err != nil {
+				return fmt.Errorf("writing %s.drafts.json: %w", run.name, err)
+			}
 		}
 	}
 

@@ -101,8 +101,14 @@ type MeetingConfig struct {
 	TurnMode       bool    `toml:"turn_mode"`
 	TurnMaxSeconds float64 `toml:"turn_max_seconds"`
 	TurnMaxGap     float64 `toml:"turn_max_gap"` // seconds
-	AutoSave       bool    `toml:"auto_save"`    // save session on stop
-	AutoDetect     bool    `toml:"auto_detect"`  // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	// DecodePad is seconds of silence put before and after each line's
+	// audio when it's transcribed. Without it Cohere drops a last syllable
+	// that stops abruptly (a 1:1 had 7 lines ending "shouldn", "What'";
+	// 0.25 s fixed all 7 and was neutral on five reference meetings). 0
+	// restores the previous behavior.
+	DecodePad  float64 `toml:"decode_pad"`
+	AutoSave   bool    `toml:"auto_save"`   // save session on stop
+	AutoDetect bool    `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
@@ -250,6 +256,7 @@ func DefaultConfig() *Config {
 			TurnMode:             true,
 			TurnMaxSeconds:       30,
 			TurnMaxGap:           2,
+			DecodePad:            0.25,
 			AutoSave:             true,
 			AutoDetect:           true,
 			SpeakerModel:         "auto",

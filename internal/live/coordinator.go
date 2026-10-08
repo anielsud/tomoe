@@ -87,6 +87,10 @@ type Config struct {
 	TurnMode       bool
 	TurnMaxSeconds float64
 	TurnMaxGap     float64
+	// DecodePad is seconds of silence added before and after the audio of
+	// every decode: models that decode a whole utterance at once can drop
+	// a last syllable that ends abruptly. 0 adds none.
+	DecodePad float64
 	// SpeakerChanged reports whether a speaker-change signal (a new voice
 	// starting, the meeting window's highlight moving) fell between from
 	// and to (session seconds). Nil: no signal beyond the rules above.
