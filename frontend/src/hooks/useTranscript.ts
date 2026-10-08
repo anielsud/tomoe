@@ -40,8 +40,13 @@ export function useTranscript() {
     // session without sending them as line updates, and splitting gives
     // lines new IDs, so reload it rather than keep the live state.
     let current: string | null = null;
+    // A new recording starts from an empty view however it was started
+    // (Start button, hotkey, tray or a detected meeting). Line IDs restart
+    // at seg-1 each session, so the previous meeting's final lines would
+    // otherwise shadow the new meeting's drafts with the same IDs.
     const cancelStarted = EventsOn('session:started', (id: string) => {
       current = id;
+      setSegments([]);
     });
     const cancelSaved = EventsOn('session:saved', async (id: string) => {
       if (!id || id !== current || !window.go?.backend?.App) return;
