@@ -307,6 +307,7 @@ func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
 			MaxActivePaths: cfg.Transcription.MaxActivePaths,
 			HotwordsFile:   cfg.Transcription.HotwordsFile,
 			HotwordsScore:  cfg.Transcription.HotwordsScore,
+			Model:          cfg.Transcription.Model,
 		}, status, &cfg.Multilingual)
 		if err == nil {
 			b.engines = built

@@ -34,7 +34,10 @@ type SessionDiarizer struct {
 	stream *Stream
 	lock   sync.Locker
 	split  bool
-	opts   SessionOptions
+	// minWords is MeetingConfig.MinSpeakerWords, applied to the final
+	// labels.
+	minWords int
+	opts     SessionOptions
 
 	// Set on the pipeline goroutine's first window: the session time the
 	// stream's audio starts at.
@@ -76,7 +79,7 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	if err != nil {
 		return nil, err
 	}
-	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
+	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
 	sc.OnSpeakerChange = opts.OnSpeakerChange
 	if d.stream, err = NewStream(sc); err != nil {
@@ -191,6 +194,18 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 	}
 	live := seg.LiveLabel()
 	label, ok := d.liveTo[live]
+	if (!ok || label == "") && d.timeline != nil {
+		// The live pass doesn't know this voice, but the meeting window
+		// says who's talking: if a timeline speaker already carries that
+		// name, it's them. Without this, a 1:1 showed the other person
+		// under a new provisional label every time the live pass split
+		// off a new cluster for their voice (19 in a 20-minute call).
+		if name := d.hintDuringLocked(seg.StartTime, seg.EndTime); name != "" {
+			if k, found := d.speakerNamedLocked(name); found {
+				label, ok = d.labelFor(k), true
+			}
+		}
+	}
 	if !ok || label == "" {
 		// A voice the timeline hasn't placed yet. The live pass numbers
 		// speakers its own way, so its "Person 5" may be a different
@@ -233,6 +248,19 @@ func (d *SessionDiarizer) labelFor(k int) string {
 		return fmt.Sprintf("Person %d (%s)", k+1, name)
 	}
 	return fmt.Sprintf("Person %d", k+1)
+}
+
+// speakerNamedLocked finds the timeline speaker named name (by the meeting
+// window or the user), if exactly one is.
+func (d *SessionDiarizer) speakerNamedLocked(name string) (int, bool) {
+	found, n := -1, 0
+	for k := range d.timeline.Labels {
+		if SameName(d.renames[k], name) || SameName(d.names[k], name) {
+			found = k
+			n++
+		}
+	}
+	return found, n == 1
 }
 
 func (d *SessionDiarizer) isRenamedLabel(label string) bool {
@@ -333,9 +361,12 @@ func (d *SessionDiarizer) Finish(dir string) error {
 		d.relabelLocked()
 	}
 	d.settleProvisionalLocked(tl.Turns, labels)
+	session.AbsorbSmallSpeakers(d.sess.Segments, d.minWords, d.isRenamedLabel)
 	id := d.sess.ID
 	d.lock.Unlock()
-	fmt.Printf("session %s: final speaker labels %.1fs after the meeting ended\n", id, time.Since(began).Seconds())
+	st := d.stream.Stats()
+	fmt.Printf("session %s: final speaker labels %.1fs after the meeting ended (diarizer was %.1fs behind then, at most %.1fs; %d reclusters took %.1fs, slowest %.2fs; %d windows, %d fingerprints; %d caught up in parallel in %.1fs)\n",
+		id, time.Since(began).Seconds(), st.BehindAtEnd, st.MaxBehind, st.Reclusters, st.ReclusterTotal, st.ReclusterMax, st.Windows, st.Fingerprints, st.CatchUpWindows, st.CatchUpSeconds)
 
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil // the labels are applied; the fingerprints are a bonus
@@ -351,7 +382,7 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	// What replaying the fingerprints needs besides them: where the
 	// stream's audio starts in session time, and the settings used.
 	info, _ := json.MarshalIndent(StreamInfo{
-		Offset: d.offset, Stride: d.stream.cfg.Stride, ReclusterSeconds: d.stream.cfg.ReclusterSeconds, Params: d.stream.cfg.Params,
+		Offset: d.offset, Stride: d.stream.cfg.Stride, ReclusterSeconds: d.stream.cfg.ReclusterSeconds, Params: d.stream.cfg.Params, MinSpeakerSeconds: d.stream.cfg.MinSpeakerSeconds, Stats: &st,
 	}, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, "diarization.json"), info, 0o644)
 	return nil
@@ -361,10 +392,13 @@ func (d *SessionDiarizer) Finish(dir string) error {
 // (diarization.json): the session time the diarized audio starts at, and
 // the settings it was diarized with.
 type StreamInfo struct {
-	Offset           float64 `json:"offset_seconds"`
-	Stride           int     `json:"stride"`
-	ReclusterSeconds float64 `json:"recluster_seconds"`
-	Params           Params  `json:"params"`
+	Offset            float64 `json:"offset_seconds"`
+	Stride            int     `json:"stride"`
+	ReclusterSeconds  float64 `json:"recluster_seconds"`
+	Params            Params  `json:"params"`
+	MinSpeakerSeconds float64 `json:"min_speaker_seconds,omitempty"`
+	// Stats is how the diarizer kept up during the meeting.
+	Stats *StreamStats `json:"stats,omitempty"`
 }
 
 // Abort stops without using the result (the session never started).

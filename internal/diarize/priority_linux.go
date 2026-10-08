@@ -10,3 +10,8 @@ import "syscall"
 func lowerThreadPriority() {
 	_ = syscall.Setpriority(syscall.PRIO_PROCESS, syscall.Gettid(), 10)
 }
+
+// raiseThreadPriority would undo lowerThreadPriority, but lowering a nice
+// value back needs privileges a desktop app doesn't have, so the thread
+// stays as it is.
+func raiseThreadPriority() {}
