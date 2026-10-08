@@ -11,7 +11,7 @@ export interface Segment {
   // unrefined result, and a slower higher-fidelity re-decode is in
   // flight. Absent/"" means final. See internal/live's two-pass
   // pipeline.
-  status?: 'live' | 'pending' | '';
+  status?: 'live' | 'pending' | 'removed' | '';
   // Which speaker.Tracker.Assign rule produced `speaker` for this
   // segment ("confident" | "sticky" | "short-segment" | "new-speaker"),
   // or "" for mic/system-audio (never audio-clustered) or when no

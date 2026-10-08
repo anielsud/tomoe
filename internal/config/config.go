@@ -78,13 +78,21 @@ type MultilingualConfig struct {
 // (see speaker.DefaultThreshold's doc comment) needed several
 // rebuild+relaunch cycles just to test one constant change at a time.
 type MeetingConfig struct {
-	DefaultSources     string  `toml:"default_sources"`      // "mic", "monitor", "both"
-	MonitorDevice      string  `toml:"monitor_device"`       // monitor source device name; "" = default monitor (Linux), "none" = mic only
-	SpeakerThreshold   float64 `toml:"speaker_threshold"`    // cosine similarity threshold for a confident speaker match
-	MaxSpeechDuration  float64 `toml:"max_speech_duration"`  // seconds
-	MinSilenceDuration float64 `toml:"min_silence_duration"` // seconds
-	AutoSave           bool    `toml:"auto_save"`            // save session on stop
-	AutoDetect         bool    `toml:"auto_detect"`          // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	DefaultSources     string  `toml:"default_sources"`     // "mic", "monitor", "both"
+	MonitorDevice      string  `toml:"monitor_device"`      // monitor source device name; "" = default monitor (Linux), "none" = mic only
+	SpeakerThreshold   float64 `toml:"speaker_threshold"`   // cosine similarity threshold for a confident speaker match
+	MaxSpeechDuration  float64 `toml:"max_speech_duration"` // seconds
+	MinSilenceDuration float64 `toml:"min_silence_duration"`
+	// MinSpeechLevelDB drops utterances quieter than this (RMS dBFS)
+	// before transcription: room noise the speech detector mistakes for
+	// speech, which the model fills with invented words. 0 keeps all.
+	MinSpeechLevelDB float64 `toml:"min_speech_level_db"`
+	// MicLevelMarginDB drops mic utterances more than this many dB below
+	// the user's typical level on their own microphone (background
+	// sounds, people further away). 0 turns it off.
+	MicLevelMarginDB float64 `toml:"mic_level_margin_db"` // seconds
+	AutoSave         bool    `toml:"auto_save"`           // save session on stop
+	AutoDetect       bool    `toml:"auto_detect"`         // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
@@ -227,6 +235,8 @@ func DefaultConfig() *Config {
 			SpeakerThreshold:     0.65,
 			MaxSpeechDuration:    30.0,
 			MinSilenceDuration:   0.5,
+			MinSpeechLevelDB:     -50,
+			MicLevelMarginDB:     20,
 			AutoSave:             true,
 			AutoDetect:           true,
 			SpeakerModel:         "auto",

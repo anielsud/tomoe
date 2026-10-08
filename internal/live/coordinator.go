@@ -67,6 +67,15 @@ type Config struct {
 	// a speaker label is based on. 0 means the defaults, 0.5 and 30.
 	MinSilenceDuration float64
 	MaxSpeechDuration  float64
+	// MinSpeechLevelDB drops an utterance whose audio is quieter than this
+	// (RMS, dBFS) before it's transcribed: the speech detector triggers
+	// on room noise near the noise floor and the model then invents words
+	// for it ("Yeah.", "Goodbye"). 0 keeps every utterance.
+	MinSpeechLevelDB float64
+	// MicLevelMarginDB drops mic utterances more than this many dB below
+	// the mic's typical (median) level: the user's own voice is loud on
+	// their microphone; faint speech is background. 0 turns it off.
+	MicLevelMarginDB float64
 
 	// ProbePrefixes, for measurement only, also labels each utterance
 	// from just its first N seconds for every N listed that's shorter
@@ -129,6 +138,8 @@ type Stats struct {
 
 // Coordinator manages one or two live transcription pipelines (mic + monitor).
 type Coordinator struct {
+	levelMu    sync.Mutex
+	micLevels  []float64 // recent mic utterance levels (see tooQuiet)
 	cfg        Config
 	segmentCh  chan session.Segment
 	activityCh chan struct{} // signalled when VAD detects ongoing speech

@@ -115,7 +115,9 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64) error {
 
 	fmt.Printf("Replaying %q (%s of audio)...\n", sess.Title, formatDuration(float64(max(len(mic), len(monitor)))/16000))
 	for _, run := range runs {
-		if run.segments, err = live.Replay(pipe.liveConfig(run.tuning, run.twoPass), mic, monitor); err != nil {
+		lc := pipe.liveConfig(run.tuning, run.twoPass)
+		lc.MinSpeechLevelDB, lc.MicLevelMarginDB = cfg.Meeting.MinSpeechLevelDB, cfg.Meeting.MicLevelMarginDB
+		if run.segments, err = live.Replay(lc, mic, monitor); err != nil {
 			return fmt.Errorf("%s run: %w", run.name, err)
 		}
 		sort.SliceStable(run.segments, func(i, j int) bool { return run.segments[i].StartTime < run.segments[j].StartTime })

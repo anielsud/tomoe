@@ -582,6 +582,8 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		Embedder:           meetingEmbedder(a.cfg, status, bundle.embedders, lang),
 		MinSilenceDuration: a.cfg.Meeting.MinSilenceDuration,
 		MaxSpeechDuration:  a.cfg.Meeting.MaxSpeechDuration,
+		MinSpeechLevelDB:   a.cfg.Meeting.MinSpeechLevelDB,
+		MicLevelMarginDB:   a.cfg.Meeting.MicLevelMarginDB,
 		Tracker:            a.tracker,
 		VADPath:            status.VADPath,
 		SegmentBufferSize:  64,

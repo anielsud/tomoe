@@ -26,6 +26,19 @@ function speakerClass(speaker: string): string {
   return 'other';
 }
 
+// Consecutive lines by one speaker shown as one paragraph: the speech
+// detector ends a line at every short pause, so one turn is often several
+// lines. Mirrors session.Paragraphs on the Go side.
+export function groupParagraphs(segments: Segment[]): Segment[][] {
+  const groups: Segment[][] = [];
+  for (const seg of segments) {
+    const last = groups[groups.length - 1];
+    if (last && last[0].speaker === seg.speaker) last.push(seg);
+    else groups.push([seg]);
+  }
+  return groups;
+}
+
 export default function TranscriptPane({ segments, isRecording, onRename }: Props) {
   const endRef = useRef<HTMLDivElement>(null);
   const [renaming, setRenaming] = useState<{ id: string; label: string; name: string } | null>(null);
@@ -55,8 +68,10 @@ export default function TranscriptPane({ segments, isRecording, onRename }: Prop
 
   return (
     <div className="transcript-pane">
-      {segments.map((seg) => (
-        <div key={seg.id} className={`segment ${seg.status ? 'segment-pending' : ''}`}>
+      {groupParagraphs(segments).map((group) => {
+        const seg = group[0];
+        return (
+        <div key={seg.id} className="segment">
           <span className="timestamp">[{formatTime(seg.start_time)}]</span>
           {renaming?.id === seg.id ? (
             <input
@@ -86,19 +101,24 @@ export default function TranscriptPane({ segments, isRecording, onRename }: Prop
           {seg.language && seg.language !== 'en' && (
             <span className="lang-badge">{seg.language.toUpperCase()}</span>
           )}
-          <span className="text">{seg.text}</span>
-          {seg.status === 'live' && (
-            <span className="refining-indicator" title="Still speaking — this line will keep growing">
-              listening…
+          {group.map((line) => (
+            <span key={line.id} className={line.status ? 'segment-pending' : undefined}>
+              <span className="text">{line.text}</span>
+              {line.status === 'live' && (
+                <span className="refining-indicator" title="Still speaking — this line will keep growing">
+                  listening…
+                </span>
+              )}
+              {line.status === 'pending' && (
+                <span className="refining-indicator" title="Still refining this line for accuracy">
+                  refining…
+                </span>
+              )}{' '}
             </span>
-          )}
-          {seg.status === 'pending' && (
-            <span className="refining-indicator" title="Still refining this line for accuracy">
-              refining…
-            </span>
-          )}
+          ))}
         </div>
-      ))}
+        );
+      })}
       <div ref={endRef} />
     </div>
   );

@@ -180,3 +180,71 @@ func TestTranscribeSinglePass_EmitsFinalSegment(t *testing.T) {
 		t.Errorf("MonitorSegments = %d, want 1", got)
 	}
 }
+
+// tone is n samples of a square wave at amplitude a (RMS a).
+func tone(n int, a float32) []float32 {
+	s := make([]float32, n)
+	for i := range s {
+		if i%2 == 0 {
+			s[i] = a
+		} else {
+			s[i] = -a
+		}
+	}
+	return s
+}
+
+func TestHandleSegment_NoiseGateDropsQuietUtterance(t *testing.T) {
+	c := New(Config{Engine: &mockEngine{result: &transcribe.Result{Text: "Yeah."}}, MinSpeechLevelDB: -50})
+	live := liveState{shown: "yeah", id: "seg-7", speaker: "You"}
+	// -60 dBFS: room noise.
+	if !c.dropNoise(SourceMic, tone(8000, 0.001), &mockStreamingSession{}, &live) {
+		t.Fatal("noise not dropped")
+	}
+
+	update := <-c.segmentUpdateCh
+	if update.ID != "seg-7" || update.Status != session.StatusRemoved {
+		t.Errorf("update = %+v, want seg-7 removed", update)
+	}
+	receiveNone(t, c.segmentCh, "segment for noise")
+	if len(c.refineCh) != 0 {
+		t.Errorf("noise was queued for transcription")
+	}
+	if live.id != "" {
+		t.Errorf("live state not reset")
+	}
+}
+
+func TestHandleSegment_NoiseGateKeepsSpeech(t *testing.T) {
+	c := New(Config{Engine: &mockEngine{result: &transcribe.Result{Text: "hello"}}, MinSpeechLevelDB: -50})
+	var live liveState
+	// -20 dBFS: speech.
+	if c.dropNoise(SourceMic, tone(8000, 0.1), nil, &live) {
+		t.Fatal("speech dropped")
+	}
+	c.handleSegment(SourceMic, tone(8000, 0.1), nil, &live)
+	if seg := <-c.segmentCh; seg.Text != "hello" {
+		t.Errorf("speech dropped or changed: %+v", seg)
+	}
+}
+
+func TestTooQuietMicRelativeToUser(t *testing.T) {
+	c := New(Config{Engine: &mockEngine{}, MinSpeechLevelDB: -50, MicLevelMarginDB: 20})
+	for i := 0; i < 10; i++ {
+		if c.tooQuiet(SourceMic, -18) {
+			t.Fatal("the user's own level dropped")
+		}
+	}
+	if !c.tooQuiet(SourceMic, -45) {
+		t.Error("faint mic speech 27 dB below the user kept")
+	}
+	if c.tooQuiet(SourceMic, -30) {
+		t.Error("mic speech 12 dB below the user dropped")
+	}
+	if c.tooQuiet(SourceMonitor, -45) {
+		t.Error("the margin applied to remote audio")
+	}
+	if !c.tooQuiet(SourceMonitor, -55) {
+		t.Error("remote audio below the floor kept")
+	}
+}

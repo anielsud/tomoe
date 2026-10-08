@@ -16,6 +16,9 @@ function statusRank(status?: string): number {
 // session.Session.UpsertSegment on the Go side.
 export function upsertSegment(prev: Segment[], seg: Segment): Segment[] {
   const i = prev.findIndex(s => s.id === seg.id);
+  // "removed": the line's audio turned out to be noise (see the Go side's
+  // StatusRemoved).
+  if (seg.status === 'removed') return i >= 0 ? [...prev.slice(0, i), ...prev.slice(i + 1)] : prev;
   if (i >= 0) {
     if (statusRank(prev[i].status) > statusRank(seg.status)) return prev;
     const next = prev.slice();
