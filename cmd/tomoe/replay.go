@@ -19,6 +19,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
 )
 
 // sessionReplayCmd re-runs a saved session's recorded audio through the live
@@ -55,6 +56,13 @@ was heard live, but both runs hear the same audio.`,
 		o.threads, _ = cmd.Flags().GetInt("threads")
 		o.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
 		o.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
+		if cmd.Flags().Changed("turn-mode") {
+			on, _ := cmd.Flags().GetBool("turn-mode")
+			o.turnMode = &on
+		}
+		o.turnMax, _ = cmd.Flags().GetFloat64("turn-max")
+		o.turnGap, _ = cmd.Flags().GetFloat64("turn-gap")
+		o.turnSignals, _ = cmd.Flags().GetString("turn-signals")
 		return runSessionReplay(args[0], out, mainThreshold, o)
 	},
 }
@@ -79,6 +87,14 @@ type replayOptions struct {
 	threads    int
 	// minSilence and maxSpeech are the utterance bounds (0: the config's).
 	minSilence, maxSpeech float64
+	// turnMode overrides the config's turn_mode when set; turnMax and
+	// turnGap its limits (0: the config's). turnSignals is which
+	// speaker-change signals end a turn, rebuilt from the session's saved
+	// diarization windows and meeting-window looks: "diarizer", "teams",
+	// "both" (as the app had them) or "none".
+	turnMode         *bool
+	turnMax, turnGap float64
+	turnSignals      string
 }
 
 func init() {
@@ -92,6 +108,10 @@ func init() {
 	sessionReplayCmd.Flags().Bool("single-pass", false, "Turn two-pass off for this replay, so only the transcription model writes text")
 	sessionReplayCmd.Flags().Float64("min-silence", 0, "Pause (s) that ends an utterance (default: your min_silence_duration)")
 	sessionReplayCmd.Flags().Float64("max-speech", 0, "Longest utterance (s) before it's cut (default: your max_speech_duration)")
+	sessionReplayCmd.Flags().Bool("turn-mode", false, "Decode whole speaker turns, or each utterance with =false (default: your turn_mode)")
+	sessionReplayCmd.Flags().Float64("turn-max", 0, "Turn mode: longest line in seconds (default: your turn_max_seconds)")
+	sessionReplayCmd.Flags().Float64("turn-gap", 0, "Turn mode: a pause longer than this many seconds ends a turn (default: your turn_max_gap)")
+	sessionReplayCmd.Flags().String("turn-signals", "both", "Turn mode: speaker-change signals that end a turn, as the app had them: diarizer, teams, both or none")
 	sessionReplayCmd.Flags().Int("threads", 0, "CPU threads for the transcription model (default: the engine's)")
 	sessionCmd.AddCommand(sessionReplayCmd)
 }
@@ -183,10 +203,23 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 	pipe.engine = timed
 
 	fmt.Printf("Replaying %q (%s of audio)...\n", sess.Title, formatDuration(float64(max(len(mic), len(monitor)))/16000))
+	signals := speakerChangeSignals(sess, o.turnSignals)
 	for _, run := range runs {
 		lc := pipe.liveConfig(run.tuning, run.twoPass)
 		lc.MinSpeechLevelDB, lc.MicLevelMarginDB = cfg.Meeting.MinSpeechLevelDB, cfg.Meeting.MicLevelMarginDB
 		lc.TurnMode, lc.TurnMaxSeconds, lc.TurnMaxGap = cfg.Meeting.TurnMode, cfg.Meeting.TurnMaxSeconds, cfg.Meeting.TurnMaxGap
+		if o.turnMode != nil {
+			lc.TurnMode = *o.turnMode
+		}
+		if o.turnMax > 0 {
+			lc.TurnMaxSeconds = o.turnMax
+		}
+		if o.turnGap > 0 {
+			lc.TurnMaxGap = o.turnGap
+		}
+		if lc.TurnMode {
+			lc.SpeakerChanged = signals
+		}
 		lc.MinSilenceDuration, lc.MaxSpeechDuration = cfg.Meeting.MinSilenceDuration, cfg.Meeting.MaxSpeechDuration
 		if o.minSilence > 0 {
 			lc.MinSilenceDuration = o.minSilence
@@ -450,4 +483,40 @@ func (t *timedEngine) TranscribeDirect(samples []float32) (*transcribe.Result, e
 	t.secs += time.Since(began).Seconds()
 	t.n++
 	return r, err
+}
+
+// speakerChangeSignals is live.Config.SpeakerChanged as the app would have
+// had it for sess: new-voice times from its saved diarization windows
+// and/or the moments the meeting window's highlighted name changed.
+func speakerChangeSignals(sess *session.Session, which string) func(from, to float64) bool {
+	var times []float64
+	dir := filepath.Join(config.SessionDir(), sess.ID)
+	if which == "diarizer" || which == "both" {
+		if prep, info, err := loadFingerprints(dir); err == nil {
+			for _, t := range prep.NewVoiceTimes() {
+				times = append(times, t+info.Offset)
+			}
+		}
+	}
+	if which == "teams" || which == "both" {
+		if looks, err := videohint.ReadLooks(dir); err == nil {
+			last := ""
+			for _, l := range looks {
+				name, _ := l.Accepted()
+				if name == "" {
+					continue
+				}
+				if last != "" && name != last {
+					times = append(times, l.Time.Sub(sess.CreatedAt).Seconds())
+				}
+				last = name
+			}
+		}
+	}
+	sort.Float64s(times)
+	fmt.Printf("Turn signals (%s): %d\n", which, len(times))
+	return func(from, to float64) bool {
+		i := sort.SearchFloat64s(times, from)
+		return i < len(times) && times[i] <= to
+	}
 }

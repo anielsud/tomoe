@@ -467,3 +467,22 @@ func newVoiceAtEnd(frames [][]int8, windowSecs float64) bool {
 	}
 	return false
 }
+
+// NewVoiceTimes are the times (seconds of the diarized audio) at which a
+// window showed a voice starting that wasn't talking just before: the same
+// signal a Stream gives live through StreamConfig.OnSpeakerChange, from
+// saved windows, for replaying a meeting as the app saw it.
+func (p *Prepared) NewVoiceTimes() []float64 {
+	m := p.Meta
+	if m.SampleRate == 0 {
+		return nil
+	}
+	windowSecs := float64(m.WindowSize) / float64(m.SampleRate)
+	var out []float64
+	for c, frames := range p.Labels {
+		if frames != nil && newVoiceAtEnd(frames, windowSecs) {
+			out = append(out, float64(c*m.WindowShift+m.WindowSize)/float64(m.SampleRate))
+		}
+	}
+	return out
+}

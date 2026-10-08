@@ -183,4 +183,17 @@ hallucinated "Yeah.").
 tomoe textdiff <session-id> --ref meeting.txt
 tomoe session replay <session-id> --only-current --progress --asr-model <parakeet-dir> --out replay-v2
 tomoe textdiff replay-v2/current.json --ref meeting.txt
+
+# Bake-off: another model family (whisper, canary, moonshine, qwen3,
+# funasr-nano, cohere, transducer); --single-pass so only it writes text
+tomoe session replay <session-id> --only-current --single-pass --asr-kind whisper --asr-model <model-dir> --threads 4 --out replay-whisper
+
+# Speaker accuracy with estimated word timings (models without timestamps)
+tomoe tune <session-id> --ref meeting.txt --segments replay-whisper/current.json --spread-words
+
+# Utterance cuts and turn mode; --turn-signals rebuilds the speaker-change
+# signals the app had (diarizer, teams, both, none) from the saved session
+tomoe session replay <session-id> --only-current --min-silence 1.0 --max-speech 10
+tomoe session replay <session-id> --only-current --turn-mode=false
+tomoe session replay <session-id> --only-current --turn-gap 3 --turn-signals none
 ```
