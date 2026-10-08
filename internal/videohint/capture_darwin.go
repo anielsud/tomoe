@@ -23,20 +23,20 @@ func captureWindow(source string) (fr *frame, platform meeting.Platform, window 
 	case SourceNone:
 		return nil, "", "", StageWindowNotFound, "video hints are off"
 	case SourceAuto:
+		// Zoom's call window exists only during a call, so it comes first;
+		// any Teams window (a chat, the calendar) can pass for a candidate
+		// until its frame is checked for call chrome.
+		ws, _ := teamsvideo.ListWindowsWithFloating()
+		if zw, ok := pickZoomCall(ws, false); ok {
+			return captureZoom(zw)
+		}
 		rec, f, why, err := pickCallWindow()
 		if err != nil {
-			// No Teams call: a Zoom call, if one is on screen.
-			ws, _ := teamsvideo.ListWindowsWithFloating()
-			zw, ok := pickZoomCall(ws)
-			if !ok {
-				return nil, "", "", StageWindowNotFound, "no Teams or Zoom meeting window on screen: " + why
+			// No Teams window: a minimized Zoom call's thumbnail, if any.
+			if zw, ok := pickZoomCall(ws, true); ok {
+				return captureZoom(zw)
 			}
-			zf, err := teamsvideo.CaptureWindowRGB(zw.ID)
-			window = zw.Owner + " — " + zw.Title
-			if err != nil {
-				return nil, meeting.PlatformZoom, window, StageCaptureFailed, err.Error()
-			}
-			return &frame{width: zf.Width, height: zf.Height, pix: zf.Pix, windowID: int(zw.ID), scale: captureScale(zf.Width, zw.Width), pid: zw.OwnerPID}, meeting.PlatformZoom, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", zf.Width, zf.Height)
+			return nil, "", "", StageWindowNotFound, "no Teams or Zoom meeting window on screen: " + why
 		}
 		platform, window = meeting.PlatformTeams, "Microsoft Teams — "+rec.Title
 		if f == nil {
@@ -202,19 +202,27 @@ func pickZoomWindow(ws []teamsvideo.WindowInfo, owner string) (teamsvideo.Window
 const zoomThumbMaxWidth = 400
 
 // pickZoomCall finds a Zoom call among all windows without being told
-// which app to watch: the call window, or the floating thumbnail of a
-// minimized one (untitled and small, unlike Zoom's other untitled
-// windows).
-func pickZoomCall(ws []teamsvideo.WindowInfo) (teamsvideo.WindowInfo, bool) {
+// which app to watch: the call window, or with thumb the floating
+// thumbnail of a minimized one (untitled and small, unlike Zoom's other
+// untitled windows).
+func pickZoomCall(ws []teamsvideo.WindowInfo, thumb bool) (teamsvideo.WindowInfo, bool) {
 	for _, w := range ws {
-		if strings.Contains(strings.ToLower(w.Owner), "zoom") && w.Title == zoomMeetingWindow {
-			return w, true
+		if !strings.Contains(strings.ToLower(w.Owner), "zoom") {
+			continue
 		}
-	}
-	for _, w := range ws {
-		if strings.Contains(strings.ToLower(w.Owner), "zoom") && w.Title == "" && w.Width <= zoomThumbMaxWidth {
+		if w.Title == zoomMeetingWindow || (thumb && w.Title == "" && w.Width <= zoomThumbMaxWidth) {
 			return w, true
 		}
 	}
 	return teamsvideo.WindowInfo{}, false
+}
+
+// captureZoom captures Zoom window zw.
+func captureZoom(zw teamsvideo.WindowInfo) (*frame, meeting.Platform, string, EventStage, string) {
+	window := zw.Owner + " — " + zw.Title
+	f, err := teamsvideo.CaptureWindowRGB(zw.ID)
+	if err != nil {
+		return nil, meeting.PlatformZoom, window, StageCaptureFailed, err.Error()
+	}
+	return &frame{width: f.Width, height: f.Height, pix: f.Pix, windowID: int(zw.ID), scale: captureScale(f.Width, zw.Width), pid: zw.OwnerPID}, meeting.PlatformZoom, window, StageFrameCaptured, fmt.Sprintf("captured %dx%d", f.Width, f.Height)
 }

@@ -522,7 +522,9 @@ as the speaker, so they cost no extra captures.
 - **Watched window:** never Zoom's home screen ("Zoom Workplace"), which is
   often its largest window.
 - **Automatic mode:** with the window setting on automatic (`""`), Zoom's
-  call window is watched whenever no Teams call is on screen.
+  call window is watched whenever it's on screen. It only exists during a
+  call, so it takes priority over any Teams window. A minimized Zoom call's
+  thumbnail is used only when no Teams window is open.
 
 **Cost.** Reading the tree takes about 25–30 ms, even with the 570-person
 participants panel open. Looks kept to one every 0.5 s.

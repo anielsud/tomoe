@@ -30,14 +30,16 @@ func TestPickZoomCall(t *testing.T) {
 	popup := teamsvideo.WindowInfo{ID: 4, Owner: "Zoom", Title: "", Width: 900}
 	other := teamsvideo.WindowInfo{ID: 5, Owner: "Notes", Title: "Zoom Meeting", Width: 800}
 	for _, c := range []struct {
-		ws   []teamsvideo.WindowInfo
-		want int
+		ws    []teamsvideo.WindowInfo
+		thumb bool
+		want  int
 	}{
-		{[]teamsvideo.WindowInfo{home, call, thumb}, 2},
-		{[]teamsvideo.WindowInfo{popup, home, thumb}, 3},
-		{[]teamsvideo.WindowInfo{popup, home, other}, 0},
+		{[]teamsvideo.WindowInfo{home, call, thumb}, false, 2},
+		{[]teamsvideo.WindowInfo{popup, home, thumb}, true, 3},
+		{[]teamsvideo.WindowInfo{popup, home, thumb}, false, 0},
+		{[]teamsvideo.WindowInfo{popup, home, other}, true, 0},
 	} {
-		w, ok := pickZoomCall(c.ws)
+		w, ok := pickZoomCall(c.ws, c.thumb)
 		if got := map[bool]int{true: int(w.ID)}[ok]; got != c.want {
 			t.Errorf("pickZoomCall(%v) = %d, want %d", c.ws, got, c.want)
 		}
