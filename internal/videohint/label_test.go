@@ -105,6 +105,13 @@ func TestCleanOCRName(t *testing.T) {
 		{"Daniel Stone", "Daniel Stone"}, // no noise word, unchanged
 		{"Privacy", "Privacy"},           // single word alone is never stripped
 		{"  Devin Dobrowolski Priv  ", "Devin Dobrowolski"},
+		// Teams' signal-bars icon in front of the label, read as text.
+		{"lAlex Kim", "Alex Kim"},
+		{"l Alex Kim", "Alex Kim"},
+		{"il Alex Kim", "Alex Kim"},
+		{".IlVoice isolation", "Voice isolation"},
+		{"Imogen Hale", "Imogen Hale"}, // a leading I is a letter, not the icon
+		{"Ilse Berg", "Ilse Berg"},
 	}
 	for _, c := range cases {
 		if got := cleanOCRName(c.raw); got != c.want {
@@ -123,6 +130,11 @@ func TestPlausibleName(t *testing.T) {
 		"Take control":                  false,
 		"E":                             false,
 		"-":                             false,
+		"ill":                           false, // signal bars on the self-view
+		".ll":                           false,
+		"Voice isolation":               false,
+		"Noise suppressed":              false,
+		"Iris":                          true,
 		"":                              false,
 	} {
 		if got := plausibleName(name); got != want {

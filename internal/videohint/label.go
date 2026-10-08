@@ -3,6 +3,7 @@ package videohint
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 	"unicode"
 )
@@ -108,11 +109,30 @@ var meetingToolbarWords = map[string]bool{
 	"share": true, "leave": true,
 }
 
+// signalBars is Teams' connection-strength icon read as text ("ill",
+// ".ll"): on the self-view, where there's no name, it's all the label
+// strip holds. barsPrefix is the same icon in front of a name or badge
+// ("lAlex Kim", "il Alex Kim", ".IlVoice isolation"): glyphs ending in
+// a lowercase one, then an optional space and a capital, so a name that
+// starts with I ("Imogen") is left alone.
+var (
+	signalBars = regexp.MustCompile(`^[.|lIi1!:']+$`)
+	barsPrefix = regexp.MustCompile(`^[.|lIi1!:']*[.|li1!:'] ?(\p{Lu})`)
+)
+
+// teamsBadges are status pills Teams shows in the label strip instead of
+// (or beside) a name, read whole.
+var teamsBadges = map[string]bool{"voice isolation": true, "noise suppressed": true, "noise suppression": true}
+
 // plausibleName rejects reads that can't be a person's name: fewer than
-// two letters ("E", "-", seen when a crop catches an icon), or two or more
+// two letters ("E", "-", seen when a crop catches an icon), the signal
+// bars icon alone or an audio badge (see signalBars, teamsBadges), or two or more
 // words of which most are toolbar labels (a first word cut short, "ake",
 // still counts as the toolbar's other words outnumber it).
 func plausibleName(name string) bool {
+	if signalBars.MatchString(name) || teamsBadges[strings.ToLower(strings.TrimSpace(name))] {
+		return false
+	}
 	letters := 0
 	for _, r := range name {
 		if unicode.IsLetter(r) {
@@ -148,7 +168,7 @@ var knownUINoiseWords = []string{"privacy", "muted", "mute", "recording", "live"
 // than one trailing word, and leaves a one-word read untouched (there's
 // nothing for it to "trail").
 func cleanOCRName(raw string) string {
-	trimmed := strings.TrimSpace(raw)
+	trimmed := barsPrefix.ReplaceAllString(strings.TrimSpace(raw), "$1")
 	words := strings.Fields(trimmed)
 	if len(words) < 2 {
 		return trimmed
