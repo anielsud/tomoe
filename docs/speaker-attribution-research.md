@@ -862,6 +862,75 @@ meetings with frequent hand-offs (B had 76 highlight cuts inside
 utterances). The fast 4-person call, whose reference is a hand-corrected
 third-party transcript, dips slightly.
 
+**Lines that still mix two people.** Each reference is placed on the
+recording at the offset `tune` found; the highlight's changes line up best
+at the same offsets. Each meeting-audio line then counts as mixed when a
+second reference speaker covers at least 1 s and 15% of it. The fast
+4-person call has no timed reference and isn't included.
+
+| Meeting | Mixed lines, before → after | Words in the wrong person's part, before → after |
+|---|---|---|
+| A | 21 → 19 | 5.2% → 2.2% |
+| B, fast group | 50 → 41 | 13.5% → 5.4% |
+| C | 21 → 18 | 6.3% → 2.2% |
+| D, briefing | 1 → 2 | 0.2% → 0.1% |
+| Total | 93 of 704 → 80 of 836 | 5.6% → 2.2% |
+
+The meeting-end split by diarization corrects some of these, so the
+remainder (2.2%) is an upper bound on what better word timing could win
+back.
+
+## Finding speaker changes from the spectrum alone (2026-10-08)
+
+Could a plain spectral test find speaker changes, without clustering?
+The test: compare the 1.5 s before and after each point (every 50 ms) and
+flag where they look like different sources. It used 12 MFCCs per 10 ms
+frame (c0 dropped, so loudness doesn't count), quieter frames left out,
+and the classic ΔBIC test (Chen & Gopalakrishnan, 1998) with a
+full-covariance Gaussian on each side. Peaks were at least 1 s apart.
+
+Scored on meeting B (37 min, 214 changes between remote speakers in
+Teams' timed transcript). "Found" is the share of real changes detected;
+"correct" is the share of detections that were real.
+
+| Signal | Detections | Found ±1 s | Correct ±1 s | Found ±2 s | Correct ±2 s |
+|---|---|---|---|---|---|
+| Diarizer new-voice (pyannote segmentation) | 142 | 39% | 53% | 55% | 68% |
+| Highlight change (0.5 s earlier) | 136 | 29% | 42% | 54% | 72% |
+| Both | 278 | 55% | 47% | 75% | 70% |
+| Spectral ΔBIC, top 1% | 52 | 7% | 27% | 16% | 52% |
+| Spectral ΔBIC, top 5% | 191 | 23% | 23% | 43% | 45% |
+| Spectral ΔBIC, top 20% | 539 | 54% | 21% | 75% | 36% |
+| Random guessing | | | 19% | | 39% |
+
+**The spectral test is barely better than chance.** On codec-compressed
+meeting audio, with turns often shorter than its windows, the spectrum
+changes as much within one voice (phonemes, pitch, laughter, the codec)
+as between voices. Classic ΔBIC was built for broadcast news, with long
+turns and clean audio. The learned segmentation model already in the
+pipeline is the version of this idea that works: it was trained to tell
+voices apart, not just spectra. Its new-voice signal and the highlight
+complement each other, together finding 75% of changes within 2 s.
+
+**Separating overlapping voices**, rather than just finding the changes:
+- Trained models exist: SepFormer (SpeechBrain), Conv-TasNet / DPRNN
+  (Asteroid), MossFormer2 (ClearerVoice-Studio), TF-GridNet (ESPnet), and
+  pyannote's joint diarization-and-separation model trained on real
+  meetings (AMI, "PixIT", 2024).
+- sherpa-onnx, which Tomoe runs on, has speech enhancement and music
+  separation but no speaker separation.
+- Most of these models are trained on synthetic two-person mixtures of
+  clean speech, are much heavier than the diarizer, and would be a domain
+  mismatch on codec audio.
+- Remote voices overlap for only 0.2–4% of remote speech, mostly under a
+  second, so separation isn't worth its cost here.
+
+**Cheaper next steps** for finding changes:
+- **Use the segmentation model's per-frame speaker activity** within each
+  window, not just "a new voice at the window's end".
+- **Compare speaker embeddings either side of a point** (the same ERes2Net
+  fingerprints used for clustering), rather than raw spectra.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time
