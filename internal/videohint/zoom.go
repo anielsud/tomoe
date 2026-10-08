@@ -32,11 +32,27 @@ type Tile struct {
 // spotlighted video without an audio link).
 var zoomTileDesc = regexp.MustCompile(`^(.+?), (?:(?:Computer|Telephone|Phone) audio (muted|unmuted)|No audio connected)(?:, Video (on|off))?`)
 
+// zoomChatDesc matches a chat message: "<sender>, <text>, 10:05 AM" (Zoom
+// puts a narrow no-break space before AM/PM).
+var zoomChatDesc = regexp.MustCompile(`(?s)^(.+?), (.+), (\d{1,2}:\d{2}[\s\x{202F}][AP]M)$`)
+
 // zoomShareDesc is the element showing a shared screen.
 const zoomShareDesc = "Share content"
 
+// ChatMessage is one message of the meeting chat as the app shows it.
+type ChatMessage struct {
+	Sender string `json:"sender"`
+	Text   string `json:"text"`
+	// At is the time the app shows (its own clock, minutes only); Seen is
+	// when it was first read, and Look the look that read it.
+	At   string    `json:"at"`
+	Seen time.Time `json:"seen"`
+	Look int       `json:"look"`
+}
+
 // zoomState is what the watcher remembers between Zoom looks.
 type zoomState struct {
+	chatSeen   map[string]bool
 	contentSig []uint8
 	contentAt  time.Time
 }
@@ -60,13 +76,14 @@ const zoomMeetingWindow = "Zoom Meeting"
 // zoomTiles finds the call window and its tiles among elems (in tree
 // order, each window followed by its contents).
 func zoomTiles(elems []axtree.Element) (win axtree.Rect, tiles []Tile, layout string, ok bool) {
-	win, tiles, layout, _, ok = zoomWindow(elems)
+	win, tiles, layout, _, _, ok = zoomWindow(elems)
 	return win, tiles, layout, ok
 }
 
 // zoomWindow reads everything a look uses from the call window: its box,
-// tiles, layout and the shared screen's box (nil when nothing is shared).
-func zoomWindow(elems []axtree.Element) (win axtree.Rect, tiles []Tile, layout string, share *axtree.Rect, ok bool) {
+// tiles, layout, chat messages (as visible in the chat panel) and the
+// shared screen's box (nil when nothing is shared).
+func zoomWindow(elems []axtree.Element) (win axtree.Rect, tiles []Tile, layout string, chat []ChatMessage, share *axtree.Rect, ok bool) {
 	// While the call window is minimized it isn't in the tree; an
 	// untitled window holding only the shared screen is.
 	want := zoomMeetingWindow
@@ -96,9 +113,15 @@ func zoomWindow(elems []axtree.Element) (win axtree.Rect, tiles []Tile, layout s
 		}
 		if m := zoomTileDesc.FindStringSubmatch(e.Description); m != nil && e.Rect.Width > 0 && e.Rect.Height > 0 {
 			tiles = append(tiles, Tile{Name: strings.TrimSpace(m[1]), Unmuted: m[2] == "unmuted", Video: m[3] == "on", Rect: e.Rect})
+			continue
+		}
+		if e.Role == "AXUnknown" {
+			if m := zoomChatDesc.FindStringSubmatch(e.Description); m != nil {
+				chat = append(chat, ChatMessage{Sender: strings.TrimSpace(m[1]), Text: m[2], At: strings.ReplaceAll(m[3], "\u202f", " ")})
+			}
 		}
 	}
-	return win, tiles, layout, share, ok
+	return win, tiles, layout, chat, share, ok
 }
 
 // hasZoomWindow reports whether elems include a window titled title.
@@ -131,8 +154,21 @@ func crop(pix []byte, width, x0, y0, x1, y1 int) []byte {
 	return out
 }
 
-// zoomContent keeps a picture of the shared screen when it changed enough.
-func (w *Watcher) zoomContent(l *Look, fr *frame, win axtree.Rect, share *axtree.Rect) {
+// zoomExtras records the chat messages not seen before and, when the
+// shared screen changed enough, a picture of it.
+func (w *Watcher) zoomExtras(l *Look, fr *frame, win axtree.Rect, chat []ChatMessage, share *axtree.Rect) {
+	if w.zoom.chatSeen == nil {
+		w.zoom.chatSeen = map[string]bool{}
+	}
+	for _, m := range chat {
+		key := m.Sender + "\x00" + m.Text + "\x00" + m.At
+		if w.zoom.chatSeen[key] {
+			continue
+		}
+		w.zoom.chatSeen[key] = true
+		m.Seen, m.Look = l.Time, l.ID
+		l.Chat = append(l.Chat, m)
+	}
 	if share == nil || win.Width <= 0 || win.Height <= 0 {
 		return
 	}
@@ -209,15 +245,15 @@ func (w *Watcher) analyzeZoom(l *Look, fr *frame) {
 		l.Stage, l.Detail = StageNoTiles, "couldn't read Zoom's accessibility tree: "+err.Error()
 		return
 	}
-	win, tiles, layout, share, ok := zoomWindow(elems)
+	win, tiles, layout, chat, share, ok := zoomWindow(elems)
 	l.Layout = layout
 	if ok {
-		w.zoomContent(l, fr, win, share)
+		w.zoomExtras(l, fr, win, chat, share)
 	}
 	if !ok || len(tiles) == 0 || win.Width <= 0 {
 		l.Stage, l.Detail = StageNoTiles, "no participant tiles in Zoom's call window"
 		if ok && share != nil && len(tiles) == 0 {
-			l.Detail = "Zoom's call window is minimized: only the shared screen is shown, so no speaker"
+			l.Detail = "Zoom's call window is minimized: only the shared screen is shown, so no speaker or chat"
 		}
 		return
 	}

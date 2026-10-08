@@ -94,11 +94,12 @@ func TestAnalyzeZoomSpeakerViewAndNone(t *testing.T) {
 	}
 }
 
-func TestAnalyzeZoomContentSpotlight(t *testing.T) {
+func TestAnalyzeZoomChatContentSpotlight(t *testing.T) {
 	defer func(r func(int) ([]axtree.Element, error)) { readTree = r }(readTree)
 	share := axtree.Element{Role: "AXUnknown", Description: "Share content", Rect: axtree.Rect{X: 1000, Y: 50, Width: 150, Height: 100}}
+	msg := axtree.Element{Role: "AXUnknown", Description: "Ana Lopez, Thanks, all!, 10:05 AM"}
 	readTree = func(int) ([]axtree.Element, error) {
-		return zoomTree(share, tile("Room One, No audio connected", 1150, 60)), nil
+		return zoomTree(share, tile("Room One, No audio connected", 1150, 60), msg), nil
 	}
 	w := &Watcher{}
 	fr := zoomFrame(10, 10, 100, 80) // something on the shared screen
@@ -109,15 +110,18 @@ func TestAnalyzeZoomContentSpotlight(t *testing.T) {
 	if l.Stage != StageSpeakerView || l.Name != "Room One" {
 		t.Errorf("spotlight: got %s %q", l.Stage, l.Name)
 	}
+	if len(l.Chat) != 1 || l.Chat[0].Sender != "Ana Lopez" || l.Chat[0].Text != "Thanks, all!" || l.Chat[0].At != "10:05 AM" || l.Chat[0].Look != 1 {
+		t.Errorf("chat: %+v", l.Chat)
+	}
 	if len(l.Content) == 0 || l.ContentRect == nil {
 		t.Fatal("first shared screen not kept")
 	}
 
-	// Same screen, later: nothing new.
+	// Same screen, same message, later: nothing new.
 	l = Look{ID: 2, Time: start.Add(10 * time.Second)}
 	w.analyzeZoom(&l, fr)
-	if len(l.Content) != 0 {
-		t.Errorf("repeat: content %d bytes", len(l.Content))
+	if len(l.Chat) != 0 || len(l.Content) != 0 {
+		t.Errorf("repeat: chat %d, content %d bytes", len(l.Chat), len(l.Content))
 	}
 
 	// A new slide is kept, but not within contentGap of the last one.

@@ -502,24 +502,23 @@ of a 3-pixel band around it is that green. On the first frame checked, the
 active tile scored 0.33–0.45 and every other tile 0.00. The cutoff is 0.15.
 Speaker view and spotlight show a single tile, which is the speaker.
 
-**Shared screens.** These come from the same tree read and frame as the
-speaker, so they cost no extra captures. The shared screen is cropped out of
-the frame and saved as `content/<look>.jpg` when it changes. The change has
-to be more than 6 (mean brightness, 0–255), and saves are at least 3 s apart.
-
-**Chat and participants aren't captured.** Both need a Zoom panel to be open,
-and even then only the rows on screen are in the tree. Reading them fully
-would mean opening and scrolling the user's panels. A working chat reader
-(it writes `chat.jsonl` while the panel is open) is set aside on the branch
-`zoom-chat`.
+**Chat and shared screens.** Both are read from the same tree read and frame
+as the speaker, so they cost no extra captures.
+- New chat messages go to the session's `chat.jsonl`: sender, text, Zoom's
+  time, and when Tomoe first saw them.
+- The shared screen is cropped out of the frame and saved as
+  `content/<look>.jpg` when it changes. The change has to be more than 6
+  (mean brightness, 0–255), and saves are at least 3 s apart.
+- Only messages on screen are in the tree. A closed chat panel gives
+  nothing, and messages that scroll past unseen are missed.
 
 **Window states:**
 - **Covered by other windows:** Zoom keeps repainting, unlike Teams.
-  Speaker naming and slides keep working.
+  Speaker, chat and slides all keep working.
 - **Minimized:** the call window leaves the tree and the window list.
   Zoom shows only a 240×135 floating thumbnail of the shared screen. Tomoe
   watches that thumbnail (small slides are still a record) and reports no
-  speaker.
+  speaker or chat.
 - **Watched window:** never Zoom's home screen ("Zoom Workplace"), which is
   often its largest window.
 - **Automatic mode:** with the window setting on automatic (`""`), Zoom's
@@ -538,7 +537,9 @@ already has for pasting. Without it, looks report `no_tiles` and say why.
 - **Rules for other apps.** Meet and Webex windows can be watched and their
   frames collected, but nothing is read from them until each has a rule.
   Their accessibility trees haven't been looked at. For Zoom, see above:
-  - chat and participants, which need panels opened and scrolled;
+  - chat history that was never on screen;
+  - the full participant list (both would need Tomoe to scroll Zoom's panels);
+  - chat reactions and threads;
   - trimming the letterbox and toolbar from saved slides.
 - **Tuned once.** The vote thresholds and the ring lag barely matter
   (one 82-minute, 5-speaker meeting; see speaker-attribution-research.md),
