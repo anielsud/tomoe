@@ -121,8 +121,13 @@ type MeetingConfig struct {
 	// with whoever was talking. Needs video hints (macOS). false restores
 	// the previous behavior (lines only end at pauses).
 	SplitAtHighlight bool `toml:"split_at_highlight"`
-	AutoSave         bool `toml:"auto_save"`   // save session on stop
-	AutoDetect       bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	// HighlightShortLines gives a short meeting-audio line (1.5 s or less)
+	// to the person the meeting window's highlight showed for all of it,
+	// rather than whoever its little audio sounds most like. false
+	// restores the previous behavior.
+	HighlightShortLines bool `toml:"highlight_short_lines"`
+	AutoSave            bool `toml:"auto_save"`   // save session on stop
+	AutoDetect          bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
@@ -273,6 +278,7 @@ func DefaultConfig() *Config {
 			DecodePad:            0.25,
 			TurnInterjection:     1,
 			SplitAtHighlight:     true,
+			HighlightShortLines:  true,
 			AutoSave:             true,
 			AutoDetect:           true,
 			SpeakerModel:         "auto",

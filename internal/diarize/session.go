@@ -37,7 +37,9 @@ type SessionDiarizer struct {
 	// minWords is MeetingConfig.MinSpeakerWords, applied to the final
 	// labels.
 	minWords int
-	opts     SessionOptions
+	// shortLines: name short lines from the highlight (ShortLineLabel).
+	shortLines bool
+	opts       SessionOptions
 
 	// Set on the pipeline goroutine's first window: the session time the
 	// stream's audio starts at.
@@ -80,7 +82,7 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	if err != nil {
 		return nil, err
 	}
-	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
+	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, shortLines: m.HighlightShortLines, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
 	if opts.OnSpeakerChange != nil {
 		sc.OnSpeakerChange = func(at float64) { opts.OnSpeakerChange(at + d.offset) }
@@ -154,6 +156,9 @@ func (d *SessionDiarizer) relabelLocked() []session.Segment {
 			continue
 		}
 		label := labels[assigned[i]]
+		if l, ok := d.shortLineLabelLocked(*seg); ok {
+			label = l
+		}
 		live := seg.LiveLabel()
 		if liveTime[live] == nil {
 			liveTime[live] = map[string]float64{}
@@ -190,6 +195,9 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 	probe := []session.Segment{*seg}
 	if assigned, labels := session.DiarizationLabels(probe, d.timeline.Turns, d.labelsLocked(d.timeline.Through+d.offset)); assigned[0] >= 0 && seg.EndTime <= d.timeline.Through+d.offset {
 		seg.LiveSpeaker, seg.Speaker = seg.LiveLabel(), labels[assigned[0]]
+		if l, ok := d.shortLineLabelLocked(*seg); ok {
+			seg.Speaker = l
+		}
 		return
 	}
 	if !session.Diarizable(*seg) {
@@ -264,6 +272,22 @@ func (d *SessionDiarizer) speakerNamedLocked(name string) (int, bool) {
 		}
 	}
 	return found, n == 1
+}
+
+// shortLineLabelLocked is ShortLineLabel, when the setting is on.
+func (d *SessionDiarizer) shortLineLabelLocked(seg session.Segment) (string, bool) {
+	if !d.shortLines {
+		return "", false
+	}
+	return ShortLineLabel(seg, d.hints, d.labelNamedLocked)
+}
+
+// labelNamedLocked is the label of the one timeline speaker named name.
+func (d *SessionDiarizer) labelNamedLocked(name string) (string, bool) {
+	if k, ok := d.speakerNamedLocked(name); ok {
+		return d.labelFor(k), true
+	}
+	return "", false
 }
 
 func (d *SessionDiarizer) isRenamedLabel(label string) bool {
@@ -364,6 +388,9 @@ func (d *SessionDiarizer) Finish(dir string) error {
 		d.relabelLocked()
 	}
 	d.settleProvisionalLocked(tl.Turns, labels)
+	if d.shortLines {
+		NameShortLines(d.sess.Segments, d.hints, d.labelNamedLocked)
+	}
 	session.AbsorbSmallSpeakers(d.sess.Segments, d.minWords, d.isRenamedLabel)
 	id := d.sess.ID
 	d.lock.Unlock()
