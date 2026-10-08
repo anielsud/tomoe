@@ -63,16 +63,29 @@ type Status struct {
 	EnglishStreamingDecoderPath string
 	EnglishStreamingJoinerPath  string
 	EnglishStreamingTokensPath  string
+	// EnglishStreamingModelType and EnglishStreamingName describe the
+	// configured live model (see LiveModels).
+	EnglishStreamingModelType string
+	EnglishStreamingName      string
 }
 
 // Manager handles model download, extraction, and verification.
 type Manager struct {
 	modelDir string
+	live     LiveModel
 }
 
-// NewManager creates a Manager for the given model directory.
+// NewManager creates a Manager for the given model directory, with the
+// default live model (see WithLiveModel).
 func NewManager(modelDir string) *Manager {
-	return &Manager{modelDir: modelDir}
+	return &Manager{modelDir: modelDir, live: ResolveLiveModel("")}
+}
+
+// WithLiveModel makes the manager check and download the live model id
+// (the live_model setting) as its English streaming model.
+func (m *Manager) WithLiveModel(id string) *Manager {
+	m.live = ResolveLiveModel(id)
+	return m
 }
 
 // ModelDir returns the model storage directory.
@@ -85,7 +98,7 @@ func (m *Manager) Check() *Status {
 	parakeetDir := filepath.Join(m.modelDir, ParakeetSubdir)
 	whisperDir := filepath.Join(m.modelDir, WhisperTinySubdir)
 	bengaliDir := filepath.Join(m.modelDir, BengaliSubdir)
-	englishStreamingDir := filepath.Join(m.modelDir, EnglishStreamingSubdir)
+	englishStreamingDir := filepath.Join(m.modelDir, m.live.Subdir)
 
 	s := &Status{
 		ModelDir:                    m.modelDir,
@@ -102,10 +115,12 @@ func (m *Manager) Check() *Status {
 		BengaliDecoderPath:          filepath.Join(bengaliDir, bengaliDecoderFile),
 		BengaliJoinerPath:           filepath.Join(bengaliDir, bengaliJoinerFile),
 		BengaliTokensPath:           filepath.Join(bengaliDir, bengaliTokensFile),
-		EnglishStreamingEncoderPath: filepath.Join(englishStreamingDir, englishStreamingEncoderFile),
-		EnglishStreamingDecoderPath: filepath.Join(englishStreamingDir, englishStreamingDecoderFile),
-		EnglishStreamingJoinerPath:  filepath.Join(englishStreamingDir, englishStreamingJoinerFile),
-		EnglishStreamingTokensPath:  filepath.Join(englishStreamingDir, englishStreamingTokensFile),
+		EnglishStreamingEncoderPath: filepath.Join(englishStreamingDir, m.live.Encoder),
+		EnglishStreamingDecoderPath: filepath.Join(englishStreamingDir, m.live.Decoder),
+		EnglishStreamingJoinerPath:  filepath.Join(englishStreamingDir, m.live.Joiner),
+		EnglishStreamingTokensPath:  filepath.Join(englishStreamingDir, m.live.Tokens),
+		EnglishStreamingModelType:   m.live.ModelType,
+		EnglishStreamingName:        m.live.Name,
 	}
 
 	files := []string{s.EncoderPath, s.DecoderPath, s.JoinerPath, s.TokensPath}
@@ -270,15 +285,17 @@ func (m *Manager) Download(force bool, onProgress ProgressFunc) error {
 // re-downloaded even if present.
 func (m *Manager) DownloadEnglishStreaming(force bool, onProgress ProgressFunc) error {
 	if !force && m.Check().EnglishStreamingReady {
-		fmt.Println("English streaming Zipformer model already present, skipping.")
+		fmt.Printf("Live model %s already present, skipping.\n", m.live.Name)
 		return nil
 	}
-	fmt.Println("Downloading English streaming Zipformer model (realtime transcription pass)...")
-	if err := m.downloadAndExtractArchive(EnglishStreamingArchiveURL, "English Streaming Zipformer", onProgress); err != nil {
-		return fmt.Errorf("downloading English streaming model: %w", err)
+	fmt.Printf("Downloading the live model, %s (realtime transcription pass)...\n", m.live.Name)
+	if err := m.downloadAndExtractArchive(m.live.URL, m.live.Name, onProgress); err != nil {
+		return fmt.Errorf("downloading the live model: %w", err)
 	}
-	pruneEnglishStreaming(filepath.Join(m.modelDir, EnglishStreamingSubdir))
-	fmt.Println("English streaming Zipformer model downloaded and extracted.")
+	if m.live.ID == LiveZipformer {
+		pruneEnglishStreaming(filepath.Join(m.modelDir, EnglishStreamingSubdir))
+	}
+	fmt.Printf("Live model %s downloaded and extracted.\n", m.live.Name)
 	return nil
 }
 

@@ -449,7 +449,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 		d.tracker.Reset()
 	}
 
-	st := models.NewManager(d.cfg.Transcription.ModelPath).Check()
+	st := models.NewManager(d.cfg.Transcription.ModelPath).WithLiveModel(d.cfg.Transcription.LiveModel).Check()
 	videohint.SetOCRModels(st.OCRModelPath(models.OCRDetector), st.OCRModelPath(models.OCRRecognizer))
 
 	// Screen-based speaker-name hints (macOS only; a no-op on Linux):

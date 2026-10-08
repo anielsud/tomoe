@@ -160,6 +160,46 @@ in the others); short turns don't move. Accepted for Cohere; running
 Parakeet alongside for real timings would recover it for about 2.4% more
 of meeting time.
 
+## Live model (pass 1) bake-off (2026-10-08)
+
+The live text, shown while people speak before the turn's final text
+replaces it, came from a streaming Zipformer trained on LibriSpeech (read
+audiobooks). It was all capitals, with no punctuation, and weak on
+conversation. The live text's job is real-time enrichment (pulling up
+relevant information mid-conversation), so words and names matter;
+formatting doesn't.
+
+**Method.** About 8 minutes of speech: the first 6 minutes of the fast
+group meeting and 4 minutes of a 1:1. Each candidate streamed the same
+utterances the app produced, in 100 ms chunks with 2 threads, one process
+at a time. Text was compared with the final text (Cohere) for the same
+stretch, ignoring case and punctuation. Cohere has its own errors, so
+lower is better but this isn't an error rate against the truth. Memory is
+the model's own, without the test audio.
+
+| Live candidate | Differs from final: group / 1:1 | Punctuation, capitals | CPU, % of audio | Memory |
+|---|---|---|---|---|
+| Streaming Zipformer, LibriSpeech (previous) | 41% / 52% | no (all capitals) | 8% | ~225 MB |
+| **NeMo streaming FastConformer, 480 ms** | **25% / 38%** | no (lowercase) | **7.6%** | ~500 MB |
+| Nemotron Speech Streaming 0.6B, 560 ms | 18% / 31% | yes | 22% | ~1.9 GB |
+| Nemotron 3.5 ASR Streaming 0.6B, 560 ms | 19% / 33% | yes | 22% | ~2.0 GB |
+| Parakeet unified 0.6B, streaming 560 ms | 28% / 44% | yes | 320% | ~1.9 GB |
+| Parakeet v2, re-decoding the utterance every 1 s | 15% / 26% | yes | 38% | ~1.9 GB |
+
+**What this shows:**
+- **FastConformer** removes about a third of the previous model's
+  differences for the same CPU, with a smaller download (105 MB vs
+  310 MB).
+- **Nemotron** is closer still, but costs about 1.9 GB and three times the
+  CPU on top of the final-text model.
+- **Parakeet unified** isn't usable for streaming on CPU.
+
+**In the app:** a 22-minute 1:1 replayed end to end, as the app runs it,
+gives drafts that differ from the final text on 27% of words (previous
+model: 42%), with no empty drafts. `live_model = "auto"` is now the
+FastConformer; `"zipformer-2023"` restores the previous model, and
+`"nemotron-560"` uses Nemotron.
+
 ## Vocabulary (hotwords) with Parakeet: blocked upstream
 
 sherpa-onnx can boost hotwords in Parakeet with `modified_beam_search`,

@@ -158,7 +158,7 @@ func (a *App) downloadModels(id string) (string, error) {
 	progress := func(step string, downloaded, total int64) {
 		wailsRuntime.EventsEmit(a.ctx, "tools:progress", ToolProgressEvent{ID: id, Message: step, Downloaded: downloaded, Total: total})
 	}
-	mgr := models.NewManager(cfg.Transcription.ModelPath)
+	mgr := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel)
 	if err := mgr.Download(false, progress); err != nil {
 		return "", err
 	}
@@ -217,7 +217,7 @@ func (a *App) reloadEngines(cfg *config.Config) ([]string, error) {
 // swapEngines builds and installs a new bundle and closes the old one.
 // Caller must have set a.reconfiguring, with nothing leasing the engines.
 func (a *App) swapEngines(cfg *config.Config) []string {
-	status := models.NewManager(cfg.Transcription.ModelPath).Check()
+	status := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel).Check()
 	bundle := buildEngines(cfg, status)
 	a.mu.Lock()
 	old := a.bundle
@@ -315,7 +315,7 @@ func diarizeWorkerStatus() ToolStatus {
 // share one "download missing models" fix, since that's how the model
 // manager downloads.
 func modelStatuses(cfg *config.Config) []ToolStatus {
-	s := models.NewManager(cfg.Transcription.ModelPath).Check()
+	s := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel).Check()
 	fix := &ToolFix{Kind: "action", Label: "Download missing models"}
 	entry := func(id, name, neededFor string, required, ok bool) ToolStatus {
 		t := ToolStatus{ID: id, Name: name, Group: groupModels, Required: required, NeededFor: neededFor, OK: ok}
@@ -331,7 +331,7 @@ func modelStatuses(cfg *config.Config) []ToolStatus {
 	if s.ParakeetPartial {
 		parakeet.Detail = "Incomplete download"
 	}
-	streaming := entry("model-streaming", "English streaming Zipformer", "Live text while people speak (two-pass)", false, s.EnglishStreamingReady)
+	streaming := entry("model-streaming", "Live model: "+s.EnglishStreamingName, "Live text while people speak (two-pass)", false, s.EnglishStreamingReady)
 	if !cfg.Transcription.TwoPass {
 		// Only two-pass uses it, and that's off: not missing, just unused.
 		streaming.OK, streaming.Fix = true, nil

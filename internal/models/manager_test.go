@@ -357,7 +357,7 @@ func TestPruneEnglishStreamingKeepsOnlyInt8Model(t *testing.T) {
 			t.Errorf("%s still present (err=%v), want removed", name, err)
 		}
 	}
-	if !NewManager(modelDir).Check().EnglishStreamingReady {
+	if !NewManager(modelDir).WithLiveModel(LiveZipformer).Check().EnglishStreamingReady {
 		t.Error("streaming model no longer complete after pruning")
 	}
 }

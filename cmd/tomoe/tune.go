@@ -100,7 +100,7 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	if err != nil {
 		cfg = config.DefaultConfig()
 	}
-	status := models.NewManager(cfg.Transcription.ModelPath).Check()
+	status := models.NewManager(cfg.Transcription.ModelPath).WithLiveModel(cfg.Transcription.LiveModel).Check()
 	store := session.NewStore(config.SessionDir())
 	sess, err := store.Load(id)
 	if err != nil {
