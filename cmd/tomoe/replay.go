@@ -57,6 +57,7 @@ was heard live, but both runs hear the same audio.`,
 		o.minSilence, _ = cmd.Flags().GetFloat64("min-silence")
 		o.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
 		o.decodePad, _ = cmd.Flags().GetFloat64("decode-pad")
+		o.interjection, _ = cmd.Flags().GetFloat64("turn-interjection")
 		if cmd.Flags().Changed("turn-mode") {
 			on, _ := cmd.Flags().GetBool("turn-mode")
 			o.turnMode = &on
@@ -91,6 +92,8 @@ type replayOptions struct {
 	// decodePad is seconds of silence around every decode (< 0: the
 	// config's decode_pad).
 	decodePad float64
+	// interjection is live.Config.TurnInterjection (< 0: the config's).
+	interjection float64
 	// turnMode overrides the config's turn_mode when set; turnMax and
 	// turnGap its limits (0: the config's). turnSignals is which
 	// speaker-change signals end a turn, rebuilt from the session's saved
@@ -112,6 +115,7 @@ func init() {
 	sessionReplayCmd.Flags().Bool("single-pass", false, "Turn two-pass off for this replay, so only the transcription model writes text")
 	sessionReplayCmd.Flags().Float64("min-silence", 0, "Pause (s) that ends an utterance (default: your min_silence_duration)")
 	sessionReplayCmd.Flags().Float64("max-speech", 0, "Longest utterance (s) before it's cut (default: your max_speech_duration)")
+	sessionReplayCmd.Flags().Float64("turn-interjection", -1, "Utterances up to this many seconds don't end the other side's turn (default: your turn_interjection)")
 	sessionReplayCmd.Flags().Float64("decode-pad", -1, "Seconds of silence added before and after every decode (default: your decode_pad)")
 	sessionReplayCmd.Flags().Bool("turn-mode", false, "Decode whole speaker turns, or each utterance with =false (default: your turn_mode)")
 	sessionReplayCmd.Flags().Float64("turn-max", 0, "Turn mode: longest line in seconds (default: your turn_max_seconds)")
@@ -236,6 +240,10 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 		if o.progress {
 			name := run.name
 			lc.ReplayProgress = func(done, total int) { fmt.Printf("progress replay %s %d/%d\n", name, done, total) }
+		}
+		lc.TurnInterjection = cfg.Meeting.TurnInterjection
+		if o.interjection >= 0 {
+			lc.TurnInterjection = o.interjection
 		}
 		lc.DecodePad = cfg.Meeting.DecodePad
 		if o.decodePad >= 0 {

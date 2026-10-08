@@ -320,3 +320,29 @@ func TestTurnModeTwoPass(t *testing.T) {
 		t.Errorf("absorbed line = %+v, want seg-2 removed", gone)
 	}
 }
+
+func TestTurnInterjection(t *testing.T) {
+	eng := &mockEngine{result: &transcribe.Result{Text: "words"}}
+	c := New(Config{Engine: eng, TurnMode: true, TurnMaxGap: 2, TurnMaxSeconds: 30, TurnInterjection: 1})
+	utter := func(src SourceType, s, e float64) { c.addToTurn(src, make([]float32, int((e-s)*16000)), s, e) }
+	drain := func() (spans [][2]float64) {
+		for {
+			select {
+			case seg := <-c.segmentCh:
+				spans = append(spans, [2]float64{seg.StartTime, seg.EndTime})
+			default:
+				return
+			}
+		}
+	}
+	utter(SourceMic, 0, 4)
+	utter(SourceMonitor, 4.2, 4.8) // "mm": the mic's turn goes on
+	utter(SourceMic, 5, 9)         // the mic goes on: only the interjection is sent
+	if spans := drain(); len(spans) != 1 || spans[0] != [2]float64{4.2, 4.8} {
+		t.Fatalf("after the mic went on: %v, want just the interjection", spans)
+	}
+	utter(SourceMonitor, 10, 14) // a real reply ends the mic's turn
+	if spans := drain(); len(spans) != 1 || spans[0] != [2]float64{0, 9} {
+		t.Fatalf("after a real reply: %v, want the mic's 0-9 turn", spans)
+	}
+}

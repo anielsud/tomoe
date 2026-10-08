@@ -104,11 +104,19 @@ type MeetingConfig struct {
 	// DecodePad is seconds of silence put before and after each line's
 	// audio when it's transcribed. Without it Cohere drops a last syllable
 	// that stops abruptly (a 1:1 had 7 lines ending "shouldn", "What'";
-	// 0.25 s fixed all 7 and was neutral on five reference meetings). 0
-	// restores the previous behavior.
-	DecodePad  float64 `toml:"decode_pad"`
-	AutoSave   bool    `toml:"auto_save"`   // save session on stop
-	AutoDetect bool    `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	// a replay reproduced 6, and 0.25 s fixed those 6 while staying
+	// neutral on five reference meetings). 0 restores the previous
+	// behavior.
+	DecodePad float64 `toml:"decode_pad"`
+	// TurnInterjection is the longest utterance (seconds) from one side,
+	// mic or meeting audio, that doesn't end the other side's turn: a
+	// "mm" or "yeah" over someone talking stays its own line instead of
+	// splitting theirs in two. On two meetings it cut such splits from
+	// 31 to 18, with speakers unchanged on five. 0 restores the previous
+	// behavior (any utterance ends the other side's turn).
+	TurnInterjection float64 `toml:"turn_interjection"`
+	AutoSave         bool    `toml:"auto_save"`   // save session on stop
+	AutoDetect       bool    `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
@@ -257,6 +265,7 @@ func DefaultConfig() *Config {
 			TurnMaxSeconds:       30,
 			TurnMaxGap:           2,
 			DecodePad:            0.25,
+			TurnInterjection:     1,
 			AutoSave:             true,
 			AutoDetect:           true,
 			SpeakerModel:         "auto",

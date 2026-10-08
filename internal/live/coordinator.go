@@ -91,6 +91,10 @@ type Config struct {
 	// every decode: models that decode a whole utterance at once can drop
 	// a last syllable that ends abruptly. 0 adds none.
 	DecodePad float64
+	// TurnInterjection is the longest utterance (seconds) from one side
+	// that doesn't end the other side's turn in TurnMode (a backchannel).
+	// 0: any does.
+	TurnInterjection float64
 	// SpeakerChanged reports whether a speaker-change signal (a new voice
 	// starting, the meeting window's highlight moving) fell between from
 	// and to (session seconds). Nil: no signal beyond the rules above.

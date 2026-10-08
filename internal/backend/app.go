@@ -640,7 +640,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	changes := &live.ChangeLog{}
 	hs.changes = changes
 	cfg.TurnMode, cfg.TurnMaxSeconds, cfg.TurnMaxGap = a.cfg.Meeting.TurnMode, a.cfg.Meeting.TurnMaxSeconds, a.cfg.Meeting.TurnMaxGap
-	cfg.DecodePad = a.cfg.Meeting.DecodePad
+	cfg.DecodePad, cfg.TurnInterjection = a.cfg.Meeting.DecodePad, a.cfg.Meeting.TurnInterjection
 	cfg.SpeakerChanged = changes.Between
 
 	var md *diarize.SessionDiarizer

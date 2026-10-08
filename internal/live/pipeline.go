@@ -912,8 +912,14 @@ func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
 		}
 	}
 	if o := c.turns[otherSource(source)]; o != nil && len(o.samples) > 0 {
-		take(otherSource(source))
-		c.turnCuts["other side spoke"]++
+		if c.cfg.TurnInterjection > 0 && u.end-u.start <= c.cfg.TurnInterjection {
+			// A backchannel ("mm", "yeah") over the other side's turn:
+			// that turn goes on; the interjection is its own line.
+			c.turnCuts["interjection (other turn kept)"]++
+		} else {
+			take(otherSource(source))
+			c.turnCuts["other side spoke"]++
+		}
 	}
 	if t := c.turns[source]; t != nil && len(t.samples) > 0 {
 		maxSecs, maxGap := c.turnLimits()
