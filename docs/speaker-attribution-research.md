@@ -777,6 +777,45 @@ end. That alone places each final word in the utterance it came from,
 instead of spreading a 30 s turn's words across its pauses. The streaming
 model can report token times for finer anchors.
 
+## Interjections don't end the other side's turn (2026-10-08)
+
+In turn mode, any utterance from the other side ended a turn. So a "mm",
+"yeah" or "okay" from a listener split the speaker's line in two, with the
+interjection between the halves. Across five reference meetings and a 1:1
+this happened 49 times, 31 of them in the fast 4-person call and the 1:1.
+
+`turn_interjection` (default 1 s) changes that: an utterance this short
+from one side leaves the other side's turn running. The interjection is
+still its own line.
+
+**Checked on the two meetings that showed it:**
+
+| Meeting | Turns split by an interjection | Lines |
+|---|---|---|
+| 1:1 | 15 → 10 | 153 → 139 |
+| Fast 4-person call | 16 → 8 | 222 → 210 |
+
+Almost all of the remaining splits have another cause:
+- the speaker paused for 2 s or more, which ends the turn anyway;
+- the interjection fell inside a line split for another reason, such as
+  the diarizer flagging a new voice.
+
+Only one was an interjection just over the limit (1.16 s).
+
+**Regression check, five reference meetings:**
+
+| | Before | 1 s |
+|---|---|---|
+| Judged errors fixed | 235 | 234 |
+| Names + terms right | 73% | 73% |
+| Speakers right | 96.2% | 96.2% |
+| 4–15-word turns | 87.8% | 87.3% |
+| 1–3-word turns | 40.7% | 38.5% |
+| Splits | 49 | 29 |
+
+The 1–3-word bucket holds 15–60 words per meeting, so the drop there is
+about one word per meeting.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time
