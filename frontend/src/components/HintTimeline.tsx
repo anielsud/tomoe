@@ -104,7 +104,7 @@ export function WindowPicker() {
           api()?.SetHintWindow(v).catch(err => setError(String(err)));
         }}
       >
-        <option value="">Teams meeting (automatic)</option>
+        <option value="">Teams or Zoom meeting (automatic)</option>
         <option value="none">Off</option>
         {value && value !== 'none' && !known.has(value) && <option value={value}>{value} (not on screen)</option>}
         {choices.map(c => (

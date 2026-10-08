@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/sosuke-ai/tomoe-pc/internal/axtree"
 	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
 	"github.com/sosuke-ai/tomoe-pc/internal/teamsvideo"
 )
@@ -45,6 +46,11 @@ type Look struct {
 	// Shapes are the measurements of every ring-colored region near the
 	// detection thresholds, for tuning them offline.
 	Shapes []RingStat `json:"shapes,omitempty"`
+	// Tiles are the meeting app's participant tiles as its accessibility
+	// tree describes them (Zoom), with how much of each one's border was
+	// highlighted; Layout is the view the app says it's showing.
+	Tiles  []Tile `json:"tiles,omitempty"`
+	Layout string `json:"layout,omitempty"`
 	// Cost is what this look took, for measuring the hint layer's CPU
 	// use from a recording.
 	Cost LookCost `json:"cost"`
@@ -62,6 +68,14 @@ type Look struct {
 	// same as look ThumbOf's (same result a moment earlier).
 	Thumb   []byte `json:"-"`
 	ThumbOf int    `json:"thumb_of,omitempty"`
+	// Content is the shared screen when it changed since the last one
+	// kept (a JPEG saved as content/<id>.jpg); ContentRect is where it
+	// was in the frame.
+	Content     []byte       `json:"-"`
+	ContentRect *axtree.Rect `json:"content_rect,omitempty"`
+	// Chat is the meeting chat's messages first seen in this look (saved
+	// to chat.jsonl, not with the look).
+	Chat []ChatMessage `json:"-"`
 }
 
 // LookCost is a look's processing time in milliseconds: capturing the
@@ -131,6 +145,17 @@ func (l *LookLog) Write(look Look) error {
 			return err
 		}
 	}
+	if len(look.Content) > 0 {
+		if err := os.MkdirAll(filepath.Join(l.dir, "content"), 0o755); err != nil {
+			return err
+		}
+		if err := os.WriteFile(filepath.Join(l.dir, "content", fmt.Sprintf("%d.jpg", look.ID)), look.Content, 0o644); err != nil {
+			return err
+		}
+	}
+	if err := appendJSONLines(filepath.Join(l.dir, "chat.jsonl"), look.Chat); err != nil {
+		return err
+	}
 	line, err := json.Marshal(look)
 	if err != nil {
 		return err
@@ -141,6 +166,28 @@ func (l *LookLog) Write(look Look) error {
 	}
 	defer f.Close()
 	_, err = f.Write(append(line, '\n'))
+	return err
+}
+
+// appendJSONLines appends one JSON line per item to path.
+func appendJSONLines[T any](path string, items []T) error {
+	if len(items) == 0 {
+		return nil
+	}
+	var buf bytes.Buffer
+	for _, it := range items {
+		line, err := json.Marshal(it)
+		if err != nil {
+			return err
+		}
+		buf.Write(append(line, '\n'))
+	}
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = f.Write(buf.Bytes())
 	return err
 }
 

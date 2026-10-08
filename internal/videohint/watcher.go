@@ -13,8 +13,8 @@ import (
 
 // Video hint sources (WatchConfig.Source): SourceAuto finds the Teams
 // meeting window; SourceNone turns hints off; anything else is an app's
-// name, whose largest window is watched. An app with no rule yet (only
-// Teams has one) is still captured, so its frames can be saved for
+// name, whose largest window is watched. An app with no rule yet (Teams
+// and Zoom have one) is still captured, so its frames can be saved for
 // analysis and a rule written from them; its looks never name anyone.
 const (
 	SourceAuto = ""
@@ -123,6 +123,7 @@ type Watcher struct {
 	invListAt   time.Time
 	invTeamsKey string // the Teams windows when last pictured
 	invAt       time.Time
+	zoom        zoomState // chat already seen, shared screen last kept
 }
 
 type keptFrame struct {
@@ -146,6 +147,7 @@ type frame struct {
 	windowID      int
 	pick          string
 	scale         int // pixels per point of the capture (1 when unknown)
+	pid           int // the window's app, for reading its accessibility tree
 }
 
 // NewWatcher returns a Watcher; call Run to start it.
@@ -249,6 +251,7 @@ func (w *Watcher) look(learning bool) {
 	source := w.source
 	if w.sourceChanged {
 		w.sourceChanged, w.tiles, w.last = false, nil, nil
+		w.zoom = zoomState{}
 	}
 	w.mu.Unlock()
 	fr, platform, window, stage, detail := captureWindow(source)
@@ -278,6 +281,10 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 	if isBlank(fr.pix, fr.width, fr.height) {
 		l.Stage = StageBlankCapture
 		l.Detail = fmt.Sprintf("captured %dx%d but every pixel is black: the window can't be read this way (its sharing state is in the window list)", fr.width, fr.height)
+		return
+	}
+	if platform == meeting.PlatformZoom {
+		w.analyzeZoom(l, fr)
 		return
 	}
 	rule, ok := ruleFor(platform)

@@ -23,6 +23,10 @@ const (
 	StageNoLabelRegion  EventStage = "no_label_region"
 	StageOCRHit         EventStage = "ocr_hit"
 	StageOCRMiss        EventStage = "ocr_miss"
+	// Zoom (see zoom.go): the speaker named by the accessibility tree's
+	// tile whose border is highlighted, or the only tile shown.
+	StageTileHighlight EventStage = "tile_highlight"
+	StageNoTiles       EventStage = "no_tiles"
 )
 
 // HintAttachMaxAge is the maxAge for speaker.Tracker.SetHintForRecent
