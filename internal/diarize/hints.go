@@ -45,7 +45,16 @@ const hintLag = 0.5
 // normalizeName folds case, spaces and a trailing ellipsis (truncated
 // tiles).
 func normalizeName(s string) string {
-	return strings.ToLower(strings.TrimSpace(strings.TrimRight(strings.TrimSpace(s), "…")))
+	return strings.ToLower(trimNameJunk(s))
+}
+
+// nameJunk is what OCR leaves after a name (a truncation ellipsis, a
+// stray quote or dot from the tile's edge): never part of the name.
+const nameJunk = "….\"'`,:;!? "
+
+// trimNameJunk drops spaces and trailing junk (see nameJunk).
+func trimNameJunk(s string) string {
+	return strings.TrimSpace(strings.TrimRight(strings.TrimSpace(s), nameJunk))
 }
 
 // canonicalNames maps each name read to one spelling per person. A tile
@@ -69,7 +78,7 @@ func canonicalNames(names []string) map[string]string {
 			truncated[k] = true
 		}
 		if cur, ok := display[k]; !ok || len(n) > len(cur) {
-			display[k] = strings.TrimSpace(strings.TrimRight(strings.TrimSpace(n), "…."))
+			display[k] = trimNameJunk(n)
 		}
 	}
 	keys := make([]string, 0, len(count))
