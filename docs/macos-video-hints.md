@@ -209,8 +209,9 @@ them until then.
 
 The watcher looks at the window on two clocks:
 
-- **Learning**, every `video_hint_learn_interval` (default 0.35 s): while
-  anyone who spoke in the last minute has no name
+- **Learning**, every `video_hint_learn_interval` (default 1 s, was
+  0.35 s; Record for tuning still looks every 0.35 s): while anyone who
+  spoke in the last minute has no name
   (`SessionDiarizer.NeedsNames`), and for 3 s after any sign of a
   speaker change.
 - **Checking**, every `video_hint_check_interval` (default 1 s)
@@ -340,7 +341,7 @@ each session records enough to see which cases happen in real calls
   a median of 6.3, p90 16, p99 26, max 111, so ordinary video motion
   stays mostly under it and a layout change does not. A size change
   always keeps. No dwell time is needed: a new view is kept on the next
-  look (about 0.35 s). Pictures are saved whether or not a ring, name or
+  look. Pictures are saved whether or not a ring, name or
   call is found.
 
 **First real call (2026-10-02) found:**
@@ -477,7 +478,9 @@ emitted after it lands.
 - **Tuned once.** The vote thresholds and the ring lag barely matter
   (one 82-minute, 5-speaker meeting; see speaker-attribution-research.md),
   and one look every 1-2 s loses nothing in the saved transcript against
-  every 0.35 s.
+  every 0.35 s; four more meetings (Oct 5–6) agreed to within 0.1 points,
+  so learning now looks once a second. How fast a new speaker gets named
+  in the live transcript at 1 s hasn't been measured.
 - **Speaker-view detection** relies on Teams' gallery background
   brightness and the label's position, calibrated on one display.
 - **Truncated names.** Teams' tiles often truncate long names; the

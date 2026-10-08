@@ -1,6 +1,7 @@
 package videohint
 
 import (
+	"errors"
 	"fmt"
 	"strings"
 	"unicode"
@@ -65,6 +66,9 @@ func cropRGB(pix []byte, frameWidth, frameHeight, x, y, w, h int) ([]byte, int, 
 // and platform Label config out of frame and reads the name in it (the
 // widest line of text there; see recognizeName), cleaned of UI noise.
 func RecognizeLabel(pix []byte, frameWidth, frameHeight int, ring RingMatch, label LabelRegion) (string, error) {
+	if !labelFits(ring, label) {
+		return "", errRingTooShort
+	}
 	x, y, w, h := LabelRect(ring, label)
 	crop, cw, ch, err := cropRGB(pix, frameWidth, frameHeight, x, y, w, h)
 	if err != nil {
@@ -74,7 +78,58 @@ func RecognizeLabel(pix []byte, frameWidth, frameHeight int, ring RingMatch, lab
 	if err != nil {
 		return "", err
 	}
-	return cleanOCRName(text), nil
+	name := cleanOCRName(text)
+	if !plausibleName(name) {
+		return "", nil
+	}
+	return name, nil
+}
+
+// errRingTooShort: the ring is shorter than the label's offset from its
+// bottom edge, so the label box would sit above the tile. Found live: a
+// Teams popup covered most of the lit tile, the ring was found as a
+// 129x6 px strip, and the box above it read the call toolbar ("Take
+// control | Annotate") as the speaker's name for a whole talk.
+var errRingTooShort = errors.New("ring too short to hold a name label (tile covered?)")
+
+// labelFits reports whether ring is tall enough for label's box to start
+// inside it.
+func labelFits(ring RingMatch, label LabelRegion) bool {
+	return ring.Height >= label.BottomOffset
+}
+
+// meetingToolbarWords are the Teams call toolbar's button labels. A read
+// mostly made of them is the toolbar, not a name label (see
+// errRingTooShort).
+var meetingToolbarWords = map[string]bool{
+	"take": true, "control": true, "annotate": true, "pop": true, "out": true,
+	"chat": true, "people": true, "raise": true, "react": true, "view": true,
+	"notes": true, "apps": true, "more": true, "camera": true, "mic": true,
+	"share": true, "leave": true,
+}
+
+// plausibleName rejects reads that can't be a person's name: fewer than
+// two letters ("E", "-", seen when a crop catches an icon), or two or more
+// words of which most are toolbar labels (a first word cut short, "ake",
+// still counts as the toolbar's other words outnumber it).
+func plausibleName(name string) bool {
+	letters := 0
+	for _, r := range name {
+		if unicode.IsLetter(r) {
+			letters++
+		}
+	}
+	if letters < 2 {
+		return false
+	}
+	words := strings.Fields(strings.ToLower(name))
+	ui := 0
+	for _, w := range words {
+		if meetingToolbarWords[strings.Trim(w, ".,|…")] {
+			ui++
+		}
+	}
+	return ui < 2 || 2*ui <= len(words)
 }
 
 // knownUINoiseWords lists trailing tokens the label crop's own overlay

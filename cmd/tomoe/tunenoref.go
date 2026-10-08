@@ -55,7 +55,7 @@ type noRefVariant struct {
 	Embeddings   int     `json:"embeddings"`
 }
 
-func tuneWithoutRef(sess *session.Session, segs []session.Segment, prep *diarize.Prepared, info diarize.StreamInfo, recorded []videohint.Look, looks []tuneLook, duration float64, outDir string, began time.Time) error {
+func tuneWithoutRef(sess *session.Session, segs []session.Segment, prep *diarize.Prepared, info diarize.StreamInfo, recorded []videohint.Look, looks []tuneLook, duration float64, minWords int, outDir string, began time.Time) error {
 	r := noRefReport{Looks: len(recorded), Stages: map[string]int{}, CostMs: map[string]float64{}, Names: map[string]int{}}
 	var capture, detect, ocr, encode, total []float64
 	for _, l := range recorded {
@@ -157,7 +157,7 @@ func tuneWithoutRef(sess *session.Session, segs []session.Segment, prep *diarize
 	sort.Slice(r.Speakers, func(i, j int) bool { return r.Speakers[i].Seconds > r.Speakers[j].Seconds })
 
 	// Variants against the full-rate labels.
-	base := wordNames(segs, turns, names)
+	base := wordNames(segs, turns, names, minWords)
 	// Only the other side's words: the mic is always "You".
 	var otherSide []bool
 	for _, s := range segs {
@@ -182,7 +182,7 @@ func tuneWithoutRef(sess *session.Session, segs []session.Segment, prep *diarize
 			for _, lag := range []float64{0, 0.5, 1} {
 				np := def
 				np.Lag = lag
-				got := wordNames(segs, ts, diarize.NameSpeakers(np, ts, h, math.Inf(1)))
+				got := wordNames(segs, ts, diarize.NameSpeakers(np, ts, h, math.Inf(1)), minWords)
 				same, named, other := 0, 0, 0
 				for i := range got {
 					if !otherSide[i] {
@@ -256,7 +256,7 @@ func activeSpeakers(turns []session.DiarizeSegment, t float64) []int {
 
 // wordNames labels every transcribed word with its speaker's name ("" if
 // unnamed), as the app would split and label lines.
-func wordNames(segs []session.Segment, turns []session.DiarizeSegment, names map[int]string) []string {
+func wordNames(segs []session.Segment, turns []session.DiarizeSegment, names map[int]string, minWords int) []string {
 	labels := map[int]string{}
 	for _, t := range turns {
 		if n := names[t.Speaker]; n != "" {
@@ -266,6 +266,7 @@ func wordNames(segs []session.Segment, turns []session.DiarizeSegment, names map
 		}
 	}
 	split, _ := session.SplitByDiarization(append([]session.Segment(nil), segs...), turns, labels)
+	session.AbsorbSmallSpeakers(split, minWords, nil)
 	var out []string
 	for _, w := range segmentSpeakers(split) {
 		n := ""

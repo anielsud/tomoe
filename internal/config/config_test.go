@@ -503,3 +503,14 @@ func TestMeetingConfig_VideoHintTiming_FallsBackOnZero(t *testing.T) {
 		t.Errorf("check = %v, want default %v", check, want)
 	}
 }
+
+func TestMeetingConfig_VideoHintTiming_RecordForTuningLooksDensely(t *testing.T) {
+	m := MeetingConfig{VideoHintLearnInterval: 1, VideoHintCheckInterval: 1, RecordForTuning: true}
+	if learn, _ := m.VideoHintTiming(); learn != 350*time.Millisecond {
+		t.Errorf("learn while recording for tuning = %v, want 350ms", learn)
+	}
+	m.VideoHintLearnInterval = 0.2 // faster than the tuning rate: kept
+	if learn, _ := m.VideoHintTiming(); learn != 200*time.Millisecond {
+		t.Errorf("learn = %v, want 200ms", learn)
+	}
+}
