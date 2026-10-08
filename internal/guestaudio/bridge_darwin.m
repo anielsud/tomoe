@@ -156,6 +156,17 @@ static void guestaudio_ensure_app_context(void) {
 // display-scoped), build the config/output/stream, start capture, and
 // hand a retained reference back to Go. Only the filter-building step
 // differs between "tap one app's window" and "tap everything."
+// ScreenCaptureKit reports through completion handlers, which never run if
+// the stream has already died (its window closed or went black): waiting
+// forever for one hung the stop of a recording, and with it every later
+// recording. Every wait is bounded; on a timeout the caller moves on.
+static const int64_t kCaptureTimeoutSecs = 5;
+static const int64_t kStopTimeoutSecs = 3;
+
+static BOOL guestaudio_wait(dispatch_semaphore_t sem, int64_t secs) {
+  return dispatch_semaphore_wait(sem, dispatch_time(DISPATCH_TIME_NOW, secs * NSEC_PER_SEC)) == 0;
+}
+
 static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handle, char **out_error) {
   SCStreamConfiguration *config = [[SCStreamConfiguration alloc] init];
   config.capturesAudio = YES;
@@ -188,7 +199,12 @@ static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handl
     startErr = error;
     dispatch_semaphore_signal(startSem);
   }];
-  dispatch_semaphore_wait(startSem, DISPATCH_TIME_FOREVER);
+  if (!guestaudio_wait(startSem, kCaptureTimeoutSecs)) {
+    // Don't leave it to start later with nobody to stop it.
+    [stream stopCaptureWithCompletionHandler:^(NSError *error) {}];
+    *out_error = strdup("timed out starting the capture");
+    return NULL;
+  }
 
   if (startErr != nil) {
     *out_error = strdup(startErr.localizedDescription.UTF8String);
@@ -219,7 +235,10 @@ void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_er
     }
     dispatch_semaphore_signal(findSem);
   }];
-  dispatch_semaphore_wait(findSem, DISPATCH_TIME_FOREVER);
+  if (!guestaudio_wait(findSem, kCaptureTimeoutSecs)) {
+    *out_error = strdup("timed out listing windows");
+    return NULL;
+  }
 
   if (targetWindow == nil) {
     *out_error = strdup("window not found in SCShareableContent");
@@ -250,7 +269,10 @@ void *guestaudio_start_system_tap(uintptr_t go_handle, char **out_error) {
     }
     dispatch_semaphore_signal(findSem);
   }];
-  dispatch_semaphore_wait(findSem, DISPATCH_TIME_FOREVER);
+  if (!guestaudio_wait(findSem, kCaptureTimeoutSecs)) {
+    *out_error = strdup("timed out listing displays");
+    return NULL;
+  }
 
   if (targetDisplay == nil) {
     *out_error = strdup("no display found in SCShareableContent");
@@ -272,5 +294,7 @@ void guestaudio_stop_tap(void *tap) {
   [stream stopCaptureWithCompletionHandler:^(NSError *error) {
     dispatch_semaphore_signal(sem);
   }];
-  dispatch_semaphore_wait(sem, DISPATCH_TIME_FOREVER);
+  if (!guestaudio_wait(sem, kStopTimeoutSecs)) {
+    fprintf(stderr, "guestaudio: capture didn't confirm it stopped within %llds; moving on\n", kStopTimeoutSecs);
+  }
 }
