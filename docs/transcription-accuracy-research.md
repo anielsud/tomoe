@@ -200,6 +200,28 @@ model: 42%), with no empty drafts. `live_model = "auto"` is now the
 FastConformer; `"zipformer-2023"` restores the previous model, and
 `"nemotron-560"` uses Nemotron.
 
+## What the new defaults cost (2026-10-09)
+
+Two recorded meetings, replayed through the live pipeline (`session
+replay --only-current`) with the previous defaults and with today's. The
+previous defaults: Parakeet v3, no turn mode, no padding, no noise gate,
+the base speaker model. Today's: Cohere for English, turn mode,
+interjections, padding, noise gate, English speaker model. Same audio, an
+Apple Silicon desktop, one run at a time, measured with `/usr/bin/time
+-l`. Diarization isn't included.
+
+| | Previous defaults | Today's defaults | Change |
+|---|---|---|---|
+| CPU per meeting minute, 22-min 1:1 | 5.6 s (9.3% of one core) | 11.8 s (19.7%) | 2.1× |
+| CPU per meeting minute, 37-min group meeting | 6.3 s (10.5%) | 14.9 s (24.9%) | 2.4× |
+| Transcription alone, % of audio length | 1.7–2.0% | 4.6–5.8% | about 2.8× |
+| Peak memory | 2.9–3.4 GB | 6.0–6.2 GB | about +3 GB |
+
+Almost all of the extra memory and most of the extra CPU is Cohere (a
+~2.9 GB int8 model). Peak memory in both includes the replay holding the
+whole recording. `model = "parakeet-v2-en"` keeps Parakeet's cost and
+still fixes 33% of judged errors, against Cohere's 41% (bake-off above).
+
 ## Vocabulary (hotwords) with Parakeet: blocked upstream
 
 sherpa-onnx can boost hotwords in Parakeet with `modified_beam_search`,
