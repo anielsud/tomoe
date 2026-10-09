@@ -134,8 +134,15 @@ type MeetingConfig struct {
 	// rather than whoever its little audio sounds most like. false
 	// restores the previous behavior.
 	HighlightShortLines bool `toml:"highlight_short_lines"`
-	AutoSave            bool `toml:"auto_save"`   // save session on stop
-	AutoDetect          bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	// LiveLabelsFromHighlight labels a live line the timeline hasn't
+	// reached yet with the meeting window's name before the live pass's
+	// voice match, and shows that name (or "New speaker") instead of the
+	// live pass's own numbering before the first recluster. The live
+	// voice match split one person into 5-25 clusters a meeting. Final
+	// labels are unaffected. false restores the previous live labels.
+	LiveLabelsFromHighlight bool `toml:"live_labels_from_highlight"`
+	AutoSave                bool `toml:"auto_save"`   // save session on stop
+	AutoDetect              bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
@@ -275,27 +282,28 @@ func DefaultConfig() *Config {
 			DefaultLang: "en",
 		},
 		Meeting: MeetingConfig{
-			DefaultSources:       "both",
-			SpeakerThreshold:     0.65,
-			MaxSpeechDuration:    30.0,
-			MinSilenceDuration:   0.5,
-			MinSpeechLevelDB:     -50,
-			MicLevelMarginDB:     20,
-			TurnMode:             true,
-			TurnMaxSeconds:       30,
-			TurnMaxGap:           2,
-			DecodePad:            0.25,
-			TurnInterjection:     1,
-			SplitAtHighlight:     true,
-			HighlightShortLines:  true,
-			AutoSave:             true,
-			AutoDetect:           true,
-			SpeakerModel:         "auto",
-			DiarizeDuringMeeting: true,
-			DiarizeStride:        2,
-			DiarizeRecluster:     10,
-			MinSpeakerWords:      20,
-			MinSpeakerSeconds:    2,
+			DefaultSources:          "both",
+			SpeakerThreshold:        0.65,
+			MaxSpeechDuration:       30.0,
+			MinSilenceDuration:      0.5,
+			MinSpeechLevelDB:        -50,
+			MicLevelMarginDB:        20,
+			TurnMode:                true,
+			TurnMaxSeconds:          30,
+			TurnMaxGap:              2,
+			DecodePad:               0.25,
+			TurnInterjection:        1,
+			SplitAtHighlight:        true,
+			HighlightShortLines:     true,
+			LiveLabelsFromHighlight: true,
+			AutoSave:                true,
+			AutoDetect:              true,
+			SpeakerModel:            "auto",
+			DiarizeDuringMeeting:    true,
+			DiarizeStride:           2,
+			DiarizeRecluster:        10,
+			MinSpeakerWords:         20,
+			MinSpeakerSeconds:       2,
 
 			// The sticky-speaker and short-segment rules are off (margin
 			// and duration 0), matching main's clustering, until they're

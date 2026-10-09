@@ -56,6 +56,9 @@ type Segment struct {
 	// Speaker: kept because it can carry a video-hint name that the
 	// relabeling votes on. "" means Speaker is still the live label.
 	LiveSpeaker string `json:"live_speaker,omitempty"`
+	// ShownSpeaker is the label the line first showed during the meeting,
+	// for measuring how often live labels change before the final ones.
+	ShownSpeaker string `json:"shown_speaker,omitempty"`
 }
 
 // LiveLabel is the label the live pass gave seg (see LiveSpeaker).
@@ -109,6 +112,9 @@ func (s *Session) UpsertSegment(seg Segment) {
 			return
 		}
 		if statusRank(s.Segments[i].Status) <= statusRank(seg.Status) {
+			if seg.ShownSpeaker == "" {
+				seg.ShownSpeaker = s.Segments[i].ShownSpeaker
+			}
 			s.Segments[i] = seg
 		}
 		return
