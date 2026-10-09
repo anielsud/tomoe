@@ -200,6 +200,31 @@ model: 42%), with no empty drafts. `live_model = "auto"` is now the
 FastConformer; `"zipformer-2023"` restores the previous model, and
 `"nemotron-560"` uses Nemotron.
 
+## At a glance: the previous defaults against today's (2026-10-09)
+
+The same recordings run through each version's defaults. Every number is absolute, not a share of a share.
+
+| | Measure | Previous (Parakeet v3) | Today |
+|---|---|---|---|
+| **Transcription** | Word error rate, against a hand-reviewed transcript (59 min, 8 speakers) | 10.4% | **6.5%** |
+| | Word disagreement with Teams' transcript (4 meetings, 37–58 min) | 16.3% | **12.7%** |
+| | Disagreements with Teams that change meaning, per 1,000 words | 39.5 | **26.4** |
+| | Names and domain terms right | 43% | **73%** |
+| **Speakers** | Words with the right speaker, hand-reviewed meeting, full pipeline including each version's diarizer | 94.7% | **97.2%** |
+| | People with a cluster of their own, same meeting | 5 of 8 | **7 of 8** |
+| | Stray "speakers" (a few words each) per meeting | 7–40 | **0** |
+| | 1–3-word turns with the right speaker (4 meetings) | 25% | **38%** |
+| **Readability** | Lines in the 4 meetings (fewer, longer lines, one per turn) | 1,649 | **1,053** |
+| **Live text** (`two_pass` only) | Words differing from the final text | 41–52% | **25–38%** |
+| **Cost** | CPU per meeting minute (Apple Silicon desktop) | 5.6–6.3 s | 11.8–14.9 s |
+| | Peak memory | 2.9–3.4 GB | 6.0–6.2 GB |
+
+How each row was measured:
+- **Hand-reviewed meeting:** `tomoe eval` runs the whole pipeline twice, with the previous config and today's: transcription, live labels, and each version's diarizer (the previous post-meeting sherpa-onnx pass; today's during-meeting one).
+- **Four Teams meetings:** `tomoe session replay` with each config, scored with `tomoe textdiff` and `tomoe tune`. Teams' transcript is automatic too, so "disagreement" includes Teams' own mistakes.
+- **Speaker rows for the four meetings:** both sides use today's diarizer. They measure only the effect of the transcript lines (turn mode, interjections, stray-speaker folding, and on macOS the highlight cuts).
+- **Cost:** "What the new defaults cost" below.
+
 ## What the new defaults cost (2026-10-09)
 
 Two recorded meetings, replayed through the live pipeline (`session
