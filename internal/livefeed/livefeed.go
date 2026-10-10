@@ -161,24 +161,44 @@ func Listen(path string, opts Options) (*Server, error) {
 	if err := removeStale(path); err != nil {
 		return nil, err
 	}
-	ln, err := net.Listen("unix", path)
+	ln, err := listenPrivate(path)
 	if err != nil {
-		return nil, fmt.Errorf("live feed: %w", err)
-	}
-	// net.Listen creates the socket with the process umask (usually
-	// 0755-ish, i.e. connectable by anyone who can reach the directory),
-	// and Go has no way to pass a mode. Narrowing it right away leaves a
-	// window of microseconds, before Accept is even running; changing
-	// the umask instead would be process-wide and race every other
-	// goroutine creating files.
-	if err := os.Chmod(path, 0o600); err != nil {
-		ln.Close()
-		return nil, fmt.Errorf("live feed: %w", err)
+		return nil, err
 	}
 	s := &Server{ln: ln, path: path, opts: opts, clients: map[*client]struct{}{}}
 	s.wg.Add(1)
 	go s.acceptLoop()
 	return s, nil
+}
+
+// listenPrivate creates the socket in a fresh 0700 directory beside path,
+// narrows it to 0600 there, and only then renames it into place, so it is
+// never connectable by anyone else, even for an instant. (net.Listen takes
+// no mode and creates the socket with the process umask; changing the umask
+// would be process-wide and race every other goroutine creating files.)
+func listenPrivate(path string) (net.Listener, error) {
+	dir, err := os.MkdirTemp(filepath.Dir(path), ".lf-")
+	if err != nil {
+		return nil, fmt.Errorf("live feed: %w", err)
+	}
+	defer os.RemoveAll(dir)
+	tmp := filepath.Join(dir, "s")
+	ln, err := net.Listen("unix", tmp)
+	if err != nil {
+		return nil, fmt.Errorf("live feed: %w", err)
+	}
+	// The listener would unlink its original name on Close; after the
+	// rename that name is gone, so Close removes path itself.
+	ln.(*net.UnixListener).SetUnlinkOnClose(false)
+	if err := os.Chmod(tmp, 0o600); err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("live feed: %w", err)
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		ln.Close()
+		return nil, fmt.Errorf("live feed: %w", err)
+	}
+	return ln, nil
 }
 
 // removeStale removes a socket file at path that nothing is serving.
@@ -374,10 +394,11 @@ func (s *Server) Close() error {
 		s.dropLocked(c)
 	}
 	s.mu.Unlock()
-	// Closing a listener made by net.Listen("unix") also unlinks its
-	// socket file.
 	err := s.ln.Close()
 	s.wg.Wait()
+	if rerr := os.Remove(s.path); rerr != nil && !errors.Is(rerr, os.ErrNotExist) && err == nil {
+		err = rerr
+	}
 	return err
 }
 

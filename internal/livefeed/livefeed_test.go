@@ -112,6 +112,14 @@ func TestSocketIsPrivate(t *testing.T) {
 	if perm := info.Mode().Perm(); perm != 0o600 {
 		t.Errorf("socket mode = %o, want 600", perm)
 	}
+	// The socket is made in a private directory and renamed into place;
+	// that directory must not be left behind.
+	entries, _ := os.ReadDir(filepath.Dir(s.Path()))
+	for _, e := range entries {
+		if strings.HasPrefix(e.Name(), ".lf-") {
+			t.Errorf("temporary directory %s left behind", e.Name())
+		}
+	}
 }
 
 // A client connecting mid-meeting gets hello, the session's start and
