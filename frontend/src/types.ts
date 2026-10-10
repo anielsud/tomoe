@@ -135,6 +135,9 @@ export interface Config {
     DiarizeStride: number;
     DiarizeRecluster: number;
     RecordForTuning: boolean;
+    // Serve the transcript as it's written to local programs over a
+    // private socket (see internal/livefeed). Off by default.
+    LiveFeed: boolean;
   };
 }
 

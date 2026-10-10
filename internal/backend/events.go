@@ -62,6 +62,10 @@ func (a *App) applySegment(sess *session.Session, md *diarize.SessionDiarizer, s
 	}
 	sess.UpsertSegment(seg)
 	visible := a.currentSess == nil || a.currentSess == sess
+	// Unlike the frontend, the live feed gets a stopped session's late
+	// refinements too: its messages carry the session ID, and a consumer
+	// wants the final text of the meeting that just ended.
+	a.feedSegmentsLocked(sess, seg)
 	a.mu.Unlock()
 
 	if visible {

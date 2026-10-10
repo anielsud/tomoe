@@ -22,6 +22,11 @@ func newMeetingDiarizer(a *App, cfg *config.Config, status *models.Status, lang 
 		OnChanged: func(changed []session.Segment) {
 			a.mu.Lock()
 			visible := a.meetingDiar == d
+			if visible && a.currentSess != nil {
+				// Sends each line as the session holds it now, which a
+				// revision applied since this recluster may have changed.
+				a.feedSegmentsLocked(a.currentSess, changed...)
+			}
 			a.mu.Unlock()
 			if visible {
 				for _, seg := range changed {

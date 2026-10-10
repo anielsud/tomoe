@@ -15,12 +15,16 @@ import (
 //go:embed all:frontend/dist
 var assets embed.FS
 
+// Version is set at build time via -ldflags (see the Makefile).
+var Version = "dev"
+
 func main() {
 	// Re-exec with LD_LIBRARY_PATH if GPU libraries are installed.
 	// Must happen before any cgo/sherpa-onnx code loads.
 	config.EnsureGPULibs()
 	setupLogFile()
 
+	backend.Version = Version
 	app := backend.NewApp()
 
 	err := wails.Run(&options.App{

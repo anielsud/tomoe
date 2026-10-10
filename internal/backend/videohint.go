@@ -317,6 +317,7 @@ func (a *App) RenameSpeaker(id, label, name string) error {
 		if changed == nil {
 			changed = renameLines(sess, label, name)
 		}
+		a.feedSegmentsLocked(sess, changed...)
 		a.mu.Unlock()
 		for _, seg := range changed {
 			wailsRuntime.EventsEmit(a.ctx, "transcript:segment:update", seg)
