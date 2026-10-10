@@ -20,6 +20,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/gpu"
 	"github.com/sosuke-ai/tomoe-pc/internal/hotkey"
 	"github.com/sosuke-ai/tomoe-pc/internal/live"
+	"github.com/sosuke-ai/tomoe-pc/internal/livefeed"
 	"github.com/sosuke-ai/tomoe-pc/internal/meeting"
 	"github.com/sosuke-ai/tomoe-pc/internal/meetingaudio"
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
@@ -73,6 +74,9 @@ type App struct {
 	// meetingDiar diarizes the current session while it records (nil if
 	// that's off); see diarize.SessionDiarizer.
 	meetingDiar *diarize.SessionDiarizer
+	// liveFeed serves the transcript to local programs while
+	// [meeting] live_feed is on; nil when off. See livefeed.go.
+	liveFeed *livefeed.Server
 
 	// configWatchStop stops the config.toml hot-reload watcher started
 	// in Startup (see speaker.Tracker.SetTuning) once the app shuts
@@ -193,6 +197,11 @@ func (a *App) runInit(ctx context.Context) {
 	a.mu.Lock()
 	a.cfg = result.Config
 	a.mu.Unlock()
+	// Before the engines, so a consumer can connect while they load; it
+	// gets hello and waits for a session.
+	if err := a.startLiveFeed(result.Config.Meeting.LiveFeed); err != nil {
+		fmt.Printf("Warning: live feed not started: %v\n", err)
+	}
 	a.setupEngines(ctx, result.Config, result.ModelStatus)
 
 	a.mu.Lock()
@@ -452,6 +461,8 @@ func (a *App) Shutdown(ctx context.Context) {
 		a.saveWG.Wait()
 		a.saveQueue = nil
 	}
+	// After the saves, so feed clients still get their "saved".
+	a.stopLiveFeed()
 
 	a.mu.Lock()
 	bundle := a.bundle
@@ -722,6 +733,9 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	// Start emitting segments to frontend
 	a.segmentsDone = a.emitSessionSegments(coordinator.Segments(), coordinator.SegmentUpdates(), a.currentSess, md)
 
+	// Under a.mu (held throughout StartSession), like the live feed's
+	// snapshot, so a client connecting now sees this session exactly once.
+	a.feedSessionLocked(livefeed.StateStarted, a.currentSess)
 	wailsRuntime.EventsEmit(a.ctx, "session:started", a.currentSess.ID)
 	return nil
 }
@@ -774,6 +788,7 @@ func (a *App) StopSession() (*session.Session, error) {
 	a.audioSource = ""
 	a.videoHintMu.Unlock()
 	wailsRuntime.EventsEmit(a.ctx, "session:stopped", sess.ID)
+	a.feedSession(livefeed.StateStopped, sess)
 
 	// Hand off to the serial save worker so the next StartSession can
 	// proceed immediately while encoding + diarization run in the background.
@@ -859,6 +874,7 @@ func (a *App) persistSession(req *saveRequest) {
 			fmt.Printf("Error saving session: %v\n", err)
 		}
 		wailsRuntime.EventsEmit(a.ctx, "session:saved", sess.ID)
+		a.feedSession(livefeed.StateSaved, sess)
 		return
 	}
 
@@ -872,6 +888,7 @@ func (a *App) persistSession(req *saveRequest) {
 	}
 
 	wailsRuntime.EventsEmit(a.ctx, "session:saved", sess.ID)
+	a.feedSession(livefeed.StateSaved, sess)
 }
 
 // GetSessionList returns all stored sessions.

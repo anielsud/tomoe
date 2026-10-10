@@ -119,6 +119,18 @@ func (a *App) ApplySettings(cfg config.Config) (*ApplyResult, error) {
 		a.rebuildTrayMenu()
 		result.Applied = append(result.Applied, "Tray menu")
 	}
+	if plan.liveFeed {
+		if next.Meeting.LiveFeed {
+			if err := a.startLiveFeed(true); err != nil {
+				result.Warnings = append(result.Warnings, fmt.Sprintf("Live feed: %v", err))
+			} else {
+				result.Applied = append(result.Applied, "Live feed")
+			}
+		} else {
+			a.stopLiveFeed()
+			result.Applied = append(result.Applied, "Live feed")
+		}
+	}
 	result.Later = plan.later
 	if next.Transcription.HotwordsFile != "" && next.Transcription.DecodingMethod != "modified_beam_search" {
 		result.Warnings = append(result.Warnings, "Hotwords are only used with beam search decoding")
@@ -151,6 +163,7 @@ type applyPlan struct {
 	restartDetector bool
 	rebindHotkeys   bool
 	rebuildTray     bool
+	liveFeed        bool
 	// later lists changed settings that are only read when a recording or
 	// dictation starts.
 	later []string
@@ -168,6 +181,7 @@ func planApply(old, next *config.Config) applyPlan {
 		!slices.Equal(om.Languages, nm.Languages) ||
 		old.Meeting.SpeakerModel != next.Meeting.SpeakerModel
 	p.restartDetector = old.Meeting.AutoDetect != next.Meeting.AutoDetect
+	p.liveFeed = old.Meeting.LiveFeed != next.Meeting.LiveFeed
 	// The hotkey loops capture the default language and the detector's
 	// event channel when they start.
 	p.rebindHotkeys = old.Hotkey != next.Hotkey || om.DefaultLang != nm.DefaultLang || p.restartDetector

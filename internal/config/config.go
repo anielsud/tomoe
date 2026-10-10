@@ -210,6 +210,18 @@ type MeetingConfig struct {
 	// full frame (about 250 MB an hour), and diarization fingerprints
 	// every window. Off by default; costs more CPU and disk while on.
 	RecordForTuning bool `toml:"record_for_tuning"`
+
+	// LiveFeed serves the meeting transcript, as it is written, to other
+	// programs on this computer over a Unix socket only the user can open
+	// (~/.local/share/tomoe/live.sock; protocol in internal/livefeed), for
+	// a local consumer that wants lines, revisions and speaker relabels
+	// as they happen rather than the saved session afterwards. Off by
+	// default, and nothing listens or is encoded while it is: transcription
+	// is unchanged either way, since a client that falls behind is
+	// disconnected rather than waited for. Applied from the settings page
+	// at once; an edit to config.toml itself takes effect on the next
+	// launch.
+	LiveFeed bool `toml:"live_feed"`
 }
 
 // VideoHintsOn reports whether video hints run: on macOS (the only platform
