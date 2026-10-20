@@ -219,34 +219,39 @@ static void *guestaudio_start_stream(SCContentFilter *filter, uintptr_t go_handl
 }
 
 void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_error) {
-  guestaudio_ensure_app_context();
-
-  __block SCWindow *targetWindow = nil;
-  dispatch_semaphore_t findSem = dispatch_semaphore_create(0);
-  [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
-                                                                  NSError *error) {
-    if (content != nil) {
-      for (SCWindow *w in content.windows) {
-        if (w.windowID == (CGWindowID)window_id) {
-          targetWindow = w;
-          break;
+  // Called from Go threads, which have no autorelease pool of their own:
+  // what this autoreleases is released here, not whenever the thread
+  // exits (a pool drained at thread exit released stale objects and spun).
+  @autoreleasepool {
+    guestaudio_ensure_app_context();
+  
+    __block SCWindow *targetWindow = nil;
+    dispatch_semaphore_t findSem = dispatch_semaphore_create(0);
+    [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
+                                                                    NSError *error) {
+      if (content != nil) {
+        for (SCWindow *w in content.windows) {
+          if (w.windowID == (CGWindowID)window_id) {
+            targetWindow = w;
+            break;
+          }
         }
       }
+      dispatch_semaphore_signal(findSem);
+    }];
+    if (!guestaudio_wait(findSem, kCaptureTimeoutSecs)) {
+      *out_error = strdup("timed out listing windows");
+      return NULL;
     }
-    dispatch_semaphore_signal(findSem);
-  }];
-  if (!guestaudio_wait(findSem, kCaptureTimeoutSecs)) {
-    *out_error = strdup("timed out listing windows");
-    return NULL;
+  
+    if (targetWindow == nil) {
+      *out_error = strdup("window not found in SCShareableContent");
+      return NULL;
+    }
+  
+    SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:targetWindow];
+    return guestaudio_start_stream(filter, go_handle, out_error);
   }
-
-  if (targetWindow == nil) {
-    *out_error = strdup("window not found in SCShareableContent");
-    return NULL;
-  }
-
-  SCContentFilter *filter = [[SCContentFilter alloc] initWithDesktopIndependentWindow:targetWindow];
-  return guestaudio_start_stream(filter, go_handle, out_error);
 }
 
 // guestaudio_start_system_tap captures the whole system's audio output
@@ -258,43 +263,53 @@ void *guestaudio_start_tap(int32_t window_id, uintptr_t go_handle, char **out_er
 // audio from an app whose window is on a different display may not be
 // captured -- not something this has been tested against.
 void *guestaudio_start_system_tap(uintptr_t go_handle, char **out_error) {
-  guestaudio_ensure_app_context();
-
-  __block SCDisplay *targetDisplay = nil;
-  dispatch_semaphore_t findSem = dispatch_semaphore_create(0);
-  [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
-                                                                  NSError *error) {
-    if (content != nil && content.displays.count > 0) {
-      targetDisplay = content.displays.firstObject;
+  // Called from Go threads, which have no autorelease pool of their own:
+  // what this autoreleases is released here, not whenever the thread
+  // exits (a pool drained at thread exit released stale objects and spun).
+  @autoreleasepool {
+    guestaudio_ensure_app_context();
+  
+    __block SCDisplay *targetDisplay = nil;
+    dispatch_semaphore_t findSem = dispatch_semaphore_create(0);
+    [SCShareableContent getShareableContentWithCompletionHandler:^(SCShareableContent *content,
+                                                                    NSError *error) {
+      if (content != nil && content.displays.count > 0) {
+        targetDisplay = content.displays.firstObject;
+      }
+      dispatch_semaphore_signal(findSem);
+    }];
+    if (!guestaudio_wait(findSem, kCaptureTimeoutSecs)) {
+      *out_error = strdup("timed out listing displays");
+      return NULL;
     }
-    dispatch_semaphore_signal(findSem);
-  }];
-  if (!guestaudio_wait(findSem, kCaptureTimeoutSecs)) {
-    *out_error = strdup("timed out listing displays");
-    return NULL;
+  
+    if (targetDisplay == nil) {
+      *out_error = strdup("no display found in SCShareableContent");
+      return NULL;
+    }
+  
+    SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:targetDisplay excludingWindows:@[]];
+    return guestaudio_start_stream(filter, go_handle, out_error);
   }
-
-  if (targetDisplay == nil) {
-    *out_error = strdup("no display found in SCShareableContent");
-    return NULL;
-  }
-
-  SCContentFilter *filter = [[SCContentFilter alloc] initWithDisplay:targetDisplay excludingWindows:@[]];
-  return guestaudio_start_stream(filter, go_handle, out_error);
 }
 
 void guestaudio_stop_tap(void *tap) {
-  if (tap == NULL) {
-    return;
-  }
-  // Transfers the reference back to ARC, balancing the CFBridgingRetain
-  // above; `stream` is released automatically when this function returns.
-  SCStream *stream = (SCStream *)CFBridgingRelease(tap);
-  dispatch_semaphore_t sem = dispatch_semaphore_create(0);
-  [stream stopCaptureWithCompletionHandler:^(NSError *error) {
-    dispatch_semaphore_signal(sem);
-  }];
-  if (!guestaudio_wait(sem, kStopTimeoutSecs)) {
-    fprintf(stderr, "guestaudio: capture didn't confirm it stopped within %llds; moving on\n", kStopTimeoutSecs);
+  // Called from Go threads, which have no autorelease pool of their own:
+  // what this autoreleases is released here, not whenever the thread
+  // exits (a pool drained at thread exit released stale objects and spun).
+  @autoreleasepool {
+    if (tap == NULL) {
+      return;
+    }
+    // Transfers the reference back to ARC, balancing the CFBridgingRetain
+    // above; `stream` is released automatically when this function returns.
+    SCStream *stream = (SCStream *)CFBridgingRelease(tap);
+    dispatch_semaphore_t sem = dispatch_semaphore_create(0);
+    [stream stopCaptureWithCompletionHandler:^(NSError *error) {
+      dispatch_semaphore_signal(sem);
+    }];
+    if (!guestaudio_wait(sem, kStopTimeoutSecs)) {
+      fprintf(stderr, "guestaudio: capture didn't confirm it stopped within %llds; moving on\n", kStopTimeoutSecs);
+    }
   }
 }
