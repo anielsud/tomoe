@@ -247,6 +247,40 @@ Almost all of the extra memory and most of the extra CPU is Cohere (a
 whole recording. `model = "parakeet-v2-en"` keeps Parakeet's cost and
 still fixes 33% of judged errors, against Cohere's 41% (bake-off above).
 
+## Single pass: how long a line should be (2026-10-20)
+
+Could Cohere's text be the live text, with no streaming draft? Then a
+word waits for its line to end and be decoded, so the line length cap
+decides the wait. The four judged meetings were replayed single-pass
+(Cohere, turn mode on), with `--turn-max` and `--max-speech` both set to
+the cap:
+
+| Cap | Judged spots right (of 506) | Names and terms right (of 505) | Word disagreement | Mean wait for a word | Line length, 90th percentile |
+|---|---|---|---|---|---|
+| 30 s (current) | 238 (47%) | 369 (73%) | 12.7% | 9.6 s | 26.5 s |
+| 15 s | 230 (45%) | 358 (71%) | 12.9% | 5.9 s | 15.5 s |
+| 10 s | 228 (45%) | 350 (69%) | 13.0% | 4.3 s | 11.1 s |
+| 8 s | 221 (44%) | 350 (69%) | 13.1% | 3.7 s | 9.6 s |
+
+The wait is estimated from line lengths (a word waits half its line on
+average), plus about a second of decode. Decode work is the same at every
+cap (about 1,400 s for the 3.3 hours).
+
+- **Shorter lines cost little:** at 15 s, 97% of the current spots and 2
+  points of names and terms; at 10 s, 96% and 4 points.
+- **The wait falls fast:** about 10 s at today's cap, 6 s at 15 s, 4 s at
+  10 s.
+- **Single pass at 10–15 s** gives final text within 4–6 s on average and
+  drops the streaming draft (about a third of the pipeline's CPU on an
+  11-minute meeting, 250 s against 163 s single-pass) and the second
+  speaker embedding per utterance, for 3–4% of the judged fixes. What it
+  gives up is words appearing while the person is still speaking.
+
+On a clean machine Cohere decodes at 5.7% of the audio's length (the
+11-minute meeting above): pass 2 has about 17 times the headroom it needs,
+so lines left "finalizing" for minutes mean the machine is starved (a
+spinning thread, swapping), not that Cohere is too slow.
+
 ## Vocabulary (hotwords) with Parakeet: blocked upstream
 
 sherpa-onnx can boost hotwords in Parakeet with `modified_beam_search`,
