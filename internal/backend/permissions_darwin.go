@@ -12,32 +12,44 @@ package backend
 // Microphone: 0 = not asked yet, 1 = restricted, 2 = denied, 3 = granted
 // (AVAuthorizationStatus).
 static int perm_mic_status(void) {
-	return (int)[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+	@autoreleasepool {
+		return (int)[AVCaptureDevice authorizationStatusForMediaType:AVMediaTypeAudio];
+	}
 }
 
 // Shows the system prompt if the user hasn't been asked yet; a no-op
 // afterwards.
 static void perm_mic_request(void) {
-	[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {}];
+	@autoreleasepool {
+		[AVCaptureDevice requestAccessForMediaType:AVMediaTypeAudio completionHandler:^(BOOL granted) {}];
+	}
 }
 
 static int perm_screen_status(void) {
-	return CGPreflightScreenCaptureAccess() ? 1 : 0;
+	@autoreleasepool {
+		return CGPreflightScreenCaptureAccess() ? 1 : 0;
+	}
 }
 
 // Shows the system prompt the first time only.
 static void perm_screen_request(void) {
-	CGRequestScreenCaptureAccess();
+	@autoreleasepool {
+		CGRequestScreenCaptureAccess();
+	}
 }
 
 static int perm_accessibility_status(void) {
-	return AXIsProcessTrusted() ? 1 : 0;
+	@autoreleasepool {
+		return AXIsProcessTrusted() ? 1 : 0;
+	}
 }
 
 // Shows the system prompt, which offers to open System Settings.
 static void perm_accessibility_request(void) {
-	NSDictionary *opts = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
-	AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+	@autoreleasepool {
+		NSDictionary *opts = @{(__bridge NSString *)kAXTrustedCheckOptionPrompt: @YES};
+		AXIsProcessTrustedWithOptions((__bridge CFDictionaryRef)opts);
+	}
 }
 */
 import "C"
