@@ -26,7 +26,7 @@ func NewMonitorSource(deviceHint string) (*audio.StreamCapturer, error) {
 	if err != nil {
 		return nil, fmt.Errorf("creating monitor capturer: %w", err)
 	}
-	return audio.NewStreamCapturer(capturer, audio.DefaultWindowSize, 128), nil
+	return audio.NewStreamCapturer(capturer, audio.DefaultWindowSize, audio.WindowBuffer), nil
 }
 
 // Auto is a macOS AutoSource capture; Linux has none.

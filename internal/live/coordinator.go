@@ -84,7 +84,13 @@ type Config struct {
 	// audio) SpeakerChanged reports a change between them. Longer lines
 	// give the model more context; cutting at speaker changes keeps one
 	// speaker per line.
-	TurnMode       bool
+	TurnMode bool
+	// DecodeAsync (single-pass) decodes each finished line on its own
+	// worker, in order, so the pipeline keeps reading audio while a decode
+	// runs, and a finished line is never dropped. Decoding inline once
+	// stalled the pipeline for seconds per line on a loaded machine. false
+	// decodes inline, as before.
+	DecodeAsync    bool
 	TurnMaxSeconds float64
 	TurnMaxGap     float64
 	// DecodePad is seconds of silence added before and after the audio of
@@ -207,6 +213,9 @@ type Coordinator struct {
 	// a segment queued for refinement right as the session stops still
 	// gets its update rather than staying "pending" forever.
 	refineCh chan refinementJob
+	// decodeCh carries single-pass lines to decodeWorker (DecodeAsync).
+	decodeCh chan decodeJob
+	decodeWG sync.WaitGroup
 	refineWG sync.WaitGroup
 
 	cancel context.CancelFunc
@@ -240,6 +249,7 @@ func New(cfg Config) *Coordinator {
 		activityCh:      make(chan struct{}, 1),
 		hintNeededCh:    make(chan bool, 1),
 		refineCh:        make(chan refinementJob, bufSize),
+		decodeCh:        make(chan decodeJob, bufSize),
 		now:             time.Now,
 	}
 }
@@ -277,6 +287,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	c.refineWG.Add(1)
 	go c.refineWorker()
+	if c.cfg.DecodeAsync {
+		c.decodeWG.Add(1)
+		go c.decodeWorker()
+	}
 	go c.logPass2(ctx)
 
 	// Closer goroutine: waits for all pipelines to finish (including
@@ -289,6 +303,10 @@ func (c *Coordinator) Start(ctx context.Context) error {
 	// after SegmentUpdates() looks closed to a consumer.
 	go func() {
 		c.wg.Wait()
+		// Single-pass lines still queued are decoded before the transcript
+		// closes: overload makes the end of a meeting late, never short.
+		close(c.decodeCh)
+		c.decodeWG.Wait()
 		close(c.refineCh)
 		c.refineWG.Wait()
 		close(c.segmentCh)

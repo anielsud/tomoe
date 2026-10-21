@@ -264,7 +264,7 @@ func (dhk *dictationManager) startDictation(lang string) {
 
 	cfg := live.Config{
 		Engine:            bundle.engines.Get(lang),
-		MicCapturer:       audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, 128),
+		MicCapturer:       audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, audio.WindowBuffer),
 		VADPath:           vadPath,
 		SegmentBufferSize: 32,
 	}

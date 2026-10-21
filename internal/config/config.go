@@ -141,8 +141,13 @@ type MeetingConfig struct {
 	// voice match split one person into 5-25 clusters a meeting. Final
 	// labels are unaffected. false restores the previous live labels.
 	LiveLabelsFromHighlight bool `toml:"live_labels_from_highlight"`
-	AutoSave                bool `toml:"auto_save"`   // save session on stop
-	AutoDetect              bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	// DecodeAsync (single pass) decodes finished lines on their own worker,
+	// so a slow decode never stops the meeting audio being read: on an
+	// overloaded machine the transcript is late, not missing (decoding
+	// inline once lost 14% of a meeting's audio). false decodes inline.
+	DecodeAsync bool `toml:"decode_async"`
+	AutoSave    bool `toml:"auto_save"`   // save session on stop
+	AutoDetect  bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
@@ -308,6 +313,7 @@ func DefaultConfig() *Config {
 			SplitAtHighlight:        true,
 			HighlightShortLines:     true,
 			LiveLabelsFromHighlight: true,
+			DecodeAsync:             true,
 			AutoSave:                true,
 			AutoDetect:              true,
 			SpeakerModel:            "auto",

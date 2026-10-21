@@ -327,7 +327,7 @@ func (d *Daemon) startStreamingDictation(ctx context.Context, autoStopCh chan st
 
 	cfg := live.Config{
 		Engine:            d.engines.Get(lang),
-		MicCapturer:       audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, 128),
+		MicCapturer:       audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, audio.WindowBuffer),
 		VADPath:           vadPath,
 		SegmentBufferSize: 32,
 	}
@@ -415,7 +415,7 @@ func (d *Daemon) startMeetingWithPlatform(ctx context.Context, platform string, 
 	if err != nil {
 		return nil, fmt.Errorf("creating mic capturer: %w", err)
 	}
-	cfg.MicCapturer = audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, 128)
+	cfg.MicCapturer = audio.NewStreamCapturer(micCapturer, audio.DefaultWindowSize, audio.WindowBuffer)
 
 	// Set up monitor capturer (optional) — the second audio source: a
 	// PulseAudio monitor device on Linux (config.toml's monitor_device,

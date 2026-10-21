@@ -3,10 +3,23 @@ package audio
 import (
 	"fmt"
 	"sync"
+	"sync/atomic"
+	"time"
 )
 
 // DefaultWindowSize is the number of float32 samples per window (matches Silero VAD window size).
 const DefaultWindowSize = 512
+
+// WindowBuffer is the window channel's length (about 32 s at
+// DefaultWindowSize). Audio beyond it is held back in the capturer, in
+// order, for as long as the consumer is behind: an overloaded machine
+// costs time, never audio. (With 128 windows and drops, a slow decode
+// once lost minutes of a meeting, and left the diarizer's clock minutes
+// behind the transcript's.)
+const WindowBuffer = 1000
+
+// stopDrainTimeout bounds how long Stop's drain waits for the consumer.
+var stopDrainTimeout = 2 * time.Minute
 
 // StreamCapturer wraps a Capturer and delivers fixed-size windows of audio
 // to a channel for continuous processing (e.g., real-time VAD feeding).
@@ -14,6 +27,11 @@ type StreamCapturer struct {
 	capturer Capturer
 	windowCh chan []float32
 	stopCh   chan struct{}
+	// dropped counts samples never handed to the consumer (only when it
+	// didn't drain them within stopDrainTimeout of Stop); behind, samples
+	// held back while it catches up.
+	dropped atomic.Int64
+	behind  atomic.Int64
 
 	mu       sync.Mutex
 	started  bool
@@ -122,26 +140,56 @@ func (s *StreamCapturer) pollLoop() {
 	buf := make([]float32, 0, s.windowSize*2)
 	ticker := makeTickerFunc()
 	defer ticker.Stop()
+	var pending [][]float32
+	take := func(samples []float32) {
+		s.allMu.Lock()
+		s.allSamples = append(s.allSamples, samples...)
+		s.allMu.Unlock()
+		buf = append(buf, samples...)
+		for len(buf) >= s.windowSize {
+			window := make([]float32, s.windowSize)
+			copy(window, buf[:s.windowSize])
+			buf = buf[s.windowSize:]
+			pending = append(pending, window)
+		}
+		s.behind.Store(int64(len(pending) * s.windowSize))
+	}
+	// send hands over held-back windows while the consumer has room.
+	send := func() {
+		for len(pending) > 0 {
+			select {
+			case s.windowCh <- pending[0]:
+				pending[0] = nil
+				pending = pending[1:]
+				s.behind.Store(int64(len(pending) * s.windowSize))
+			default:
+				return
+			}
+		}
+	}
 
 	for {
 		select {
 		case <-s.stopCh:
-			// Drain remaining complete windows
-			samples := s.capturer.Samples()
-			s.capturer.Reset()
-			if len(samples) > 0 {
-				s.allMu.Lock()
-				s.allSamples = append(s.allSamples, samples...)
-				s.allMu.Unlock()
-				buf = append(buf, samples...)
+			// Drain: the remaining audio, then everything held back, waiting
+			// for the consumer (it reads until the channel closes). Past a
+			// deadline (a stuck consumer must not hang the stop) what's left
+			// is counted in Dropped: the session's saved audio still has it.
+			if samples := s.capturer.Samples(); len(samples) > 0 {
+				s.capturer.Reset()
+				take(samples)
 			}
-			for len(buf) >= s.windowSize {
-				window := make([]float32, s.windowSize)
-				copy(window, buf[:s.windowSize])
-				buf = buf[s.windowSize:]
+			deadline := time.After(stopDrainTimeout)
+		drain:
+			for len(pending) > 0 {
 				select {
-				case s.windowCh <- window:
-				default:
+				case s.windowCh <- pending[0]:
+					pending = pending[1:]
+				case <-deadline:
+					for _, w := range pending {
+						s.dropped.Add(int64(len(w)))
+					}
+					break drain
 				}
 			}
 			close(s.windowCh)
@@ -150,24 +198,17 @@ func (s *StreamCapturer) pollLoop() {
 		case <-ticker.C():
 			samples := s.capturer.Samples()
 			s.capturer.Reset()
-			if len(samples) == 0 {
-				continue
+			if len(samples) > 0 {
+				take(samples)
 			}
-			s.allMu.Lock()
-			s.allSamples = append(s.allSamples, samples...)
-			s.allMu.Unlock()
-
-			buf = append(buf, samples...)
-			for len(buf) >= s.windowSize {
-				window := make([]float32, s.windowSize)
-				copy(window, buf[:s.windowSize])
-				buf = buf[s.windowSize:]
-				select {
-				case s.windowCh <- window:
-				default:
-					// Drop window if channel is full (consumer too slow)
-				}
-			}
+			send()
 		}
 	}
 }
+
+// Dropped is how many samples were never handed to the consumer of
+// Windows (only when it didn't finish within stopDrainTimeout of Stop).
+func (s *StreamCapturer) Dropped() int64 { return s.dropped.Load() }
+
+// Behind is how many samples are held back waiting for the consumer.
+func (s *StreamCapturer) Behind() int64 { return s.behind.Load() }
