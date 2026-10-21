@@ -471,9 +471,29 @@ func (a *App) Shutdown(ctx context.Context) {
 	bundle.close()
 }
 
-// BeforeClose is called before the window closes. Returns true to prevent closing.
+// BeforeClose is called before the window closes (and on quit). Returns
+// true to prevent closing. While a meeting is recording it asks first:
+// quitting stops the recording, and a quit from a script or a stray key
+// press once ended a meeting's recording halfway through.
 func (a *App) BeforeClose(ctx context.Context) bool {
-	return false // allow window close → app exit
+	a.mu.Lock()
+	recording := a.recording
+	a.mu.Unlock()
+	if !recording {
+		return false // allow window close → app exit
+	}
+	choice, err := wailsRuntime.MessageDialog(ctx, wailsRuntime.MessageDialogOptions{
+		Type:          wailsRuntime.QuestionDialog,
+		Title:         "A meeting is recording",
+		Message:       "Quitting stops the recording and saves what was recorded so far.",
+		Buttons:       []string{"Keep recording", "Stop and quit"},
+		DefaultButton: "Keep recording",
+		CancelButton:  "Keep recording",
+	})
+	if err != nil {
+		return false // can't ask: close, as before
+	}
+	return choice != "Stop and quit"
 }
 
 // defaultLang returns the default language code from config.
