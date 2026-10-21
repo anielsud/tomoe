@@ -514,3 +514,36 @@ func TestMeetingConfig_VideoHintTiming_RecordForTuningLooksDensely(t *testing.T)
 		t.Errorf("learn = %v, want 200ms", learn)
 	}
 }
+
+// The live feed is opt-in: configs without the key (every existing one)
+// keep it off, and it round-trips once turned on.
+func TestLiveFeedOffUnlessSet(t *testing.T) {
+	if DefaultConfig().Meeting.LiveFeed {
+		t.Error("DefaultConfig().Meeting.LiveFeed = true, want false")
+	}
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.toml")
+	if err := os.WriteFile(path, []byte("[meeting]\nspeaker_threshold = 0.65\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.Meeting.LiveFeed {
+		t.Error("LiveFeed = true for a config without live_feed, want false")
+	}
+
+	cfg.Meeting.LiveFeed = true
+	saved := filepath.Join(dir, "saved.toml")
+	if err := Save(cfg, saved); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := Load(saved)
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if !reloaded.Meeting.LiveFeed {
+		t.Error("LiveFeed didn't survive Save and Load")
+	}
+}

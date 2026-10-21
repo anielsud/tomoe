@@ -351,6 +351,10 @@ export default function SettingsPanel() {
           )}
         </Group>
 
+        <Group title="Sharing" applies="now">
+          <Row label="Live transcript feed" hint="Let other programs on this computer read the meeting transcript as it's written, over a socket only you can open (~/.local/share/tomoe/live.sock). Off: nothing listens">{toggle('Meeting', 'LiveFeed')}</Row>
+        </Group>
+
         {mac && (
           <Group title="Video hints" applies="next">
             <Row label="Watch" hint="Which window to read the active speaker from. Pick any app to collect its frames for a future rule (shown in the hint timeline); only Teams is read today. The hint timeline can switch it during a meeting">
