@@ -3,6 +3,7 @@ package transcribe
 import (
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
@@ -47,13 +48,16 @@ func NewEngine(cfg Config) (Engine, error) {
 				Decoder: cfg.DecoderPath,
 				Joiner:  cfg.JoinerPath,
 			},
-			Tokens:     cfg.TokensPath,
-			NumThreads: numThreads,
-			Provider:   provider,
-			ModelType:  "nemo_transducer",
+			Tokens:       cfg.TokensPath,
+			NumThreads:   numThreads,
+			Provider:     provider,
+			ModelType:    "nemo_transducer",
+			ModelingUnit: bpeUnit(),
+			BpeVocab:     os.Getenv("TOMOE_BPE_VOCAB"), // experiment: hotwords need the tokenizer
 		},
 		DecodingMethod: decodingMethod,
-		MaxActivePaths: cfg.MaxActivePaths,
+		MaxActivePaths: envInt("TOMOE_MAX_ACTIVE", cfg.MaxActivePaths), // experiment overrides
+		BlankPenalty:   envFloat("TOMOE_BLANK_PENALTY", 0),
 		HotwordsFile:   cfg.HotwordsFile,
 		HotwordsScore:  cfg.HotwordsScore,
 	}
@@ -157,6 +161,12 @@ func (e *parakeetEngine) Close() {
 // transcribeDirect transcribes audio samples without VAD segmentation.
 func (e *parakeetEngine) transcribeDirect(samples []float32, duration float64) (*Result, error) {
 	stream := sherpa.NewOfflineStream(e.recognizer)
+	if SpanHotwords != nil {
+		if hw := SpanHotwords(spanStart, spanEnd); hw != "" {
+			sherpa.DeleteOfflineStream(stream)
+			stream = sherpa.NewOfflineStreamWithHotwords(e.recognizer, hw)
+		}
+	}
 	if stream == nil {
 		return nil, fmt.Errorf("failed to create offline stream")
 	}
@@ -242,4 +252,25 @@ func (e *parakeetEngine) transcribeWithVAD(samples []float32, duration float64) 
 		Duration:   duration,
 		Language:   lang,
 	}, nil
+}
+
+func bpeUnit() string {
+	if os.Getenv("TOMOE_BPE_VOCAB") != "" {
+		return "bpe"
+	}
+	return ""
+}
+
+func envInt(k string, d int) int {
+	if v, err := strconv.Atoi(os.Getenv(k)); err == nil {
+		return v
+	}
+	return d
+}
+
+func envFloat(k string, d float32) float32 {
+	if v, err := strconv.ParseFloat(os.Getenv(k), 32); err == nil {
+		return float32(v)
+	}
+	return d
 }
