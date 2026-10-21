@@ -89,3 +89,65 @@ func TestLabelNewLockedUsesNamedSpeaker(t *testing.T) {
 		t.Errorf("unknown name: got %q, want %q", seg.Speaker, want)
 	}
 }
+
+func TestLabelNewLockedPrefersHighlightOverVoiceMatch(t *testing.T) {
+	d := &SessionDiarizer{
+		lock: &sync.Mutex{},
+		timeline: &Timeline{
+			Turns:   []session.DiarizeSegment{{Start: 0, End: 20, Speaker: 0}, {Start: 20, End: 40, Speaker: 1}},
+			Labels:  map[int]string{0: "Person 1", 1: "Person 2"},
+			Through: 40,
+		},
+		// The live pass's cluster for this voice has so far overlapped
+		// timeline speaker 0 most.
+		liveTo:    map[string]string{"Person 9": "Person 1 (Ana Lopez)"},
+		renames:   map[int]string{},
+		hintFirst: true,
+	}
+	for _, t := range []float64{2, 7, 12, 17} {
+		d.hints = append(d.hints, Hint{T: t + hintLag, Name: "Ana Lopez"})
+	}
+	for _, t := range []float64{22, 27, 32, 37, 43} {
+		d.hints = append(d.hints, Hint{T: t + hintLag, Name: "Ben Ito"})
+	}
+	seg := session.Segment{Speaker: "Person 9", StartTime: 42, EndTime: 44}
+	d.LabelNewLocked(&seg)
+	if want := "Person 2 (Ben Ito)"; seg.Speaker != want || seg.ShownSpeaker != want {
+		t.Errorf("got %q (shown %q), want %q: the window named Ben while he spoke", seg.Speaker, seg.ShownSpeaker, want)
+	}
+	// No name read during the line: the voice match stands.
+	seg = session.Segment{Speaker: "Person 9", StartTime: 50, EndTime: 51}
+	d.LabelNewLocked(&seg)
+	if want := "Person 1 (Ana Lopez)"; seg.Speaker != want {
+		t.Errorf("no hint: got %q, want %q", seg.Speaker, want)
+	}
+}
+
+func TestLabelNewLockedBeforeFirstRecluster(t *testing.T) {
+	d := &SessionDiarizer{lock: &sync.Mutex{}, liveTo: map[string]string{}, renames: map[int]string{}, hintFirst: true}
+	d.hints = []Hint{{T: 1 + hintLag, Name: "Ana Lopez"}}
+	seg := session.Segment{Speaker: "Person 14", Source: "monitor", StartTime: 0.5, EndTime: 2}
+	d.LabelNewLocked(&seg)
+	if seg.Speaker != "Ana Lopez?" || seg.LiveSpeaker != "Person 14" {
+		t.Errorf("named: got %q (live %q), want \"Ana Lopez?\"", seg.Speaker, seg.LiveSpeaker)
+	}
+	seg = session.Segment{Speaker: "Person 15", Source: "monitor", StartTime: 5, EndTime: 6}
+	d.LabelNewLocked(&seg)
+	if seg.Speaker != NewSpeakerLabel {
+		t.Errorf("unnamed: got %q, want %q, not the live pass's own numbering", seg.Speaker, NewSpeakerLabel)
+	}
+	mic := session.Segment{Speaker: "You", Source: "mic", StartTime: 3, EndTime: 4}
+	d.LabelNewLocked(&mic)
+	if mic.Speaker != "You" {
+		t.Errorf("the host's line changed to %q", mic.Speaker)
+	}
+}
+
+func TestLabelNewLockedHintFirstOff(t *testing.T) {
+	d := &SessionDiarizer{lock: &sync.Mutex{}, liveTo: map[string]string{}, renames: map[int]string{}}
+	seg := session.Segment{Speaker: "Person 14", Source: "monitor", StartTime: 0.5, EndTime: 2}
+	d.LabelNewLocked(&seg)
+	if seg.Speaker != "Person 14" {
+		t.Errorf("setting off: got %q, want the live pass's label as before", seg.Speaker)
+	}
+}

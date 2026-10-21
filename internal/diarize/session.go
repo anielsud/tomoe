@@ -39,7 +39,10 @@ type SessionDiarizer struct {
 	minWords int
 	// shortLines: name short lines from the highlight (ShortLineLabel).
 	shortLines bool
-	opts       SessionOptions
+	// hintFirst: live labels from the meeting window first
+	// (MeetingConfig.LiveLabelsFromHighlight).
+	hintFirst bool
+	opts      SessionOptions
 
 	// Set on the pipeline goroutine's first window: the session time the
 	// stream's audio starts at.
@@ -82,7 +85,7 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	if err != nil {
 		return nil, err
 	}
-	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, shortLines: m.HighlightShortLines, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
+	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, shortLines: m.HighlightShortLines, hintFirst: m.LiveLabelsFromHighlight, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
 	if opts.OnSpeakerChange != nil {
 		sc.OnSpeakerChange = func(at float64) { opts.OnSpeakerChange(at + d.offset) }
@@ -189,7 +192,27 @@ func (d *SessionDiarizer) relabelLocked() []session.Segment {
 // label has mapped to so far, else NewSpeakerLabel, so new lines never
 // show the live pass's own numbering once timeline labels are showing.
 func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
+	defer func() {
+		if seg.ShownSpeaker == "" {
+			seg.ShownSpeaker = seg.Speaker
+		}
+	}()
 	if d.timeline == nil {
+		if !d.hintFirst {
+			return
+		}
+		// Before the first recluster there are no timeline speakers to
+		// map to, and the live pass's own numbering ("Person 14") would
+		// only be replaced: show the meeting window's name, or a neutral
+		// label, until the timeline places the voice.
+		if session.Diarizable(*seg) {
+			live := seg.LiveLabel()
+			if name := d.hintDuringLocked(seg.StartTime, seg.EndTime); name != "" {
+				seg.LiveSpeaker, seg.Speaker = live, name+"?"
+			} else {
+				seg.LiveSpeaker, seg.Speaker = live, NewSpeakerLabel
+			}
+		}
 		return
 	}
 	probe := []session.Segment{*seg}
@@ -204,18 +227,25 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 		return
 	}
 	live := seg.LiveLabel()
-	label, ok := d.liveTo[live]
-	if (!ok || label == "") && d.timeline != nil {
-		// The live pass doesn't know this voice, but the meeting window
-		// says who's talking: if a timeline speaker already carries that
-		// name, it's them. Without this, a 1:1 showed the other person
-		// under a new provisional label every time the live pass split
-		// off a new cluster for their voice (19 in a 20-minute call).
+	// The meeting window's name comes first: it follows who is talking
+	// within a second or two, while the live pass's voice match splits
+	// one person into many clusters (5-25 a meeting) and maps them to
+	// timeline speakers only by how they've overlapped so far. If a
+	// timeline speaker already carries the name, it's them.
+	var label string
+	var ok bool
+	if !d.hintFirst {
+		label, ok = d.liveTo[live]
+	}
+	if !ok || label == "" {
 		if name := d.hintDuringLocked(seg.StartTime, seg.EndTime); name != "" {
 			if k, found := d.speakerNamedLocked(name); found {
 				label, ok = d.labelFor(k), true
 			}
 		}
+	}
+	if !ok || label == "" {
+		label, ok = d.liveTo[live]
 	}
 	if !ok || label == "" {
 		// A voice the timeline hasn't placed yet. The live pass numbers
