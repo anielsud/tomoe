@@ -247,7 +247,92 @@ Almost all of the extra memory and most of the extra CPU is Cohere (a
 whole recording. `model = "parakeet-v2-en"` keeps Parakeet's cost and
 still fixes 33% of judged errors, against Cohere's 41% (bake-off above).
 
+## Single pass: how long a line should be (2026-10-20)
+
+Could Cohere's text be the live text, with no streaming draft? Then a
+word waits for its line to end and be decoded, so the line length cap
+decides the wait. The four judged meetings were replayed single-pass
+(Cohere, turn mode on), with `--turn-max` and `--max-speech` both set to
+the cap:
+
+| Cap | Judged spots right (of 506) | Names and terms right (of 505) | Word disagreement | Mean wait for a word | Line length, 90th percentile |
+|---|---|---|---|---|---|
+| 30 s (current) | 238 (47%) | 369 (73%) | 12.7% | 9.6 s | 26.5 s |
+| 15 s | 230 (45%) | 358 (71%) | 12.9% | 5.9 s | 15.5 s |
+| 10 s | 228 (45%) | 350 (69%) | 13.0% | 4.3 s | 11.1 s |
+| 8 s | 221 (44%) | 350 (69%) | 13.1% | 3.7 s | 9.6 s |
+
+The wait is estimated from line lengths (a word waits half its line on
+average), plus about a second of decode. Decode work is the same at every
+cap (about 1,400 s for the 3.3 hours).
+
+- **Shorter lines cost little:** at 15 s, 97% of the current spots and 2
+  points of names and terms; at 10 s, 96% and 4 points.
+- **The wait falls fast:** about 10 s at today's cap, 6 s at 15 s, 4 s at
+  10 s.
+- **Single pass at 10–15 s** gives final text within 4–6 s on average and
+  drops the streaming draft (about a third of the pipeline's CPU on an
+  11-minute meeting, 250 s against 163 s single-pass) and the second
+  speaker embedding per utterance, for 3–4% of the judged fixes. What it
+  gives up is words appearing while the person is still speaking.
+
+On a clean machine Cohere decodes at 5.7% of the audio's length (the
+11-minute meeting above): pass 2 has about 17 times the headroom it needs,
+so lines left "finalizing" for minutes mean the machine is starved (a
+spinning thread, swapping), not that Cohere is too slow.
+
 ## Vocabulary (hotwords) with Parakeet: blocked upstream
+
+**2026-10-20: with the fix, per utterance.** sherpa-onnx 1.13.8 rebuilt
+with PR #3657 (still unmerged), the Go binding given the C API's
+per-stream hotwords, and a tokenizer vocab from `tokens.txt`, so each
+utterance can get its own list. Ceiling first: an oracle list per
+utterance (the meeting's judged names and terms that Teams' transcript
+has within 5 s of it), one 37-minute meeting, single pass, 15 s cap:
+
+| | Judged spots right (of 112) | Names and terms right (of 169) | Word disagreement | Decode |
+|---|---|---|---|---|
+| Cohere | 33 | 119 (70%) | 17.6% | ~5.7% |
+| Parakeet v2, greedy | 24 | 106 (63%) | 18.2% | 2.5% |
+| Parakeet v2, beam search | 21 | 96 (57%) | 27.3% | 2.8% |
+| Parakeet v2, beam + oracle hotwords | 32 | 126 (75%) | 25.6% | 2.8% |
+
+No decode looped. Hotwords work: names went from 2 to 6 of 22 and terms
+from 9 to 17 of 32, past Cohere on names and terms. But beam search
+itself drops words (disagreement 18% → 27%), so even perfect lists only
+tie Cohere on the judged spots and lose on words. A running vocabulary
+would only fall below the ceiling, so it wasn't taken further; it
+becomes worth it with a TDT beam search that doesn't drop words.
+
+**The dropped words are the blank.** The same meeting, beam search with
+sherpa-onnx's `blank_penalty` (it lowers the score of emitting nothing):
+
+| | Word disagreement | Judged spots right (of 112) | Names and terms right | Words missing |
+|---|---|---|---|---|
+| Cohere | 17.6% | 33 | 70% | 653 |
+| Beam + per-utterance oracle, penalty 0 | 25.6% | 32 | 75% | 1,191 |
+| penalty 1 | 19.6% | 40 | 79% | 663 |
+| penalty 2 | 18.6% | 39 | 81% | 512 |
+| penalty 1, 8 paths (4 above) | 21.3% | 41 | 81% | 795 |
+| No hotwords, penalty 1, 8 paths | 23.3% | 24 | 61% | 940 |
+| Penalty 2, the meeting's whole list on every utterance | 19.4% | 46 | 85% | |
+| Penalty 2, a list known before the meeting | 20.2% | 36 | 70% | |
+
+- A penalty of 1–2 takes the dropped words back to greedy's level or
+  better; a wider beam adds nothing. The gain is the hotwords' (no
+  hotwords: greedy's 24 spots).
+- With them, Parakeet passes Cohere: the meeting's 23 judged names and
+  terms on every utterance fix 46 spots against 33, with names and terms
+  right 85% of the time, at half Cohere's decode time and with word
+  timings. Narrowing the list to each utterance did worse (39) here
+  (alignment to Teams' cues is rough).
+- The list is the problem: 150 entries built from the invite and earlier
+  meetings with the same people held only 3 of the 23 and gave 36.
+  Sources to try for coverage: the meeting series' earlier occurrences,
+  Musubi's threads for the meeting's subject, screen text, the meeting's
+  own words so far.
+- One meeting; the four, and the overall word accuracy (1–2.5 points
+  behind Cohere), decide it. Shipping needs sherpa-onnx with #3657.
 
 sherpa-onnx can boost hotwords in Parakeet with `modified_beam_search`,
 but only with the tokenizer settings Tomoe doesn't pass yet: without
