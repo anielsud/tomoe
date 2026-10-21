@@ -38,6 +38,9 @@ func (a *Auto) Current() string { return "" }
 // TryMeetingApp does nothing on Linux.
 func (a *Auto) TryMeetingApp() (string, bool) { return "", false }
 
+// Recover does nothing on Linux.
+func (a *Auto) Recover() (string, bool) { return "", false }
+
 // NewAutoMonitorSource is the default monitor source on Linux.
 func NewAutoMonitorSource() (*audio.StreamCapturer, *Auto, error) {
 	s, err := NewMonitorSource("")

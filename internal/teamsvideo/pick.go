@@ -89,6 +89,31 @@ func PickMeetingWindow(recs []WindowRecord) (int, string) {
 	return -1, fmt.Sprintf("no Teams window qualified (%d Teams windows of %d: %s)", teams, len(recs), skipped(untitled, chat, generic))
 }
 
+// compactView is the title prefix of Teams' floating mini window, shown
+// over other apps while the meeting window isn't in front. It closes as
+// soon as Teams comes to the front.
+const compactView = "Meeting compact view"
+
+// PickAudioWindow is the window to capture a Teams meeting's audio from:
+// the frontmost candidate that isn't the floating compact view, else the
+// compact view itself. Capture is tied to the window, and the compact view
+// closes when the meeting window comes to the front, ending the audio
+// (found live: a recording started while Teams was in the background lost
+// its call audio 30 s in).
+func PickAudioWindow(recs []WindowRecord) (int, string) {
+	cands := MeetingCandidates(recs)
+	for _, i := range cands {
+		if !strings.HasPrefix(recs[i].Title, compactView) {
+			return i, fmt.Sprintf("picked window %d %q for audio", recs[i].ID, recs[i].Title)
+		}
+	}
+	if len(cands) > 0 {
+		i := cands[0]
+		return i, fmt.Sprintf("picked window %d %q for audio (only the compact view is open)", recs[i].ID, recs[i].Title)
+	}
+	return -1, "no Teams meeting window for audio"
+}
+
 func skipped(untitled, chat, generic int) string {
 	return fmt.Sprintf("%d untitled, %d \"Chat |\", %d titled \"Window\"", untitled, chat, generic)
 }

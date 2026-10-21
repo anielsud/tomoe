@@ -374,13 +374,20 @@ func (a *App) followMeetingAudio(ctx context.Context, auto *meetingaudio.Auto) {
 			case <-ctx.Done():
 				return
 			case <-t.C:
-				if name, ok := auto.TryMeetingApp(); ok {
-					fmt.Printf("system audio: now capturing %s only\n", name)
+				// A source that stopped sending audio (the window it was
+				// tied to closed) is replaced; the whole system moves to
+				// the meeting app once that makes sound. Checked for the
+				// whole recording, not just until the first move.
+				name, ok := auto.Recover()
+				if !ok {
+					name, ok = auto.TryMeetingApp()
+				}
+				if ok {
+					fmt.Printf("system audio: now capturing %s\n", name)
 					a.videoHintMu.Lock()
 					a.audioSource = name
 					a.videoHintMu.Unlock()
 					wailsRuntime.EventsEmit(a.ctx, "audio:source", name)
-					return
 				}
 			}
 		}

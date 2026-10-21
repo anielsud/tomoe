@@ -49,3 +49,24 @@ func TestMeetingCandidatesFrontToBack(t *testing.T) {
 		t.Errorf("PickMeetingWindow picked %d, want the first candidate %d", i, got[0])
 	}
 }
+
+// Audio is captured from the meeting window, not Teams' floating compact
+// view, which is frontmost while Teams is in the background and closes
+// when it comes forward.
+func TestPickAudioWindow(t *testing.T) {
+	compact := WindowRecord{ID: 2, Owner: "Microsoft Teams", Title: "Meeting compact view | Weekly sync", Layer: 19, Order: 0}
+	main := WindowRecord{ID: 1, Owner: "Microsoft Teams", Title: "Weekly sync", Order: 1}
+	chat := WindowRecord{ID: 3, Owner: "Microsoft Teams", Title: "Chat | Someone", Order: 2}
+	if i, _ := PickAudioWindow([]WindowRecord{compact, main, chat}); i != 1 {
+		t.Errorf("picked %d, want the meeting window (1)", i)
+	}
+	if i, _ := PickMeetingWindow([]WindowRecord{compact, main, chat}); i != 0 {
+		t.Errorf("video's rule changed: picked %d", i)
+	}
+	if i, why := PickAudioWindow([]WindowRecord{compact, chat}); i != 0 {
+		t.Errorf("with only the compact view: picked %d (%s)", i, why)
+	}
+	if i, _ := PickAudioWindow([]WindowRecord{chat}); i != -1 {
+		t.Errorf("a chat panel picked: %d", i)
+	}
+}

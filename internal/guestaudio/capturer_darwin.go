@@ -4,6 +4,8 @@ package guestaudio
 
 import (
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 )
@@ -30,6 +32,18 @@ type WindowCapturer struct {
 	// tap's sample rate ever changes.
 	resampler *audio.Resampler
 	srcRateHz int
+	// heard is when audio last arrived (unix nanoseconds; 0 before any).
+	// ScreenCaptureKit sends buffers through silence too, so a stream
+	// that goes quiet has stopped (its window closed).
+	heard atomic.Int64
+}
+
+// LastHeard is when the capture last delivered audio (zero before any).
+func (wc *WindowCapturer) LastHeard() time.Time {
+	if n := wc.heard.Load(); n != 0 {
+		return time.Unix(0, n)
+	}
+	return time.Time{}
 }
 
 // NewWindowCapturer creates a Capturer-shaped wrapper around a Tap for
@@ -50,6 +64,7 @@ func NewSystemCapturer() *WindowCapturer {
 }
 
 func (wc *WindowCapturer) onSamples(samples []float32, sampleRateHz float64) {
+	wc.heard.Store(time.Now().UnixNano())
 	rate := int(sampleRateHz)
 
 	wc.mu.Lock()

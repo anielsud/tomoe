@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/audio"
 	"github.com/sosuke-ai/tomoe-pc/internal/audiosources"
@@ -93,7 +94,7 @@ func appCapturer(pid int32) (audio.Capturer, error) {
 		// own app identity (not process ancestry) that this is Teams,
 		// skip PID/window matching entirely and go straight to the
 		// existing, independently-proven title-based finder.
-		windowID, err = teamsvideo.FindMeetingWindow()
+		windowID, err = teamsvideo.FindMeetingAudioWindow()
 	} else {
 		windowID, err = teamsvideo.FindWindowForPID(pid)
 	}
@@ -194,6 +195,56 @@ type Auto struct {
 	mu      sync.Mutex
 	current string
 	onApp   bool
+	cur     audio.Capturer // what sw captures now
+	since   time.Time      // when cur started
+}
+
+// deadAfter is how long a capture may deliver nothing before it counts as
+// stopped: ScreenCaptureKit sends silent buffers too, so a gap this long
+// means the stream ended (its window closed) rather than a quiet call.
+const deadAfter = 5 * time.Second
+
+type heardCapturer interface{ LastHeard() time.Time }
+
+// Recover moves capture on when the source it's on has stopped sending
+// audio (its window closed, or the stream died): to the meeting app's
+// window found again if a meeting is making sound, else to the whole
+// system, from where TryMeetingApp moves back to the app. It returns what
+// it now captures, and whether it moved. Call it every few seconds.
+func (a *Auto) Recover() (string, bool) {
+	a.mu.Lock()
+	cur, since, label := a.cur, a.since, a.current
+	a.mu.Unlock()
+	h, ok := cur.(heardCapturer)
+	if !ok || time.Since(since) < deadAfter {
+		return "", false
+	}
+	last := h.LastHeard()
+	if last.IsZero() {
+		last = since
+	}
+	if time.Since(last) < deadAfter {
+		return "", false
+	}
+	fmt.Printf("meetingaudio: %s stopped sending audio %.0fs ago; capturing again\n", label, time.Since(last).Seconds())
+	var next audio.Capturer
+	nextLabel, onApp := "Everything", false
+	if src, ok := activeMeetingApp(); ok {
+		if c, err := src.capturer(); err == nil {
+			next, nextLabel, onApp = c, src.label, true
+		}
+	}
+	if next == nil {
+		next = guestaudio.NewSystemCapturer()
+	}
+	if err := a.sw.Switch(next); err != nil {
+		fmt.Printf("meetingaudio: couldn't capture %s: %v\n", nextLabel, err)
+		return "", false
+	}
+	a.mu.Lock()
+	a.cur, a.since, a.current, a.onApp = next, time.Now(), nextLabel, onApp
+	a.mu.Unlock()
+	return nextLabel, true
 }
 
 // Current names what's being captured ("Everything" or the app's name).
@@ -225,7 +276,7 @@ func (a *Auto) TryMeetingApp() (string, bool) {
 		return "", false
 	}
 	a.mu.Lock()
-	a.current, a.onApp = src.label, true
+	a.current, a.onApp, a.cur, a.since = src.label, true, c, time.Now()
 	a.mu.Unlock()
 	return src.label, true
 }
@@ -246,6 +297,7 @@ func NewAutoMonitorSource() (*audio.StreamCapturer, *Auto, error) {
 		first = guestaudio.NewSystemCapturer()
 	}
 	a.sw = audio.NewSwitchCapturer(first)
+	a.cur, a.since = first, time.Now()
 	if err := a.sw.Start(); err != nil {
 		fmt.Printf("meetingaudio: guest audio capture unavailable, starting mic-only (%v) — check Screen Recording permission in System Settings > Privacy & Security\n", err)
 		return nil, nil, nil
