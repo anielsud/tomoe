@@ -931,6 +931,61 @@ complement each other, together finding 75% of changes within 2 s.
 - **Compare speaker embeddings either side of a point** (the same ERes2Net
   fingerprints used for clustering), rather than raw spectra.
 
+## Speaker identity from what is said (from Musubi, 2026-10-12)
+
+Musubi, a knowledge base built on Tomoe transcripts, needed to know who
+said each thing in four one- to two-hour leadership meetings (Teams
+transcripts, about 1,900 turns). A reference speaker was worked out for
+every turn by careful reading. What it showed matters for Tomoe.
+
+**Teams transcript labels are devices, not people.**
+- A meeting-room device label carries everyone in that room. One room
+  label carried three or more people within a single meeting.
+- A named participant's label can carry someone else: a presenter using
+  another person's microphone, or the transcription service matching the
+  wrong voice. One named label carried two different executives in two
+  different weeks.
+- "Speaker: X" labels are unidentified voices.
+- Some exports merge several speakers into one block of text.
+- Raw labels were right for only 24–75% of turns per meeting. Meetings
+  with room devices were the worst.
+
+Tomoe's references are Teams exports, so **a reference from a meeting
+with a room device or a shared microphone may be wrong in exactly these
+places**. Check those turns before scoring against it.
+
+**Content resolves most of it, without audio.** The cues, strongest
+first:
+1. being addressed or answered by name ("thanks, …");
+2. what speakers say about themselves (role, team, region, "my org");
+3. continuity of a presentation or argument;
+4. what others say about them.
+
+An LLM given only the transcript text and a company directory (name,
+title, office) got 92–98% of turns right per meeting, for about $0.50
+per meeting on a hosted model. Without the directory it trusted
+mislabelled named devices (78% on the hardest meeting). The directory
+also resolves misheard first names. The remaining errors were:
+- unidentified voices given a colleague's name;
+- several people speaking through one room device;
+- merged multi-speaker blocks.
+
+**Ideas for Tomoe:**
+- **A text-based correction pass alongside voice clustering.**
+  - Apply name-address cues and directory roles only where voice
+    evidence is weak: short turns, a shared room device, a new voice.
+    Never override strong voice evidence.
+  - Attributing every turn was the expensive part (about 80% of tokens).
+    Limiting the pass to low-confidence turns cuts most of that.
+- **Directory input, opt-in:** invitees' names and titles from the
+  calendar or the organisation's directory.
+- **Pass uncertainty downstream.** Mark uncertain speakers so that
+  consumers leave attribution empty rather than guess. Musubi will treat
+  speakers as given, and treat uncertain ones as unknown.
+- **A feedback channel.** Consumers can flag contradictions, such as a
+  line addressed to one person but labelled as another, as input to
+  corrections.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time
@@ -947,6 +1002,13 @@ complement each other, together finding 75% of changes within 2 s.
   base model's 0.65 and 0.55.
 - **Bengali and mixed-language meetings** haven't been measured with any
   speaker model.
+- **Text-based speaker correction.** How much of the remaining error on
+  short turns and shared room devices can content cues fix (see "Speaker
+  identity from what is said")? And can it be done locally at the
+  live pipeline's cost?
+- **References with room devices.** How many of the reviewed references
+  have turns from a shared device or microphone, and are their labels
+  right?
 
 ## Reproducing
 
