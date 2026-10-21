@@ -595,7 +595,9 @@ func (c *Coordinator) refineWorker() {
 	defer c.refineWG.Done()
 
 	for job := range c.refineCh {
+		began := c.now()
 		seg, ok := c.refine(job)
+		c.notePass2(job, c.now().Sub(began))
 		if !ok {
 			continue
 		}
@@ -1146,4 +1148,55 @@ func wordsFor(result *transcribe.Result, start, end float64) []session.Word {
 		return w
 	}
 	return session.SpreadWords(strings.TrimSpace(result.Text), start, end)
+}
+
+// pass2Stats sums a minute of pass 2: how many utterances were finalized,
+// the decode time against the speech it covered, and the longest lag from
+// an utterance's end to its final text. A single worker runs pass 2, so if
+// decoding takes longer than the speech (a busy or swapping machine), the
+// queue grows and lines stay "pending" for minutes; this makes that show
+// up in the log while it happens.
+type pass2Stats struct {
+	n              int
+	decode, speech time.Duration
+	maxLag         float64 // seconds
+}
+
+func (c *Coordinator) notePass2(job refinementJob, decode time.Duration) {
+	lag := c.now().Sub(c.startTime).Seconds() - job.endTime
+	c.pass2Mu.Lock()
+	defer c.pass2Mu.Unlock()
+	c.pass2.n++
+	c.pass2.decode += decode
+	c.pass2.speech += sampleDuration(job.samples)
+	c.pass2.maxLag = max(c.pass2.maxLag, lag)
+}
+
+// logPass2 writes one line a minute while pass 2 has work: utterances
+// finalized, decode time as a share of their speech, the longest lag to
+// final text, and how many utterances are still waiting.
+func (c *Coordinator) logPass2(ctx context.Context) {
+	t := time.NewTicker(time.Minute)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+		c.pass2Mu.Lock()
+		st := c.pass2
+		c.pass2 = pass2Stats{}
+		c.pass2Mu.Unlock()
+		waiting := len(c.refineCh)
+		if st.n == 0 && waiting == 0 {
+			continue
+		}
+		share := 0.0
+		if st.speech > 0 {
+			share = 100 * st.decode.Seconds() / st.speech.Seconds()
+		}
+		fmt.Printf("live: pass 2, last minute: %d utterances, decode %.1fs for %.1fs of speech (%.0f%%), longest lag to final text %.1fs, %d waiting\n",
+			st.n, st.decode.Seconds(), st.speech.Seconds(), share, st.maxLag, waiting)
+	}
 }

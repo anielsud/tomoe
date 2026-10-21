@@ -174,6 +174,9 @@ type Stats struct {
 
 // Coordinator manages one or two live transcription pipelines (mic + monitor).
 type Coordinator struct {
+	// pass2 is the last minute of pass 2, for the log (see logPass2).
+	pass2Mu    sync.Mutex
+	pass2      pass2Stats
 	levelMu    sync.Mutex
 	micLevels  []float64 // recent mic utterance levels (see tooQuiet)
 	turnMu     sync.Mutex
@@ -274,6 +277,7 @@ func (c *Coordinator) Start(ctx context.Context) error {
 
 	c.refineWG.Add(1)
 	go c.refineWorker()
+	go c.logPass2(ctx)
 
 	// Closer goroutine: waits for all pipelines to finish (including
 	// their final VAD flush, which may still enqueue a last refinement
