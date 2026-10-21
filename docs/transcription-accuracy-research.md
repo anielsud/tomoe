@@ -304,6 +304,36 @@ tie Cohere on the judged spots and lose on words. A running vocabulary
 would only fall below the ceiling, so it wasn't taken further; it
 becomes worth it with a TDT beam search that doesn't drop words.
 
+**The dropped words are the blank.** The same meeting, beam search with
+sherpa-onnx's `blank_penalty` (it lowers the score of emitting nothing):
+
+| | Word disagreement | Judged spots right (of 112) | Names and terms right | Words missing |
+|---|---|---|---|---|
+| Cohere | 17.6% | 33 | 70% | 653 |
+| Beam + per-utterance oracle, penalty 0 | 25.6% | 32 | 75% | 1,191 |
+| penalty 1 | 19.6% | 40 | 79% | 663 |
+| penalty 2 | 18.6% | 39 | 81% | 512 |
+| penalty 1, 8 paths (4 above) | 21.3% | 41 | 81% | 795 |
+| No hotwords, penalty 1, 8 paths | 23.3% | 24 | 61% | 940 |
+| Penalty 2, the meeting's whole list on every utterance | 19.4% | 46 | 85% | |
+| Penalty 2, a list known before the meeting | 20.2% | 36 | 70% | |
+
+- A penalty of 1–2 takes the dropped words back to greedy's level or
+  better; a wider beam adds nothing. The gain is the hotwords' (no
+  hotwords: greedy's 24 spots).
+- With them, Parakeet passes Cohere: the meeting's 23 judged names and
+  terms on every utterance fix 46 spots against 33, with names and terms
+  right 85% of the time, at half Cohere's decode time and with word
+  timings. Narrowing the list to each utterance did worse (39) here
+  (alignment to Teams' cues is rough).
+- The list is the problem: 150 entries built from the invite and earlier
+  meetings with the same people held only 3 of the 23 and gave 36.
+  Sources to try for coverage: the meeting series' earlier occurrences,
+  Musubi's threads for the meeting's subject, screen text, the meeting's
+  own words so far.
+- One meeting; the four, and the overall word accuracy (1–2.5 points
+  behind Cohere), decide it. Shipping needs sherpa-onnx with #3657.
+
 sherpa-onnx can boost hotwords in Parakeet with `modified_beam_search`,
 but only with the tokenizer settings Tomoe doesn't pass yet: without
 `modeling_unit = "bpe"` and a `bpe_vocab`, every hotword fails to encode
