@@ -159,6 +159,21 @@ func FindMeetingWindow() (WindowID, error) {
 	return WindowID(w.ID), err
 }
 
+// FindMeetingAudioWindow is the Teams window to capture the call's audio
+// from (PickAudioWindow): never the floating compact view while the
+// meeting window exists.
+func FindMeetingAudioWindow() (WindowID, error) {
+	recs, err := ListAllWindows()
+	if err != nil {
+		return 0, err
+	}
+	i, why := PickAudioWindow(recs)
+	if i < 0 {
+		return 0, fmt.Errorf("teamsvideo: %s", why)
+	}
+	return WindowID(recs[i].ID), nil
+}
+
 // FindMeetingWindowInfo is FindMeetingWindow with the window's details
 // and a sentence saying why it was picked (see PickMeetingWindow).
 func FindMeetingWindowInfo() (WindowRecord, string, error) {
