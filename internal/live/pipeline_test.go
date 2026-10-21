@@ -1,7 +1,10 @@
 package live
 
 import (
+	"fmt"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
@@ -377,4 +380,48 @@ func TestSplitAtHighlight(t *testing.T) {
 	if n := len(c2.segmentCh); n != 1 {
 		t.Errorf("cut %d lines for a change 0.3 s from the end, want 1", n)
 	}
+}
+
+// slowEngine decodes after a delay, numbering its results.
+type slowEngine struct {
+	mockEngine
+	delay time.Duration
+	n     atomic.Int32
+}
+
+func (s *slowEngine) TranscribeDirect(samples []float32) (*transcribe.Result, error) {
+	time.Sleep(s.delay)
+	return &transcribe.Result{Text: fmt.Sprintf("line %d", s.n.Add(1)), Language: "en"}, nil
+}
+
+func (s *slowEngine) TranscribeSamples(samples []float32) (*transcribe.Result, error) {
+	return s.TranscribeDirect(samples)
+}
+
+// With DecodeAsync a slow decode doesn't hold the pipeline (it goes back
+// to reading audio at once), and every line arrives, in order.
+func TestSinglePassAsyncDoesNotStallOrDrop(t *testing.T) {
+	eng := &slowEngine{delay: 100 * time.Millisecond}
+	c := New(Config{Engine: eng, SkipMonitorDiarization: true, DecodeAsync: true})
+	c.decodeWG.Add(1)
+	go c.decodeWorker()
+	began := time.Now()
+	for i := 0; i < 5; i++ {
+		c.handleSegment(SourceMonitor, make([]float32, 8000), nil, &liveState{})
+	}
+	if d := time.Since(began); d > 50*time.Millisecond {
+		t.Errorf("the pipeline waited %s for decodes", d)
+	}
+	for i := 1; i <= 5; i++ {
+		select {
+		case seg := <-c.segmentCh:
+			if want := fmt.Sprintf("line %d", i); seg.Text != want {
+				t.Errorf("got %q, want %q", seg.Text, want)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("line %d never arrived", i)
+		}
+	}
+	close(c.decodeCh)
+	c.decodeWG.Wait()
 }

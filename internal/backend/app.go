@@ -632,7 +632,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		if err != nil {
 			return fmt.Errorf("creating mic capturer: %w", err)
 		}
-		cfg.MicCapturer = audio.NewStreamCapturer(capturer, audio.DefaultWindowSize, 128)
+		cfg.MicCapturer = audio.NewStreamCapturer(capturer, audio.DefaultWindowSize, audio.WindowBuffer)
 	}
 
 	// Set up monitor capturer (optional) — the second audio source
@@ -673,6 +673,7 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 	hs.changes = changes
 	cfg.TurnMode, cfg.TurnMaxSeconds, cfg.TurnMaxGap = a.cfg.Meeting.TurnMode, a.cfg.Meeting.TurnMaxSeconds, a.cfg.Meeting.TurnMaxGap
 	cfg.DecodePad, cfg.TurnInterjection = a.cfg.Meeting.DecodePad, a.cfg.Meeting.TurnInterjection
+	cfg.DecodeAsync = a.cfg.Meeting.DecodeAsync
 	cfg.SpeakerChanged = changes.Between
 	if a.cfg.Meeting.SplitAtHighlight {
 		cfg.HighlightChanges, cfg.HighlightLag = changes.NameChangesIn, live.DefaultHighlightLag

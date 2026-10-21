@@ -398,7 +398,7 @@ func (c *Coordinator) handleSegment(source SourceType, samples []float32, stream
 			c.addToTurn(source, samples, startTime, endTime)
 			return
 		}
-		c.transcribeSinglePass(source, samples, startTime, endTime)
+		c.singlePass(source, samples, startTime, endTime)
 		return
 	}
 
@@ -509,6 +509,31 @@ func (c *Coordinator) queueUnannounced(source SourceType, samples []float32, sta
 // transcribeSinglePass is the single-pass path (no streaming engine
 // configured): one synchronous decode per completed segment, emitted as
 // final immediately.
+// decodeJob is a single-pass line waiting for decodeWorker.
+type decodeJob struct {
+	source             SourceType
+	samples            []float32
+	startTime, endTime float64
+}
+
+// singlePass decodes a finished line: on decodeWorker (DecodeAsync), so
+// the pipeline goes on reading audio, else at once.
+func (c *Coordinator) singlePass(source SourceType, samples []float32, startTime, endTime float64) {
+	if !c.cfg.DecodeAsync {
+		c.transcribeSinglePass(source, samples, startTime, endTime)
+		return
+	}
+	c.decodeCh <- decodeJob{source, samples, startTime, endTime}
+}
+
+// decodeWorker decodes single-pass lines in the order they finished.
+func (c *Coordinator) decodeWorker() {
+	defer c.decodeWG.Done()
+	for j := range c.decodeCh {
+		c.transcribeSinglePass(j.source, j.samples, j.startTime, j.endTime)
+	}
+}
+
 func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32, startTime, endTime float64) {
 	began := time.Now()
 	defer c.cfg.Timings.utterance(began)
@@ -536,9 +561,14 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 		Decision:  string(decision),
 		Words:     wordsFor(result, startTime, endTime),
 	}
-	select {
-	case c.segmentCh <- seg:
-	default:
+	if c.cfg.DecodeAsync {
+		// On the worker: wait for the consumer rather than lose the line.
+		c.segmentCh <- seg
+	} else {
+		select {
+		case c.segmentCh <- seg:
+		default:
+		}
 	}
 	c.countSegment(source)
 }
@@ -1038,7 +1068,7 @@ func (c *Coordinator) turnLimits() (maxSecs, maxGap float64) {
 // pending line and withdraws the others (see refineWorker).
 func (c *Coordinator) sendTurn(source SourceType, t *turnBuf) {
 	if !t.twoPass {
-		c.transcribeSinglePass(source, t.samples, t.start, t.end)
+		c.singlePass(source, t.samples, t.start, t.end)
 		return
 	}
 	job := refinementJob{
@@ -1189,6 +1219,7 @@ func (c *Coordinator) logPass2(ctx context.Context) {
 		c.pass2 = pass2Stats{}
 		c.pass2Mu.Unlock()
 		waiting := len(c.refineCh)
+		c.logBacklog()
 		if st.n == 0 && waiting == 0 {
 			continue
 		}
@@ -1198,5 +1229,28 @@ func (c *Coordinator) logPass2(ctx context.Context) {
 		}
 		fmt.Printf("live: pass 2, last minute: %d utterances, decode %.1fs for %.1fs of speech (%.0f%%), longest lag to final text %.1fs, %d waiting\n",
 			st.n, st.decode.Seconds(), st.speech.Seconds(), share, st.maxLag, waiting)
+	}
+}
+
+// logBacklog reports, once a minute, audio held back because the pipeline
+// is behind and lines waiting to be decoded: on an overloaded machine the
+// transcript arrives late but complete.
+func (c *Coordinator) logBacklog() {
+	var parts []string
+	for _, s := range []struct {
+		name string
+		sc   *audio.StreamCapturer
+	}{{"meeting audio", c.cfg.MonitorCapturer}, {"mic", c.cfg.MicCapturer}} {
+		if s.sc != nil {
+			if b := float64(s.sc.Behind()) / vadSampleRate; b >= 1 {
+				parts = append(parts, fmt.Sprintf("%.0fs of %s", b, s.name))
+			}
+		}
+	}
+	if n := len(c.decodeCh); n > 0 {
+		parts = append(parts, fmt.Sprintf("%d lines to decode", n))
+	}
+	if len(parts) > 0 {
+		fmt.Printf("live: behind, catching up: %s waiting\n", strings.Join(parts, ", "))
 	}
 }

@@ -75,7 +75,7 @@ func NewMonitorSource(sourceHint string) (*audio.StreamCapturer, error) {
 		fmt.Printf("meetingaudio: guest audio capture unavailable, starting mic-only (%v) — check Screen Recording permission in System Settings > Privacy & Security\n", err)
 		return nil, nil
 	}
-	return audio.NewStreamCapturer(capturer, audio.DefaultWindowSize, 128), nil
+	return audio.NewStreamCapturer(capturer, audio.DefaultWindowSize, audio.WindowBuffer), nil
 }
 
 // appCapturer captures one app's audio, via a window it owns.
@@ -302,7 +302,7 @@ func NewAutoMonitorSource() (*audio.StreamCapturer, *Auto, error) {
 		fmt.Printf("meetingaudio: guest audio capture unavailable, starting mic-only (%v) — check Screen Recording permission in System Settings > Privacy & Security\n", err)
 		return nil, nil, nil
 	}
-	return audio.NewStreamCapturer(a.sw, audio.DefaultWindowSize, 128), a, nil
+	return audio.NewStreamCapturer(a.sw, audio.DefaultWindowSize, audio.WindowBuffer), a, nil
 }
 
 // isTeamsPID reports whether pid (an audio-active process from

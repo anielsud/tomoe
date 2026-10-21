@@ -202,3 +202,59 @@ func TestStreamCapturerDefaultWindowSize(t *testing.T) {
 		t.Errorf("windowSize = %d, want %d", sc.windowSize, DefaultWindowSize)
 	}
 }
+
+// A consumer that falls far behind still gets every window, in order:
+// audio beyond the channel's buffer is held back, not dropped.
+func TestStreamCapturerHoldsBackForSlowConsumer(t *testing.T) {
+	mock := &mockCapturer{}
+	sc := NewStreamCapturer(mock, 4, 2)
+	ft := &fakeTicker{ch: make(chan time.Time, 100)}
+	origMaker := makeTickerFunc
+	makeTickerFunc = func() tickerIface { return ft }
+	defer func() { makeTickerFunc = origMaker }()
+	if err := sc.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// 50 ticks of 8 samples with nobody reading: 100 windows against a
+	// channel of 2.
+	for i := 0; i < 50; i++ {
+		var batch []float32
+		for j := 0; j < 8; j++ {
+			batch = append(batch, float32(i*8+j))
+		}
+		mock.feed(batch)
+		ft.ch <- time.Now()
+	}
+	time.Sleep(50 * time.Millisecond)
+	if sc.Behind() == 0 {
+		t.Error("nothing reported held back")
+	}
+	done := make(chan []float32)
+	go func() {
+		var all []float32
+		for w := range sc.Windows() {
+			all = append(all, w...)
+			time.Sleep(time.Millisecond) // a slow consumer
+		}
+		done <- all
+	}()
+	for sc.Behind() > 0 {
+		ft.ch <- time.Now()
+		time.Sleep(5 * time.Millisecond)
+	}
+	if err := sc.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	all := <-done
+	if len(all) != 400 {
+		t.Fatalf("got %d samples, want 400", len(all))
+	}
+	for i, v := range all {
+		if v != float32(i) {
+			t.Fatalf("sample %d is %v: out of order", i, v)
+		}
+	}
+	if sc.Dropped() != 0 {
+		t.Errorf("dropped %d samples", sc.Dropped())
+	}
+}
