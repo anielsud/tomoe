@@ -283,6 +283,27 @@ spinning thread, swapping), not that Cohere is too slow.
 
 ## Vocabulary (hotwords) with Parakeet: blocked upstream
 
+**2026-10-20: with the fix, per utterance.** sherpa-onnx 1.13.8 rebuilt
+with PR #3657 (still unmerged), the Go binding given the C API's
+per-stream hotwords, and a tokenizer vocab from `tokens.txt`, so each
+utterance can get its own list. Ceiling first: an oracle list per
+utterance (the meeting's judged names and terms that Teams' transcript
+has within 5 s of it), one 37-minute meeting, single pass, 15 s cap:
+
+| | Judged spots right (of 112) | Names and terms right (of 169) | Word disagreement | Decode |
+|---|---|---|---|---|
+| Cohere | 33 | 119 (70%) | 17.6% | ~5.7% |
+| Parakeet v2, greedy | 24 | 106 (63%) | 18.2% | 2.5% |
+| Parakeet v2, beam search | 21 | 96 (57%) | 27.3% | 2.8% |
+| Parakeet v2, beam + oracle hotwords | 32 | 126 (75%) | 25.6% | 2.8% |
+
+No decode looped. Hotwords work: names went from 2 to 6 of 22 and terms
+from 9 to 17 of 32, past Cohere on names and terms. But beam search
+itself drops words (disagreement 18% → 27%), so even perfect lists only
+tie Cohere on the judged spots and lose on words. A running vocabulary
+would only fall below the ceiling, so it wasn't taken further; it
+becomes worth it with a TDT beam search that doesn't drop words.
+
 sherpa-onnx can boost hotwords in Parakeet with `modified_beam_search`,
 but only with the tokenizer settings Tomoe doesn't pass yet: without
 `modeling_unit = "bpe"` and a `bpe_vocab`, every hotword fails to encode
