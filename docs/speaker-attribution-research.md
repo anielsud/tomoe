@@ -1098,7 +1098,12 @@ What a profile did must be checkable, so it can earn trust:
 - from 2026-10-22 each look that names a speaker keeps a crop of their
   tile at full resolution, once a minute per name (192 px wide, a few
   KB; `looks/<id>-tile.jpg`), and each profile shows a couple per meeting
-  it learnt from, so who a voice was learnt from can be seen.
+  it learnt from, so who a voice was learnt from can be seen. Earlier
+  meetings get crops from the pictures they saved (`tomoe voices learn`
+  and "Learn from saved meetings" fill them in): the full frame where
+  Record for tuning kept one, else the 320 px thumbnail when the tile in
+  it is at least 80 px wide (median 120). On the owner's sessions: 1,830
+  crops, 13 MB, 94 s of one core; 61 of 91 profiles have one.
 
 ## Open questions
 
