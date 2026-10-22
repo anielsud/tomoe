@@ -210,6 +210,7 @@ func (s *Stream) run() {
 	// One low-priority OS thread does all of it (the models run with one
 	// thread each), so the meeting's audio and transcript come first.
 	runtime.LockOSThread()
+	defer releaseThread()
 	lowerThreadPriority()
 	m := s.meta
 	for range s.wake {
@@ -308,6 +309,9 @@ func (s *Stream) catchUp(samples []float32) error {
 
 // processWindow segments the next window and embeds its speakers.
 func (s *Stream) processWindow(window []float32) {
+	// The models autorelease on macOS; drain per window (autoreleasePush).
+	pool := autoreleasePush()
+	defer autoreleasePop(pool)
 	c := s.processedTo
 	s.processedTo++
 	s.sinceRecl++
