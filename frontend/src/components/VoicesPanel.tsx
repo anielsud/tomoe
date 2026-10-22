@@ -155,11 +155,7 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
                 busy={busy === `r/${p.id}`}
                 play={<PlayButton id={`r/${p.id}`} clip={p.clip} />}
                 onRename={name => act(`r/${p.id}`, () => window.go.backend.App.RenameVoice(p.model, p.id, name))}
-                onForget={() => {
-                  if (confirm(`Forget ${p.name}'s voice? Meetings won't name them by voice until it's learnt again.`)) {
-                    act(`r/${p.id}`, () => window.go.backend.App.ForgetVoice(p.model, p.id), `Forgot ${p.name}.`);
-                  }
-                }}
+                onForget={() => act(`r/${p.id}`, () => window.go.backend.App.ForgetVoice(p.model, p.id), `Forgot ${p.name}.`)}
               />
             ))}
           </section>
@@ -225,6 +221,7 @@ function PairRow({ pair, a, b, busy, playA, playB, onSame, onApart }: {
 
 function ProfileRow({ p, play, busy, onRename, onForget }: { p: VoiceProfile; play: JSX.Element; busy: boolean; onRename: (name: string) => void; onForget: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [confirming, setConfirming] = useState(false);
   const [name, setName] = useState(p.name);
   const from = [p.fromTiles ? `own tile in ${p.fromTiles}` : '', p.fromNamed ? `named by you in ${p.fromNamed}` : ''].filter(Boolean).join(', ');
   return (
@@ -244,10 +241,19 @@ function ProfileRow({ p, play, busy, onRename, onForget }: { p: VoiceProfile; pl
           {p.meetings} {p.meetings === 1 ? 'meeting' : 'meetings'} ({from}) · last heard {when(p.lastHeard)}
         </div>
       </div>
-      {!editing && (
+      {!editing && !confirming && (
         <div className="voice-actions">
           <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setEditing(true)}>Rename</button>
-          <button className="btn btn-danger btn-sm" disabled={busy} onClick={onForget}>Forget</button>
+          <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => setConfirming(true)}>Forget</button>
+        </div>
+      )}
+      {confirming && (
+        // The app's window shows no browser dialogs (confirm() answers no),
+        // so the confirmation is in the row.
+        <div className="voice-actions">
+          <span className="voice-meta">Forget this voice for good? It won't be learnt again.</span>
+          <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setConfirming(false); onForget(); }}>Forget</button>
+          <button className="btn btn-secondary btn-sm" onClick={() => setConfirming(false)}>Keep</button>
         </div>
       )}
     </div>
