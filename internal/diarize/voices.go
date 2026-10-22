@@ -85,44 +85,58 @@ func voicesBy(p *Prepared, offset float64, who func(t float64) string, source st
 		for _, i := range idx {
 			v.Add(p.Embeddings[i])
 		}
-		// The clip: the fingerprint likest the voice as a whole.
+		// The clip: of the fingerprints with a few seconds of speech, the
+		// likest the voice as a whole; else the one with the most speech.
+		// (The likest of all can be a word or two in a long gap.)
 		c := v.Centroid()
-		best, bestSim := idx[0], -2.0
+		best, bestSim, mostSpeech, most := -1, -2.0, idx[0], 0.0
 		for _, i := range idx {
-			if sim := voices.Similarity(c, p.Embeddings[i]); sim > bestSim {
+			_, _, spoke := p.pairSpan(i)
+			if spoke > most {
+				mostSpeech, most = i, spoke
+			}
+			if sim := voices.Similarity(c, p.Embeddings[i]); spoke >= clipSpeech && sim > bestSim {
 				best, bestSim = i, sim
 			}
 		}
-		start, end := p.pairSpan(best)
+		if best < 0 {
+			best = mostSpeech
+		}
+		start, end, _ := p.pairSpan(best)
 		out = append(out, voices.Learned{Name: name, Source: source, Voice: v, Clip: voices.Clip{Start: start + offset, End: end + offset}})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
 	return out
 }
 
+// clipSpeech is how much speech (seconds) a profile's clip should have.
+const clipSpeech = 4.0
+
 // pairSpan is when embedding i's speaker talks in its window (seconds
-// into the audio): from its first active frame to its last.
-func (p *Prepared) pairSpan(i int) (float64, float64) {
+// into the audio): from its first active frame to its last, and how many
+// seconds of that they're talking.
+func (p *Prepared) pairSpan(i int) (float64, float64, float64) {
 	m := p.Meta
 	pair := p.Pairs[i]
 	if m.SampleRate == 0 || m.ReceptiveFieldShift == 0 || pair.Chunk >= len(p.Labels) {
-		return 0, 0
+		return 0, 0, 0
 	}
 	start := int(float32(pair.Chunk)*float32(m.WindowShift)/float32(m.ReceptiveFieldShift) + 0.5)
-	first, last := -1, -1
+	first, last, active := -1, -1, 0
 	for f, row := range p.Labels[pair.Chunk] {
 		if pair.Speaker < len(row) && row[pair.Speaker] != 0 {
 			if first < 0 {
 				first = f
 			}
 			last = f
+			active++
 		}
 	}
 	if first < 0 {
-		return 0, 0
+		return 0, 0, 0
 	}
 	sec := float64(m.ReceptiveFieldShift) / float64(m.SampleRate)
-	return float64(start+first) * sec, float64(start+last+1) * sec
+	return float64(start+first) * sec, float64(start+last+1) * sec, float64(active) * sec
 }
 
 // tileDisplayNames maps each tile key TileTimeline gives to the name as

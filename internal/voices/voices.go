@@ -129,6 +129,9 @@ type Profile struct {
 	// Apart lists profiles the user said are someone else, so they're
 	// never offered as the same person again.
 	Apart []string `json:"apart,omitempty"`
+	// Aliases are names of profiles merged into this one: learning under
+	// them teaches this profile.
+	Aliases []string `json:"aliases,omitempty"`
 
 	centroid []float32
 	n        int
@@ -186,8 +189,9 @@ type Store struct {
 	same   func(a, b string) bool
 	params Params
 
-	mu       sync.Mutex
-	profiles []*Profile
+	mu        sync.Mutex
+	profiles  []*Profile
+	forgotten []string
 	// modTime is the file's when last read or written: another process
 	// (the CLI's learn, the app) may have changed it since.
 	modTime time.Time
@@ -234,7 +238,7 @@ func (s *Store) load() error {
 	for _, p := range f.Profiles {
 		p.refresh()
 	}
-	s.profiles, s.modTime = f.Profiles, st.ModTime()
+	s.profiles, s.forgotten, s.modTime = f.Profiles, f.Forgotten, st.ModTime()
 	return nil
 }
 
@@ -250,11 +254,13 @@ func (s *Store) syncLocked() {
 type file struct {
 	Version  int        `json:"version"`
 	Profiles []*Profile `json:"profiles"`
+	// Forgotten are names the user forgot, never learnt again.
+	Forgotten []string `json:"forgotten,omitempty"`
 }
 
 // saveLocked writes the profiles atomically.
 func (s *Store) saveLocked() error {
-	b, err := json.Marshal(file{Version: 1, Profiles: s.profiles})
+	b, err := json.Marshal(file{Version: 1, Profiles: s.profiles, Forgotten: s.forgotten})
 	if err != nil {
 		return err
 	}
@@ -308,7 +314,7 @@ func (s *Store) Learn(sessionID string, at time.Time, learned []Learned) ([]stri
 	s.syncLocked()
 	var done []string
 	for _, l := range learned {
-		if l.Name == "" || l.Voice.N < s.params.MinFingerprints {
+		if l.Name == "" || l.Voice.N < s.params.MinFingerprints || s.forgottenLocked(l.Name) {
 			continue
 		}
 		p := s.findLocked(l.Name)
@@ -337,19 +343,37 @@ func (s *Store) Learn(sessionID string, at time.Time, learned []Learned) ([]stri
 	return done, s.saveLocked()
 }
 
-// findLocked is the profile named name, if any.
+// findLocked is the profile named name (or once named it), if any.
 func (s *Store) findLocked(name string) *Profile {
 	for _, p := range s.profiles {
-		if p.Name == name {
+		if p.Name == name || contains(p.Aliases, name) {
 			return p
 		}
 	}
 	for _, p := range s.profiles {
-		if s.same != nil && s.same(p.Name, name) {
+		if s.sameLocked(p.Name, name) {
 			return p
+		}
+		for _, a := range p.Aliases {
+			if s.sameLocked(a, name) {
+				return p
+			}
 		}
 	}
 	return nil
+}
+
+func (s *Store) sameLocked(a, b string) bool {
+	return a == b || (s.same != nil && s.same(a, b))
+}
+
+func (s *Store) forgottenLocked(name string) bool {
+	for _, f := range s.forgotten {
+		if s.sameLocked(f, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // Match names voices (by key) from the profiles: each voice gets the
@@ -409,7 +433,10 @@ func (s *Store) Rename(id, name string) error {
 	if p == nil {
 		return fmt.Errorf("no voice profile %q", id)
 	}
-	p.Name = name
+	if p.Name != name {
+		p.Aliases = appendOnce(p.Aliases, p.Name)
+		p.Name = name
+	}
 	return s.saveLocked()
 }
 
@@ -424,6 +451,10 @@ func (s *Store) Merge(into, from string) error {
 	}
 	// A meeting in both keeps both: they were two voices then.
 	a.Meetings = append(a.Meetings, b.Meetings...)
+	a.Aliases = appendOnce(a.Aliases, b.Name)
+	for _, n := range b.Aliases {
+		a.Aliases = appendOnce(a.Aliases, n)
+	}
 	a.refresh()
 	s.removeLocked(from)
 	return s.saveLocked()
@@ -443,13 +474,18 @@ func (s *Store) Apart(a, b string) error {
 	return s.saveLocked()
 }
 
-// Forget deletes a profile.
+// Forget deletes a profile, and its names are never learnt again.
 func (s *Store) Forget(id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.syncLocked()
-	if s.byIDLocked(id) == nil {
+	p := s.byIDLocked(id)
+	if p == nil {
 		return fmt.Errorf("no voice profile %q", id)
+	}
+	s.forgotten = appendOnce(s.forgotten, p.Name)
+	for _, a := range p.Aliases {
+		s.forgotten = appendOnce(s.forgotten, a)
 	}
 	s.removeLocked(id)
 	return s.saveLocked()

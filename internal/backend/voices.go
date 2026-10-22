@@ -399,8 +399,9 @@ func (a *App) PlayVoiceClip(clip VoiceClip) (string, error) {
 		return "", err
 	}
 	dur := min(clip.End-clip.Start, clipSeconds)
-	// Two tracks (mic, meeting) since the mic was kept apart; one before.
-	for _, track := range []string{"0:a:1", "0:a:0"} {
+	// A meeting with a mic has three tracks: the mix, the mic, the meeting
+	// (session.SaveAudioM4A); one with a single source has just it.
+	for _, track := range []string{"0:a:2", "0:a:0"} {
 		cmd := exec.Command(ffmpeg, "-v", "error", "-ss", fmt.Sprintf("%.2f", clip.Start), "-t", fmt.Sprintf("%.2f", dur),
 			"-i", path, "-map", track, "-ac", "1", "-ar", "16000", "-f", "wav", "pipe:1")
 		var out bytes.Buffer
