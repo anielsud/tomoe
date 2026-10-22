@@ -986,6 +986,91 @@ also resolves misheard first names. The remaining errors were:
   line addressed to one person but labelled as another, as input to
   corrections.
 
+## Meeting rooms: splitting the room, and voice profiles (2026-10-21/22)
+
+A meeting room joins a Teams call as one participant: its tile lights for
+whoever in the room is talking, so the meeting window can't say which of
+them it is, and the room's people sound more alike to the speaker model
+than people on their own microphones (one room, one microphone, one
+acoustic). Before this work a room's few people usually came out as one or
+two speakers named after the room.
+
+**Room split** (`diarize_room_split`, off by default). The audio heard
+under a room's tile is clustered on its own, at a finer cut
+(`room_split_threshold` 0.45 against the usual 0.6), two room clusters
+merge only at 0.7 similarity, and nothing heard under the room joins a
+cluster heard under anyone's own tile. On a meeting where the owner
+labelled 44 turns (a room of four people plus remote people), speakers
+right 94.7% → 98.1%. Meetings with no room tile are unchanged. A room
+tile is any tile whose name has the word "room" in it (the first rule,
+names starting "Room", missed rooms named like "Harbour Zoom Room").
+
+Splitting tells the room's people apart but can't name them: the room's
+tile is all the window shows.
+
+**Voice profiles** (`voice_profiles`, off by default). A profile is a
+person's voice fingerprint (the sum of their L2-normalized fingerprints)
+learnt from strong evidence only: fingerprints with at least 80% of their
+speech under the person's own lit tile, and speakers the user named. A
+speaker the window didn't name, or named only by a room, is named by the
+profile it's most like, if at least `voice_profile_threshold` alike and
+ahead of the next profile by `voice_profile_margin`, one speaker per
+profile, never a name the window or the user gave someone else in the
+meeting. Names from the window and the user win.
+
+Measured on the 83 saved meetings since 2026-10-01 with fingerprints from
+the English-trained model: 176 (meeting, person) voices with 8 or more
+fingerprints under their own tile; 92 people, 35 of them in two or more
+meetings. Each voice was compared to profiles learnt from every *other*
+meeting (leave one meeting out).
+
+| | |
+|---|---|
+| Same person, other meetings: similarity | median 0.92, 5th percentile 0.68 |
+| Different people: similarity | median 0.13, 99th percentile 0.46 |
+
+| Rule (threshold / margin) | People with a profile elsewhere (119): named, right | People with no profile elsewhere (57): wrongly named |
+|---|---|---|
+| 0.60 / 0.05 | 114, all right | 4 |
+| 0.65 / 0.05 | 113, all right | 3 |
+| **0.70 / 0.10 (default)** | **112, all right** | **1** |
+| 0.75 / 0.10 | 110, all right | — |
+
+The one wrong name at the default was two misread tile names of one
+person, so effectively right. A wrong name costs more than no name, so
+the default takes the higher bar.
+
+Two fixes the measurement turned up: a tile's name cut short ("…Skidmo")
+must fold into the full name across meetings, or one person gets two
+profiles; and rooms must be recognised by the word "room", or a room's
+voice mix becomes a "person" that competes with its own members.
+
+On the labelled room meeting, with profiles learnt from every other
+meeting, the room split's speakers named as the app would (45 lines with
+one speaker):
+
+| | Named right | Named wrong | Named only "the room" | No name |
+|---|---|---|---|---|
+| Room split | 21 | 1 | 22 | 1 |
+| Room split + profiles | 40 | 4 | 0 | 1 |
+
+The room's two main voices were named at 0.90 and 0.87 similarity. The
+three new wrong lines aren't wrong matches: they are lines the clustering
+had already put in another person's room cluster, which was labelled
+"the room" before and now carries that person's name. Checking each line's
+own voice against the profiles didn't move them (room lines are short and
+overlap). The fix for those is the clustering, not the naming.
+
+Learning is cheap: 71 saved meetings in 12 s (`tomoe voices learn`).
+Profiles are kept per speaker model (`voices/<model>.json` in the data
+folder; fingerprints only, never audio), since two models' fingerprints
+can't be compared. The Voices page manages them: "Who's this?" plays a
+nameless voice from a recent meeting with the profile it sounds most like;
+"Same person?" offers pairs of profiles at least 0.7 alike (one person
+under two names, or a misread tile name); and each profile can be played,
+renamed or forgotten. Naming a speaker in a saved meeting teaches that
+meeting's voice to the profile.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time

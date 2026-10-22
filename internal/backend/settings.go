@@ -202,6 +202,12 @@ func planApply(old, next *config.Config) applyPlan {
 		old.Meeting.DiarizeRecluster != next.Meeting.DiarizeRecluster {
 		p.later = append(p.later, "Diarizing during the meeting")
 	}
+	if old.Meeting.DiarizeRoomSplit != next.Meeting.DiarizeRoomSplit {
+		p.later = append(p.later, "Splitting meeting rooms")
+	}
+	if old.Meeting.VoiceProfiles != next.Meeting.VoiceProfiles {
+		p.later = append(p.later, "Voice profiles")
+	}
 	if old.Meeting.VideoHintWindow != next.Meeting.VideoHintWindow {
 		p.later = append(p.later, "Video hint window (the hint timeline switches it at once)")
 	}

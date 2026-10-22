@@ -10,12 +10,13 @@ import HintTimeline, { HintTicker } from './components/HintTimeline'
 import DiagnosticsPane from './components/DiagnosticsPane'
 import InitScreen from './components/InitScreen'
 import ToolsPanel from './components/ToolsPanel'
+import VoicesPanel from './components/VoicesPanel'
 import { EventsOn } from '../wailsjs/runtime/runtime'
 import { useTranscript } from './hooks/useTranscript'
 import { useSession } from './hooks/useSession'
 import { DeviceInfo, Session, AudioSourceView } from './types'
 
-type View = 'live' | 'sessions' | 'settings' | 'tools' | 'videohints' | 'diagnostics';
+type View = 'live' | 'sessions' | 'settings' | 'tools' | 'videohints' | 'diagnostics' | 'voices';
 
 function App() {
   // True from launch until the backend's first-run setup finishes (see
@@ -261,6 +262,13 @@ function App() {
         )}
         <button
           className="btn-icon"
+          title="Voices (people Tomoe knows by voice)"
+          onClick={() => setView(view === 'voices' ? 'live' : 'voices')}
+        >
+          &#x1F5E3;
+        </button>
+        <button
+          className="btn-icon"
           title="Diagnostics (live speaker-labeling internals)"
           onClick={() => setView(view === 'diagnostics' ? 'live' : 'diagnostics')}
         >
@@ -318,6 +326,10 @@ function App() {
 
       {view === 'videohints' && (
         <HintTimeline sessionId={hintSession} />
+      )}
+
+      {view === 'voices' && (
+        <VoicesPanel onSettings={() => setView('settings')} />
       )}
 
       {view === 'diagnostics' && (

@@ -132,6 +132,8 @@ export interface Config {
     // Diarize with Tomoe's own diarizer while recording instead of after
     // (see docs/speaker-pipeline-design.md).
     DiarizeDuringMeeting: boolean;
+    DiarizeRoomSplit: boolean;
+    VoiceProfiles: boolean;
     DiarizeStride: number;
     DiarizeRecluster: number;
     RecordForTuning: boolean;
@@ -205,4 +207,48 @@ export interface ModelStatus {
   LangIDReady: boolean;
   BengaliReady: boolean;
   ModelDir: string;
+}
+
+// Voice profiles (backend/voices.go).
+export interface VoiceClip {
+  session: string;
+  start: number;
+  end: number;
+}
+
+export interface VoiceProfile {
+  model: string;
+  id: string;
+  name: string;
+  meetings: number;
+  fingerprints: number;
+  fromTiles: number;
+  fromNamed: number;
+  lastHeard: string;
+  clip: VoiceClip;
+}
+
+export interface VoicePair {
+  model: string;
+  a: string;
+  b: string;
+  similarity: number;
+}
+
+export interface UnknownVoice {
+  session: string;
+  title: string;
+  at: string;
+  label: string;
+  seconds: number;
+  clip: VoiceClip;
+  soundsLike?: string;
+  similarity?: number;
+}
+
+export interface VoicesView {
+  enabled: boolean;
+  profiles: VoiceProfile[];
+  pairs: VoicePair[];
+  unknown: UnknownVoice[];
 }

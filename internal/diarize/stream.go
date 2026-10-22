@@ -8,12 +8,16 @@ import (
 
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
+	"github.com/sosuke-ai/tomoe-pc/internal/voices"
 )
 
 // StreamConfig configures a Stream.
 type StreamConfig struct {
 	SegmentationModel string
-	EmbeddingModel    string
+	// EmbeddingModelID names the speaker model (models.SpeakerModel.ID),
+	// saved with the fingerprints: another model's can't be compared.
+	EmbeddingModelID string
+	EmbeddingModel   string
 	// Threads for the segmentation model (the embedder uses one). Above
 	// 1, the extra threads are ONNX Runtime's and don't share the Stream
 	// thread's low priority.
@@ -58,6 +62,9 @@ type Timeline struct {
 	// Through is how far into the audio (seconds) the timeline covers.
 	Through float64
 	Final   bool
+	// Voices is each speaker's fingerprints (by stable ID), for naming
+	// them from voice profiles.
+	Voices map[int]voices.Voice
 }
 
 // Stream diarizes audio as it arrives: segmentation and embeddings for
@@ -446,6 +453,15 @@ func (s *Stream) recluster(final bool) Timeline {
 			clusters = p.AbsorbSmallClusters(clusters, s.cfg.Params, s.cfg.MinSpeakerSeconds)
 		}
 		ids := s.stable.Assign(pairs, clusters)
+		tl.Voices = map[int]voices.Voice{}
+		for i, c := range clusters {
+			if c < 0 {
+				continue
+			}
+			v := tl.Voices[ids[c]]
+			v.Add(embs[i])
+			tl.Voices[ids[c]] = v
+		}
 		for _, t := range p.ReconstructClusters(clusters, s.cfg.Params) {
 			t.Speaker = ids[t.Speaker]
 			tl.Turns = append(tl.Turns, t)

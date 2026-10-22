@@ -332,7 +332,11 @@ func (a *App) RenameSpeaker(id, label, name string) error {
 	if len(renameLines(saved, label, name)) == 0 {
 		return fmt.Errorf("no lines labeled %q", label)
 	}
-	return a.store.Save(saved)
+	if err := a.store.Save(saved); err != nil {
+		return err
+	}
+	a.learnNamedLater(saved)
+	return nil
 }
 
 // renameLines relabels sess's lines labeled label, keeping their live

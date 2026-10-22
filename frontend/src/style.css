@@ -1041,3 +1041,36 @@ body {
   padding: 8px 12px;
   margin-bottom: 16px;
 }
+
+/* Voices page */
+.voice-row {
+  align-items: center;
+  gap: 10px;
+}
+
+.voice-play {
+  min-width: 32px;
+}
+
+.voice-meta {
+  color: var(--text-dim);
+  font-weight: normal;
+  font-size: 0.9em;
+}
+
+.voice-name {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.voice-name input {
+  min-width: 160px;
+}
+
+.voice-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
