@@ -176,7 +176,9 @@ type MeetingConfig struct {
 	// fingerprints across it (a low-priority job, about 2 minutes of one
 	// core per meeting hour; diarizing during the meeting must be on). On
 	// 11 changes marked by ear in a meeting with two rooms: median error
-	// 0.95 -> 0.23 s. false: cuts stay where the diarization put them.
+	// 0.95 -> 0.23 s; but on a second meeting, whose cuts were mostly
+	// right, it made them worse (0.00 -> 0.47 s), so it's experimental.
+	// false: cuts stay where the diarization put them.
 	RefineSpeakerCuts bool `toml:"refine_speaker_cuts"`
 	AutoSave          bool `toml:"auto_save"`   // save session on stop
 	AutoDetect        bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)

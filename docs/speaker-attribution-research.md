@@ -1148,6 +1148,18 @@ it's trusted. It runs after the meeting is saved, at low priority: about
 cut). `refine_speaker_cuts`, off by default; `tomoe session refine-cuts`
 runs it on a saved session.
 
+**Checked on a second meeting, it fails.** On a one-room meeting, 15 cuts
+picked at random and marked the same way: Tomoe's own cuts were mostly
+right (median 0.00 s from the mark, 9 of 15 within 0.25 s), and refining
+made them worse (median 0.47 s, 4 of 15), mostly by moving right cuts
+about half a second early; none of the 3 cuts over 1 s off was fixed. So
+the cut errors on the first meeting were that meeting's (two rooms, many
+handovers through one microphone), not the rule, and the refinement as
+built has a bias of its own. It stays off. Next: find the half-second
+bias (the speakers' voices are taken from the saved labels, which may mix
+people; the window may be too long for short turns), and gate refining on
+evidence that the cut is wrong before moving it.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time
