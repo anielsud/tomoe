@@ -16,6 +16,14 @@ import (
 // reducible), O(n^2) time and memory: a few thousand embeddings take well
 // under a second.
 func clusterComplete(embs [][]float32, threshold float64, numClusters int) []int {
+	return clusterCompleteTiles(embs, threshold, numClusters, nil)
+}
+
+// clusterCompleteTiles is clusterComplete where two embeddings heard under
+// different meeting tiles (tiles[i] and tiles[j] both set and different)
+// can never share a cluster: their distance is the largest possible, and
+// complete linkage carries it to every cluster holding them.
+func clusterCompleteTiles(embs [][]float32, threshold float64, numClusters int, tiles []string) []int {
 	n := len(embs)
 	if n == 0 {
 		return nil
@@ -39,6 +47,9 @@ func clusterComplete(embs [][]float32, threshold float64, numClusters int) []int
 				dot += a[k] * b[k]
 			}
 			d[idx(i, j)] = 1 - dot
+			if tileConflict(tiles, i, j) {
+				d[idx(i, j)] = 2
+			}
 		}
 	}
 
@@ -153,9 +164,32 @@ func compactLabels(n int, find func(int) int) []int {
 // Deterministic (no map iteration), and each cluster's voice is the mean of
 // all its windows' embeddings.
 func mergeByCentroid(embs [][]float32, clusters []int, minSimilarity float64) []int {
+	return mergeByCentroidTiles(embs, clusters, minSimilarity, nil)
+}
+
+// mergeByCentroidTiles is mergeByCentroid that never merges two clusters
+// heard under different meeting tiles (clusterTiles).
+func mergeByCentroidTiles(embs [][]float32, clusters []int, minSimilarity float64, tiles []string) []int {
 	k := 0
 	for _, c := range clusters {
 		k = max(k, c+1)
+	}
+	heard := clusterTiles(clusters, tiles, k)
+	return mergeByCentroidWhere(embs, clusters, func(a, b int, sim float64) bool {
+		return sim >= minSimilarity && (heard == nil || !setsConflict(heard[a], heard[b]))
+	}, heard)
+}
+
+// mergeByCentroidWhere repeatedly merges the two most similar clusters
+// (by mean embedding) that ok allows, until no pair is allowed. heard,
+// when set, is each cluster's tiles, kept up to date as clusters merge.
+func mergeByCentroidWhere(embs [][]float32, clusters []int, ok func(a, b int, sim float64) bool, heard []map[string]bool) []int {
+	k := 0
+	for _, c := range clusters {
+		k = max(k, c+1)
+	}
+	if k == 0 {
+		return clusters
 	}
 	dim := len(embs[0])
 	sums := make([][]float64, k)
@@ -188,16 +222,17 @@ func mergeByCentroid(embs [][]float32, clusters []int, minSimilarity float64) []
 		into[i] = i
 	}
 	for {
-		bi, bj, best := -1, -1, minSimilarity
+		bi, bj, best := -1, -1, math.Inf(-1)
 		for i := 0; i < k; i++ {
 			if !alive[i] {
 				continue
 			}
 			for j := i + 1; j < k; j++ {
-				if alive[j] {
-					if s := cos(sums[i], sums[j]); s >= best {
-						bi, bj, best = i, j, s
-					}
+				if !alive[j] {
+					continue
+				}
+				if s := cos(sums[i], sums[j]); s > best && ok(i, j, s) {
+					bi, bj, best = i, j, s
 				}
 			}
 		}
@@ -206,6 +241,11 @@ func mergeByCentroid(embs [][]float32, clusters []int, minSimilarity float64) []
 		}
 		for d := range sums[bi] {
 			sums[bi][d] += sums[bj][d]
+		}
+		if heard != nil {
+			for t := range heard[bj] {
+				heard[bi][t] = true
+			}
 		}
 		alive[bj] = false
 		into[bj] = bi
@@ -238,11 +278,17 @@ func (p *Prepared) AbsorbSmallClusters(clusters []int, params Params, minSeconds
 	for _, t := range p.turns(clusters, params) {
 		spoke[t.Speaker] += t.End - t.Start
 	}
-	return absorbByVoice(p.Embeddings, clusters, spoke, minSeconds)
+	return absorbByVoiceTiles(p.Embeddings, clusters, spoke, minSeconds, p.tiles)
 }
 
 // absorbByVoice is AbsorbSmallClusters given how long each cluster spoke.
 func absorbByVoice(embs [][]float32, clusters []int, spoke []float64, minSeconds float64) []int {
+	return absorbByVoiceTiles(embs, clusters, spoke, minSeconds, nil)
+}
+
+// absorbByVoiceTiles is absorbByVoice that never gives a window to a
+// cluster heard under a different meeting tile from the window's.
+func absorbByVoiceTiles(embs [][]float32, clusters []int, spoke []float64, minSeconds float64, tiles []string) []int {
 	k := len(spoke)
 	dim := len(embs[0])
 	sums := make([][]float64, k)
@@ -275,6 +321,7 @@ func absorbByVoice(embs [][]float32, clusters []int, spoke []float64, minSeconds
 			}
 		}
 	}
+	heard := clusterTiles(clusters, tiles, k)
 	out := append([]int(nil), clusters...)
 	for i, c := range clusters {
 		if sums[c] != nil {
@@ -282,7 +329,7 @@ func absorbByVoice(embs [][]float32, clusters []int, spoke []float64, minSeconds
 		}
 		best, bestSim := c, math.Inf(-1)
 		for b, s := range sums {
-			if s == nil {
+			if s == nil || (tiles != nil && tiles[i] != "" && setsConflict(map[string]bool{tiles[i]: true}, heard[b])) {
 				continue
 			}
 			var dot float64
@@ -296,4 +343,109 @@ func absorbByVoice(embs [][]float32, clusters []int, spoke []float64, minSeconds
 		out[i] = best
 	}
 	return out
+}
+
+// tileConflict reports whether embeddings i and j were heard under
+// different meeting tiles.
+func tileConflict(tiles []string, i, j int) bool {
+	return tiles != nil && tiles[i] != "" && tiles[j] != "" && tiles[i] != tiles[j]
+}
+
+// clusterTiles is the set of tiles each cluster's embeddings were heard
+// under (nil without tiles).
+func clusterTiles(clusters []int, tiles []string, k int) []map[string]bool {
+	if tiles == nil {
+		return nil
+	}
+	out := make([]map[string]bool, k)
+	for i := range out {
+		out[i] = map[string]bool{}
+	}
+	for i, c := range clusters {
+		if tiles[i] != "" {
+			out[c][tiles[i]] = true
+		}
+	}
+	return out
+}
+
+// setsConflict reports whether two clusters were heard under different
+// tiles: each under at least one, and not all the same one.
+func setsConflict(a, b map[string]bool) bool {
+	for x := range a {
+		for y := range b {
+			if x != y {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// clusterRoomApart clusters the embeddings heard under a room's tile by
+// themselves at roomThreshold, and the rest (other tiles, and no clear
+// tile) at threshold, under the same tile constraints. Clusters of the
+// rest may later merge with the room's (mergeByCentroidRoom) when their
+// windows had no clear tile.
+func clusterRoomApart(embs [][]float32, threshold, roomThreshold float64, tiles []string) []int {
+	var room, rest []int
+	for i, t := range tiles {
+		if t != "" && IsRoomTile(t) {
+			room = append(room, i)
+		} else {
+			rest = append(rest, i)
+		}
+	}
+	out := make([]int, len(embs))
+	next := 0
+	for _, part := range []struct {
+		idx []int
+		th  float64
+	}{{rest, threshold}, {room, roomThreshold}} {
+		if len(part.idx) == 0 {
+			continue
+		}
+		sub := make([][]float32, len(part.idx))
+		subTiles := make([]string, len(part.idx))
+		for j, i := range part.idx {
+			sub[j], subTiles[j] = embs[i], tiles[i]
+		}
+		labels := clusterCompleteTiles(sub, part.th, 0, subTiles)
+		k := 0
+		for j, l := range labels {
+			out[part.idx[j]] = next + l
+			k = max(k, l+1)
+		}
+		next += k
+	}
+	return compactLabels(len(out), func(i int) int { return out[i] })
+}
+
+// mergeByCentroidRoom is mergeByCentroidTiles where two clusters both
+// heard under a room's tile merge only at roomMerge similarity or more.
+func mergeByCentroidRoom(embs [][]float32, clusters []int, minSimilarity, roomMerge float64, tiles []string) []int {
+	k := 0
+	for _, c := range clusters {
+		k = max(k, c+1)
+	}
+	heard := clusterTiles(clusters, tiles, k)
+	isRoom := func(c int) bool {
+		for t := range heard[c] {
+			if IsRoomTile(t) {
+				return true
+			}
+		}
+		return false
+	}
+	// Merge the rest as before, holding room clusters apart; then let room
+	// clusters merge with each other only above roomMerge.
+	return mergeByCentroidWhere(embs, clusters, func(a, b int, sim float64) bool {
+		if setsConflict(heard[a], heard[b]) {
+			return false
+		}
+		if isRoom(a) && isRoom(b) {
+			return sim >= roomMerge
+		}
+		return sim >= minSimilarity
+	}, heard)
 }

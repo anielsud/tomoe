@@ -87,6 +87,9 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	}
 	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, shortLines: m.HighlightShortLines, hintFirst: m.LiveLabelsFromHighlight, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
+	if m.DiarizeRoomSplit {
+		sc.Tiles = d.tileTimeline
+	}
 	if opts.OnSpeakerChange != nil {
 		sc.OnSpeakerChange = func(at float64) { opts.OnSpeakerChange(at + d.offset) }
 	}
@@ -503,4 +506,18 @@ func (d *SessionDiarizer) settleProvisionalLocked(turns []session.DiarizeSegment
 // the timeline hasn't placed a voice yet.
 func isProvisional(label string) bool {
 	return strings.HasPrefix(label, NewSpeakerLabel) || strings.HasSuffix(label, "?") || strings.HasSuffix(label, "?)")
+}
+
+// tileTimeline is the meeting window's tile timeline so far and the
+// session offset of the Stream's audio (StreamConfig.Tiles); nil before
+// any read. Called on the Stream's goroutine.
+func (d *SessionDiarizer) tileTimeline() (func(t float64) string, float64) {
+	d.lock.Lock()
+	hints := append([]Hint(nil), d.hints...)
+	offset := d.offset
+	d.lock.Unlock()
+	if len(hints) == 0 {
+		return nil, 0
+	}
+	return TileTimeline(hints, hintLag), offset
 }

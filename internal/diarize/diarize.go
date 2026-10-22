@@ -26,6 +26,31 @@ type Prepared struct {
 	Labels     [][][]int8 // [chunk][frame][local speaker]
 	Pairs      []ChunkSpeaker
 	Embeddings [][]float32 // one per Pairs entry, L2-normalized
+	// tiles, when set (WithTiles), is the meeting tile each embedding was
+	// heard under ("" unknown): clustering keeps different tiles apart.
+	tiles []string
+	// roomThreshold and roomMerge, when set (WithRoomSplit), cluster the
+	// audio heard under a meeting room's tile on its own, more finely:
+	// voices through one room's microphone sound more alike than
+	// people's own, so the room's few people otherwise become one.
+	roomThreshold, roomMerge float64
+}
+
+// WithTiles returns p clustering under tile constraints: tiles[i] is the
+// meeting tile embedding i was heard under, or "" (see PairTiles).
+func (p *Prepared) WithTiles(tiles []string) *Prepared {
+	q := *p
+	q.tiles = tiles
+	return &q
+}
+
+// WithRoomSplit returns p clustering a room tile's audio by itself at
+// threshold, and merging two clusters heard under a room only at merge
+// similarity or more (0 keeps the general settings).
+func (p *Prepared) WithRoomSplit(threshold, merge float64) *Prepared {
+	q := *p
+	q.roomThreshold, q.roomMerge = threshold, merge
+	return &q
 }
 
 // Prepare runs segmentation and embedding extraction over samples (16kHz
@@ -236,7 +261,10 @@ func (p *Prepared) Diarize(params Params) ([]session.DiarizeSegment, map[int]str
 // steps of Diarize are exposed separately so a settings sweep can cluster
 // once per threshold and reuse the result for every other setting.
 func (p *Prepared) Cluster(threshold float64, numClusters int) []int {
-	return clusterComplete(p.Embeddings, threshold, numClusters)
+	if p.roomThreshold > 0 && p.tiles != nil && numClusters <= 0 {
+		return clusterRoomApart(p.Embeddings, threshold, p.roomThreshold, p.tiles)
+	}
+	return clusterCompleteTiles(p.Embeddings, threshold, numClusters, p.tiles)
 }
 
 // MergeClusters merges clusters by mean embedding (see
@@ -245,7 +273,10 @@ func (p *Prepared) MergeClusters(clusters []int, minSimilarity float64) []int {
 	if len(clusters) == 0 {
 		return clusters
 	}
-	return mergeByCentroid(p.Embeddings, clusters, minSimilarity)
+	if p.roomMerge > 0 && p.tiles != nil {
+		return mergeByCentroidRoom(p.Embeddings, clusters, minSimilarity, p.roomMerge, p.tiles)
+	}
+	return mergeByCentroidTiles(p.Embeddings, clusters, minSimilarity, p.tiles)
 }
 
 // Reconstruct turns cluster assignments into speaker turns, using params'
