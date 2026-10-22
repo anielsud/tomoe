@@ -152,8 +152,22 @@ func TestMergeApartForget(t *testing.T) {
 	if ps := s.Profiles(); len(ps) != 1 || ps[0].Name != "Ilse M. Novak" || len(ps[0].Apart) != 0 {
 		t.Errorf("after forgetting Wayde's only meeting: %+v", ps)
 	}
+	// Learning under a merged-away or old name teaches the same profile.
+	_, _ = s.Learn("m2", time.Now(), []Learned{{Name: "I. Novak (guest)", Voice: voiceOf(20, unit(0, 1, 0.05))}})
+	_, _ = s.Learn("m3", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0.05))}})
+	if ps := s.Profiles(); len(ps) != 1 || len(ps[0].Meetings) != 4 {
+		t.Errorf("old names should teach the profile they're part of: %+v", ps)
+	}
 	if err := s.Forget(ids["Ilse Novak"]); err != nil || len(s.Profiles()) != 0 {
 		t.Errorf("Forget: %v, %d left", err, len(s.Profiles()))
+	}
+	// A forgotten person isn't learnt again, under any of their names.
+	_, _ = s.Learn("m4", time.Now(), []Learned{
+		{Name: "Ilse M. Novak", Voice: voiceOf(20, unit(0, 1, 0))},
+		{Name: "I. Novak (guest)", Voice: voiceOf(20, unit(0, 1, 0))},
+	})
+	if n := len(s.Profiles()); n != 0 {
+		t.Errorf("a forgotten profile came back: %d", n)
 	}
 }
 
