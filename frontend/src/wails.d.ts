@@ -47,6 +47,9 @@ interface Window {
         KeepVoicesApart(model: string, a: string, b: string): Promise<void>;
         ForgetVoice(model: string, id: string): Promise<void>;
         LearnVoicesFromSavedSessions(): Promise<number>;
+        NotThem(sessionId: string, label: string): Promise<void>;
+        RemoveVoiceMeeting(model: string, id: string, sessionId: string): Promise<void>;
+        StartVoiceOver(model: string, id: string): Promise<void>;
       };
     };
   };

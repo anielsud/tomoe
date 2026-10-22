@@ -132,6 +132,13 @@ type Profile struct {
 	// Aliases are names of profiles merged into this one: learning under
 	// them teaches this profile.
 	Aliases []string `json:"aliases,omitempty"`
+	// Rejected are voices the user said aren't this person after the
+	// profile named them: a voice more like one of these than like the
+	// profile isn't named by it.
+	Rejected []Heard `json:"rejected,omitempty"`
+	// Excluded are meetings the user took out of the profile (or all its
+	// meetings when it was started over): never learnt from again.
+	Excluded []string `json:"excluded,omitempty"`
 
 	centroid []float32
 	n        int
@@ -290,6 +297,9 @@ func (s *Store) Profiles() []Profile {
 		c := *p
 		c.Meetings = append([]Heard(nil), p.Meetings...)
 		c.Apart = append([]string(nil), p.Apart...)
+		c.Aliases = append([]string(nil), p.Aliases...)
+		c.Rejected = append([]Heard(nil), p.Rejected...)
+		c.Excluded = append([]string(nil), p.Excluded...)
 		out = append(out, c)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].LastHeard().After(out[j].LastHeard()) })
@@ -318,6 +328,9 @@ func (s *Store) Learn(sessionID string, at time.Time, learned []Learned) ([]stri
 			continue
 		}
 		p := s.findLocked(l.Name)
+		if p != nil && contains(p.Excluded, sessionID) {
+			continue
+		}
 		if p == nil {
 			p = &Profile{ID: newID(), Name: l.Name, Created: time.Now()}
 			s.profiles = append(s.profiles, p)
@@ -376,11 +389,20 @@ func (s *Store) forgottenLocked(name string) bool {
 	return false
 }
 
+// Matched is a voice named from a profile.
+type Matched struct {
+	Name       string  `json:"name"`
+	Profile    string  `json:"profile"` // ID
+	Similarity float64 `json:"similarity"`
+}
+
 // Match names voices (by key) from the profiles: each voice gets the
 // profile it's most like, if that's at least Threshold and beats the
 // next by Margin, one voice per profile (the likest wins), and never a
-// name taken says is already someone else's in this meeting.
-func (s *Store) Match(voices map[int]Voice, taken func(name string) bool) map[int]string {
+// name taken says is already someone else's in this meeting. A profile
+// doesn't name a voice more like one the user rejected for it than like
+// the profile.
+func (s *Store) Match(voices map[int]Voice, taken func(name string) bool) map[int]Matched {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.syncLocked()
@@ -401,6 +423,9 @@ func (s *Store) Match(voices map[int]Voice, taken func(name string) bool) map[in
 				continue
 			}
 			sim := Similarity(c, p.centroid)
+			if rejectedLike(c, p, sim) {
+				continue
+			}
 			if sim > best.sim {
 				second, best = best.sim, cand{key, p, sim}
 			} else if sim > second {
@@ -412,16 +437,86 @@ func (s *Store) Match(voices map[int]Voice, taken func(name string) bool) map[in
 		}
 	}
 	sort.Slice(cands, func(i, j int) bool { return cands[i].sim > cands[j].sim })
-	out := map[int]string{}
+	out := map[int]Matched{}
 	used := map[string]bool{}
 	for _, c := range cands {
 		if used[c.p.ID] || (taken != nil && taken(c.p.Name)) {
 			continue
 		}
 		used[c.p.ID] = true
-		out[c.key] = c.p.Name
+		out[c.key] = Matched{c.p.Name, c.p.ID, c.sim}
 	}
 	return out
+}
+
+// rejectedLike reports whether centroid c is at least as like a voice the
+// user rejected for p as like p (sim).
+func rejectedLike(c []float32, p *Profile, sim float64) bool {
+	for _, r := range p.Rejected {
+		if Similarity(c, r.Voice.Centroid()) >= sim {
+			return true
+		}
+	}
+	return false
+}
+
+// Reject records that a voice the profile named in a meeting isn't them.
+func (s *Store) Reject(id, sessionID string, at time.Time, v Voice) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncLocked()
+	p := s.byIDLocked(id)
+	if p == nil {
+		return fmt.Errorf("no voice profile %q", id)
+	}
+	if v.N == 0 {
+		return fmt.Errorf("no voice to reject")
+	}
+	kept := p.Rejected[:0]
+	for _, r := range p.Rejected {
+		if r.Session != sessionID {
+			kept = append(kept, r)
+		}
+	}
+	p.Rejected = append(kept, Heard{Session: sessionID, At: at, Source: "rejected", Voice: v})
+	return s.saveLocked()
+}
+
+// StartOver clears what a profile learnt, keeping its name: its meetings
+// so far are never learnt from again, and it learns from new ones.
+func (s *Store) StartOver(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncLocked()
+	p := s.byIDLocked(id)
+	if p == nil {
+		return fmt.Errorf("no voice profile %q", id)
+	}
+	for _, h := range p.Meetings {
+		p.Excluded = appendOnce(p.Excluded, h.Session)
+	}
+	p.Meetings = nil
+	p.refresh()
+	return s.saveLocked()
+}
+
+// Unforget lets a forgotten name be learnt again (the user named someone
+// that, so they mean it).
+func (s *Store) Unforget(name string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncLocked()
+	kept := s.forgotten[:0]
+	for _, f := range s.forgotten {
+		if !s.sameLocked(f, name) {
+			kept = append(kept, f)
+		}
+	}
+	if len(kept) == len(s.forgotten) {
+		return nil
+	}
+	s.forgotten = kept
+	return s.saveLocked()
 }
 
 // Rename renames a profile.
@@ -491,8 +586,8 @@ func (s *Store) Forget(id string) error {
 	return s.saveLocked()
 }
 
-// ForgetMeeting drops what one meeting taught a profile (a profile left
-// with no meetings is deleted).
+// ForgetMeeting drops what one meeting taught a profile, and it's never
+// learnt from that meeting again.
 func (s *Store) ForgetMeeting(id, sessionID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -508,11 +603,8 @@ func (s *Store) ForgetMeeting(id, sessionID string) error {
 		}
 	}
 	p.Meetings = kept
-	if len(kept) == 0 {
-		s.removeLocked(id)
-	} else {
-		p.refresh()
-	}
+	p.Excluded = appendOnce(p.Excluded, sessionID)
+	p.refresh()
 	return s.saveLocked()
 }
 

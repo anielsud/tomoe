@@ -302,6 +302,7 @@ func (a *App) RenameSpeaker(id, label, name string) error {
 	if name == "" || label == "" {
 		return fmt.Errorf("a speaker and a name are needed")
 	}
+	a.unforgetVoice(name)
 	if label == "You" {
 		return fmt.Errorf("the microphone is always \"You\"")
 	}
@@ -332,6 +333,7 @@ func (a *App) RenameSpeaker(id, label, name string) error {
 	if len(renameLines(saved, label, name)) == 0 {
 		return fmt.Errorf("no lines labeled %q", label)
 	}
+	a.correctVoiceName(saved, label, name)
 	if err := a.store.Save(saved); err != nil {
 		return err
 	}
@@ -347,6 +349,7 @@ func renameLines(sess *session.Session, label, name string) []session.Segment {
 		seg := &sess.Segments[i]
 		if seg.Speaker == label {
 			seg.LiveSpeaker, seg.Speaker = seg.LiveLabel(), name
+			seg.VoiceMatch = nil
 			changed = append(changed, *seg)
 		}
 	}

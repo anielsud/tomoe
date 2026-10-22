@@ -30,7 +30,7 @@ func VoicesFromTiles(p *Prepared, hints []Hint, offset float64) []voices.Learned
 	display := tileDisplayNames(hints)
 	return voicesBy(p, offset, func(t float64) string {
 		k := at(t)
-		if k == "" || IsRoomTile(k) {
+		if k == "" || IsRoomTile(k) || !learnableName(display[k]) {
 			return ""
 		}
 		return display[k]
@@ -263,4 +263,11 @@ func LearnSaved(m config.MeetingConfig, dir string, sess *session.Session, hints
 	learned := VoicesFromTiles(p, hints, info.Offset)
 	learned = append(learned, VoicesFromSpeakers(p, info.Offset, SpeakerAt(sess.Segments, GivenName))...)
 	return store.Learn(sess.ID, sess.CreatedAt, learned)
+}
+
+// learnableName reports whether a tile's name can be a person's: the
+// meeting window's own text read as a name ("Ready Accessibility:
+// Investigate") has a colon, which people's names don't.
+func learnableName(name string) bool {
+	return name != "" && !strings.Contains(name, ":")
 }

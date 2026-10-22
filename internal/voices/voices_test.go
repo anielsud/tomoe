@@ -57,7 +57,7 @@ func TestLearnAndMatch(t *testing.T) {
 		3: voiceOf(10, unit(1, 0, 0.25)), // Wayde
 		4: voiceOf(3, unit(0, 1, 0.1)),   // Ilse, but too few fingerprints
 	}, nil)
-	if got[1] != "Ilse Novak" || got[3] != "Wayde Tyrrel" || got[2] != "" || got[4] != "" {
+	if got[1].Name != "Ilse Novak" || got[3].Name != "Wayde Tyrrel" || got[2].Name != "" || got[4].Name != "" {
 		t.Errorf("Match = %v", got)
 	}
 
@@ -66,7 +66,7 @@ func TestLearnAndMatch(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := s2.Match(map[int]Voice{1: voiceOf(10, unit(0, 1, 0.2))}, nil); got[1] != "Ilse Novak" {
+	if got := s2.Match(map[int]Voice{1: voiceOf(10, unit(0, 1, 0.2))}, nil); got[1].Name != "Ilse Novak" {
 		t.Errorf("after reopening: %v", got)
 	}
 }
@@ -78,11 +78,11 @@ func TestMatchOneVoicePerProfileAndTaken(t *testing.T) {
 		1: voiceOf(10, unit(0, 1, 0.3)),
 		2: voiceOf(10, unit(0, 1, 0.1)), // likelier
 	}, nil)
-	if got[2] != "Ilse Novak" || got[1] != "" {
+	if got[2].Name != "Ilse Novak" || got[1].Name != "" || got[2].Similarity < 0.99 {
 		t.Errorf("one voice per profile, the likest: %v", got)
 	}
 	got = s.Match(map[int]Voice{2: voiceOf(10, unit(0, 1, 0.1))}, func(n string) bool { return n == "Ilse Novak" })
-	if got[2] != "" {
+	if got[2].Name != "" {
 		t.Errorf("a name already someone else's in the meeting was given: %v", got)
 	}
 }
@@ -95,7 +95,7 @@ func TestMatchNeedsMargin(t *testing.T) {
 		{Name: "Wayde Tyrrel", Voice: voiceOf(20, unit(1, 0, 0.3))},
 	})
 	v := voiceOf(10, []float32{0.7071, 0.7071, 0, 0})
-	if got := s.Match(map[int]Voice{1: v}, nil); got[1] != "" {
+	if got := s.Match(map[int]Voice{1: v}, nil); got[1].Name != "" {
 		t.Errorf("named without a margin: %v", got)
 	}
 }
@@ -146,11 +146,11 @@ func TestMergeApartForget(t *testing.T) {
 	if err := s.Rename(ids["Ilse Novak"], "Ilse M. Novak"); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.ForgetMeeting(ids["Wayde Tyrrel"], "m1"); err != nil {
+	if err := s.Forget(ids["Wayde Tyrrel"]); err != nil {
 		t.Fatal(err)
 	}
 	if ps := s.Profiles(); len(ps) != 1 || ps[0].Name != "Ilse M. Novak" || len(ps[0].Apart) != 0 {
-		t.Errorf("after forgetting Wayde's only meeting: %+v", ps)
+		t.Errorf("after forgetting Wayde: %+v", ps)
 	}
 	// Learning under a merged-away or old name teaches the same profile.
 	_, _ = s.Learn("m2", time.Now(), []Learned{{Name: "I. Novak (guest)", Voice: voiceOf(20, unit(0, 1, 0.05))}})
@@ -184,5 +184,62 @@ func TestStoreSeesAnotherProcesssChanges(t *testing.T) {
 	_ = os.Chtimes(path, later, later)
 	if n := len(s.Profiles()); n != 2 {
 		t.Errorf("the other process's profile wasn't seen: %d profiles", n)
+	}
+}
+
+func TestRejectStartOverAndMeetings(t *testing.T) {
+	s, _ := open(t)
+	_, _ = s.Learn("m1", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0))}})
+	_, _ = s.Learn("m2", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0.1))}})
+	id := s.Profiles()[0].ID
+	stranger := voiceOf(10, unit(0, 2, 0.4)) // 0.92 like Ilse: named her
+	if got := s.Match(map[int]Voice{1: stranger}, nil); got[1].Name != "Ilse Novak" {
+		t.Fatalf("setup: %v", got)
+	}
+	if err := s.Reject(id, "m9", time.Now(), stranger); err != nil {
+		t.Fatal(err)
+	}
+	if got := s.Match(map[int]Voice{1: stranger}, nil); got[1].Name != "" {
+		t.Errorf("a rejected voice was named again: %v", got)
+	}
+	if got := s.Match(map[int]Voice{1: voiceOf(10, unit(0, 1, 0.05))}, nil); got[1].Name != "Ilse Novak" {
+		t.Errorf("Ilse herself stopped being named: %v", got)
+	}
+
+	// Taking a meeting out: it's never learnt from again.
+	if err := s.ForgetMeeting(id, "m2"); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.Learn("m2", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0.1))}})
+	if p := s.Profiles()[0]; len(p.Meetings) != 1 || p.Meetings[0].Session != "m1" {
+		t.Errorf("a removed meeting came back: %+v", p.Meetings)
+	}
+
+	// Starting over: no meetings, the old ones stay out, new ones teach.
+	if err := s.StartOver(id); err != nil {
+		t.Fatal(err)
+	}
+	_, _ = s.Learn("m1", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0))}})
+	if p := s.Profiles()[0]; len(p.Meetings) != 0 {
+		t.Errorf("an old meeting was learnt after starting over: %+v", p.Meetings)
+	}
+	if got := s.Match(map[int]Voice{1: voiceOf(10, unit(0, 1, 0))}, nil); got[1].Name != "" {
+		t.Errorf("a started-over profile with nothing learnt named a voice: %v", got)
+	}
+	_, _ = s.Learn("m3", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0))}})
+	if p := s.Profiles()[0]; len(p.Meetings) != 1 || p.Meetings[0].Session != "m3" {
+		t.Errorf("a new meeting wasn't learnt after starting over: %+v", p.Meetings)
+	}
+}
+
+func TestUnforget(t *testing.T) {
+	s, _ := open(t)
+	_, _ = s.Learn("m1", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0))}})
+	_ = s.Forget(s.Profiles()[0].ID)
+	if err := s.Unforget("ilse novak"); err != nil {
+		t.Fatal(err)
+	}
+	if names, _ := s.Learn("m2", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0))}}); len(names) != 1 {
+		t.Errorf("a name the user gave again wasn't learnt: %v", names)
 	}
 }
