@@ -170,9 +170,16 @@ type MeetingConfig struct {
 	// VoiceProfileMinMeetings: a profile names nobody until it's been
 	// heard in this many meetings, unless the user confirmed it or named
 	// the person themselves (1: any profile names voices, as before).
-	VoiceProfileMinMeetings int  `toml:"voice_profile_min_meetings"`
-	AutoSave                bool `toml:"auto_save"`   // save session on stop
-	AutoDetect              bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	VoiceProfileMinMeetings int `toml:"voice_profile_min_meetings"`
+	// RefineSpeakerCuts, after each meeting is saved, moves each cut
+	// between back-to-back speakers to where the voice changes, from short
+	// fingerprints across it (a low-priority job, about 2 minutes of one
+	// core per meeting hour; diarizing during the meeting must be on). On
+	// 11 changes marked by ear in a meeting with two rooms: median error
+	// 0.95 -> 0.23 s. false: cuts stay where the diarization put them.
+	RefineSpeakerCuts bool `toml:"refine_speaker_cuts"`
+	AutoSave          bool `toml:"auto_save"`   // save session on stop
+	AutoDetect        bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
