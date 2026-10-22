@@ -102,10 +102,16 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
         )}
         {!view && !error && <p>Loading…</p>}
 
-        {view && view.namedByVoice.length > 0 && (
+        {view && (
           <section className="tool-group">
             <div className="tool-group-header"><h3>Named by voice</h3></div>
-            <p className="tool-needed">Speakers in the last two weeks that a profile named, not the meeting window or you. Play them and say if they're right: either answer teaches the profile.</p>
+            <p className="tool-needed">
+              {view.namedByVoice.length > 0
+                ? "Speakers in the last two weeks that a profile named, not the meeting window or you. Play them and say if they're right: either answer teaches the profile."
+                : view.enabled
+                  ? 'None yet. Meetings recorded from now on list here any speaker a profile named, to check.'
+                  : 'Voice profiles are off, so meetings name nobody by voice.'}
+            </p>
             {view.namedByVoice.map(n => {
               const key = `n/${n.session}/${n.label}`;
               return (
