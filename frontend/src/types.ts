@@ -136,6 +136,7 @@ export interface Config {
     DiarizeDuringMeeting: boolean;
     DiarizeRoomSplit: boolean;
     VoiceProfiles: boolean;
+    RefineSpeakerCuts: boolean;
     DiarizeStride: number;
     DiarizeRecluster: number;
     RecordForTuning: boolean;

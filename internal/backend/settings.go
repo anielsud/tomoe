@@ -205,6 +205,9 @@ func planApply(old, next *config.Config) applyPlan {
 	if old.Meeting.DiarizeRoomSplit != next.Meeting.DiarizeRoomSplit {
 		p.later = append(p.later, "Splitting meeting rooms")
 	}
+	if old.Meeting.RefineSpeakerCuts != next.Meeting.RefineSpeakerCuts {
+		p.later = append(p.later, "Refining speaker cuts")
+	}
 	if old.Meeting.VoiceProfiles != next.Meeting.VoiceProfiles {
 		p.later = append(p.later, "Voice profiles")
 	}

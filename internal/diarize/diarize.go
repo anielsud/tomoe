@@ -235,6 +235,12 @@ type Params struct {
 	// one speaker's turns separated by a shorter gap (seconds).
 	MinDurationOn  float64
 	MinDurationOff float64
+	// CenterWeighted weighs each window's say on a frame by where the frame
+	// sits in it (a Hamming window, as pyannote aggregates): a window knows
+	// least about its edges, where it hears only one side of a speaker
+	// change, so equal votes put changes late or early. false: every window
+	// covering a frame counts the same, as before.
+	CenterWeighted bool
 }
 
 // DefaultParams reproduces Tomoe's post-meeting diarization today (sherpa-onnx
@@ -319,9 +325,17 @@ func (p *Prepared) turns(clusters []int, params Params) []session.DiarizeSegment
 	}
 	numChunks := len(p.Labels)
 	numFrames := (m.WindowSize+(numChunks-1)*m.WindowShift)/m.ReceptiveFieldShift + 1
-	count := make([][]int32, numFrames) // [frame][cluster]
+	count := make([][]float32, numFrames) // [frame][cluster]
 	for i := range count {
-		count[i] = make([]int32, numClusters)
+		count[i] = make([]float32, numClusters)
+	}
+	var hamming []float32
+	if params.CenterWeighted && len(p.Labels) > 0 {
+		n := len(p.Labels[0])
+		hamming = make([]float32, n)
+		for f := range hamming {
+			hamming[f] = float32(0.54 - 0.46*math.Cos(2*math.Pi*float64(f)/float64(max(1, n-1))))
+		}
 	}
 	activeSum := make([]float32, numFrames) // speakers per frame, summed over windows
 	weight := make([]float32, numFrames)
@@ -339,7 +353,11 @@ func (p *Prepared) turns(clusters []int, params Params) []session.DiarizeSegment
 				}
 				activeSum[g]++
 				if cl, ok := toCluster[ChunkSpeaker{c, spk}]; ok {
-					count[g][cl]++
+					if hamming != nil && f < len(hamming) {
+						count[g][cl] += hamming[f]
+					} else {
+						count[g][cl]++
+					}
 				}
 			}
 		}
@@ -367,7 +385,7 @@ func (p *Prepared) turns(clusters []int, params Params) []session.DiarizeSegment
 			order[k] = k
 		}
 		row := count[f]
-		var votes int32
+		var votes float32
 		for _, v := range row {
 			votes += v
 		}

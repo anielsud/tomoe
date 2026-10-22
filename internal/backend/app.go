@@ -896,6 +896,7 @@ func (a *App) persistSession(req *saveRequest) {
 		}
 		wailsRuntime.EventsEmit(a.ctx, "session:saved", sess.ID)
 		a.feedSession(livefeed.StateSaved, sess)
+		a.refineCutsLater(sess.ID)
 		return
 	}
 

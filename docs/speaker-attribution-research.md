@@ -1105,6 +1105,49 @@ What a profile did must be checkable, so it can earn trust:
   it is at least 80 px wide (median 120). On the owner's sessions: 1,830
   crops, 13 MB, 94 s of one core; 61 of 91 profiles have one.
 
+## Refining speaker cuts (2026-10-22)
+
+Where two people talk back to back with no pause, a line is cut where the
+diarization's speaker changes (`split_on_speaker_change`). On a two-hour
+leadership meeting with two rooms, the owner marked by ear where the
+speaker of 11 such cuts really starts (a page with a waveform and
+draggable edges). Tomoe's cut was within 0.25 s of the mark for 4 of 11,
+and typically about a second off (median 0.95 s), in both directions: the
+new speaker's first words left on the previous line, or the previous
+speaker's last words on the new one.
+
+The cut follows the diarization faithfully; the diarization's change is
+what's off. Every 10 s window covering the change agrees on it (the
+segmentation model hears one voice carry on past the real change when two
+voices share a room's microphone), so weighing windows towards their
+centre (pyannote's Hamming aggregation, `Params.CenterWeighted`, kept off)
+moved nothing. There's no pause in the word timings at these changes to
+snap to either.
+
+Short fingerprints across each cut find it: 1 s windows every 0.25 s,
+2 s either side, each compared with the two speakers' voices in the
+meeting; the split that puts the most of one voice before it and of the
+other after wins, and the words on the wrong side move across (a
+fragment of up to 2 s between two cuts goes whole to its neighbour). A
+cut moves only if the new split explains the voices clearly better
+(`MinGain` 0.4), and not when the best split is at the edge of the search
+(people trading turns) or the two voices are too alike (0.8).
+
+| | Tomoe's cut | Refined |
+|---|---|---|
+| Median distance from the mark | 0.95 s | 0.23 s |
+| Within 0.25 s | 4 of 11 | 6 of 11 |
+| Within 0.5 s | 4 of 11 | 6 of 11 |
+
+Three cuts a second off came within 0.25 s; the three already right stayed
+put; one quick back-and-forth improved (2.96 → 1.04 s); two in rapid
+alternation didn't move; one got worse (0.13 → 0.59 s). The settings were
+chosen on these 11 cuts, so this needs checking on another meeting before
+it's trusted. It runs after the meeting is saved, at low priority: about
+2 minutes of one core per meeting hour (17 fingerprints of 40 ms per
+cut). `refine_speaker_cuts`, off by default; `tomoe session refine-cuts`
+runs it on a saved session.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time
