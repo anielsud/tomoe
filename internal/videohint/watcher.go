@@ -3,6 +3,7 @@ package videohint
 import (
 	"context"
 	"fmt"
+	"image"
 	"strings"
 	"sync"
 	"time"
@@ -112,7 +113,8 @@ type Watcher struct {
 	nextID      int
 	last        *Look
 	tiles       []tileName
-	thumbID     int // the last look that has its own thumbnail
+	thumbID     int                  // the last look that has its own thumbnail
+	tileAt      map[string]time.Time // when each name's tile was last kept
 	thumbAt     time.Time
 	thumbSig    []uint8 // the picture last kept of the watched window
 	shots       map[int]*shotState
@@ -268,6 +270,7 @@ func (w *Watcher) look(learning bool) {
 		w.analyze(&l, fr, platform, learning)
 		began := time.Now()
 		w.keepThumb(&l, fr)
+		w.keepTile(&l, fr)
 		l.Cost.Encode = msSince(began)
 	}
 	w.last = &l
@@ -364,6 +367,7 @@ func (w *Watcher) analyze(l *Look, fr *frame, platform meeting.Platform, learnin
 	}
 	ring := rings[0]
 	l.Ring = &ring
+	l.tileRect = image.Rect(ring.X, ring.Y, ring.X+ring.Width, ring.Y+ring.Height)
 	if w.last != nil && w.last.Ring != nil && !sameTile(*w.last.Ring, ring) {
 		w.Burst() // the ring moved: someone else is speaking
 		learning = true
@@ -639,3 +643,42 @@ func speakerView(fr *frame) bool {
 const stageBackground = 29.0
 
 func msSince(t time.Time) float64 { return float64(time.Since(t).Microseconds()) / 1000 }
+
+// tileEvery is how often a name's tile is kept, and tileWidth how wide.
+const (
+	tileEvery = time.Minute
+	tileWidth = 192
+)
+
+// keepTile keeps a crop of the speaker's tile when a look names one and
+// that name's tile wasn't kept in the last tileEvery. Teams' ring outlines
+// the whole tile, name included, so the margin is thin: a wider one takes
+// in the neighbouring tiles.
+func (w *Watcher) keepTile(l *Look, fr *frame) {
+	if !l.Usable || l.Name == "" || l.tileRect.Empty() {
+		return
+	}
+	if w.tileAt == nil {
+		w.tileAt = map[string]time.Time{}
+	}
+	if at, ok := w.tileAt[l.Name]; ok && l.Time.Sub(at) < tileEvery {
+		return
+	}
+	r := l.tileRect
+	pad := max(4, min(r.Dx(), r.Dy())/20)
+	r = image.Rect(r.Min.X-pad, r.Min.Y-pad, r.Max.X+pad, r.Max.Y+pad).Intersect(image.Rect(0, 0, fr.width, fr.height))
+	if r.Dx() < 8 || r.Dy() < 8 {
+		return
+	}
+	crop := make([]byte, 0, r.Dx()*r.Dy()*3)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		i := (y*fr.width + r.Min.X) * 3
+		crop = append(crop, fr.pix[i:i+r.Dx()*3]...)
+	}
+	jpg, err := encodeJPEG(crop, r.Dx(), r.Dy(), tileWidth, 80)
+	if err != nil {
+		return
+	}
+	l.TileCrop, l.HasTile = jpg, true
+	w.tileAt[l.Name] = l.Time
+}

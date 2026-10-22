@@ -1092,7 +1092,11 @@ What a profile did must be checkable, so it can earn trust:
   the person themselves: a single meeting's misread tile can't name
   people in the next. On the owner's 92 profiles, 57 come from one
   meeting; 38 are in use (35 heard twice or more, 3 named by the user).
-  People met once aren't named by voice until they're heard again.
+  People met once aren't named by voice until they're heard again;
+- from 2026-10-22 each look that names a speaker keeps a crop of their
+  tile at full resolution, once a minute per name (192 px wide, a few
+  KB; `looks/<id>-tile.jpg`), and each profile shows a couple per meeting
+  it learnt from, so who a voice was learnt from can be seen.
 
 ## Open questions
 

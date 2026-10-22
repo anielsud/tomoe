@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
-import { NamedByVoice, UnknownVoice, VoiceClip, VoicePair, VoiceProfile, VoicesView } from '../types';
+import { NamedByVoice, TileRef, UnknownVoice, VoiceClip, VoicePair, VoiceProfile, VoicesView } from '../types';
 
 // A meeting whose voice is less like the profile's other meetings than this
 // is flagged: across saved meetings, 95% of one person's meetings agree at
@@ -295,6 +295,7 @@ function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver,
     <div className="voice-profile">
       <div className="tool-row voice-row">
         {play}
+        <TileImg tile={p.face} size={44} title={`${p.name} as the meeting window showed them`} />
         <div className="tool-body">
           {editing ? (
             <form className="voice-name" onSubmit={e => { e.preventDefault(); if (name.trim()) { onRename(name.trim()); setEditing(false); } }}>
@@ -353,6 +354,9 @@ function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver,
             return (
               <div key={h.session} className="tool-row voice-row">
                 {playClip(`m/${p.id}/${h.session}`, h.clip)}
+                {h.tiles.length > 0
+                  ? h.tiles.map(t => <TileImg key={t.look} tile={t} size={56} title="Their tile while their voice was learnt" />)
+                  : <span className="voice-meta voice-no-tile">no tile kept</span>}
                 <div className="tool-body">
                   <div className="tool-name">{h.title || h.session.slice(0, 8)} <span className="voice-meta">{when(h.at)} · {h.source === 'named' ? 'named by you' : 'own tile'} · {h.fingerprints} fingerprints</span></div>
                   <div className={`tool-detail ${odd ? 'voice-odd' : ''}`}>
@@ -379,4 +383,26 @@ function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver,
       )}
     </div>
   );
+}
+
+// Tile images, fetched once per tile.
+const tileCache = new Map<string, Promise<string>>();
+
+function TileImg({ tile, size, title }: { tile?: TileRef; size: number; title?: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    setSrc(null);
+    if (!tile) return;
+    const key = `${tile.session}/${tile.look}`;
+    if (!tileCache.has(key)) tileCache.set(key, window.go.backend.App.GetLookTile(tile.session, tile.look));
+    let live = true;
+    tileCache.get(key)!.then(url => { if (live) setSrc(url); }).catch(() => {});
+    return () => { live = false; };
+  }, [tile?.session, tile?.look]);
+  // Tiles are wide (a video) or square (a picture): keep their shape,
+  // the height fixed.
+  if (!tile) return <span className="voice-tile voice-tile-empty" style={{ width: size, height: size }} />;
+  return src
+    ? <img className="voice-tile" src={src} style={{ height: size, maxWidth: size * 1.8 }} title={title} alt="" />
+    : <span className="voice-tile voice-tile-empty" style={{ width: size * 1.6, height: size }} />;
 }

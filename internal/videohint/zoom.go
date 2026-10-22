@@ -2,6 +2,7 @@ package videohint
 
 import (
 	"fmt"
+	"image"
 	"regexp"
 	"strings"
 	"time"
@@ -234,10 +235,14 @@ func (w *Watcher) analyzeZoom(l *Look, fr *frame) {
 	switch {
 	case best >= 0:
 		l.Stage, l.Name, l.Usable = StageTileHighlight, tiles[best].Name, true
+		x0, y0, x1, y1 := toFrame(tiles[best].Rect, win, fr.width, fr.height)
+		l.tileRect = image.Rect(x0, y0, x1, y1)
 		l.Detail = fmt.Sprintf("%s's tile is highlighted (%.0f%% of its border; %d tiles)", tiles[best].Name, 100*tiles[best].Highlight, len(tiles))
 	case len(tiles) == 1:
 		// Speaker view: the one tile shown is whoever is speaking.
 		l.Stage, l.Name, l.Usable = StageSpeakerView, tiles[0].Name, true
+		x0, y0, x1, y1 := toFrame(tiles[0].Rect, win, fr.width, fr.height)
+		l.tileRect = image.Rect(x0, y0, x1, y1)
 		l.Detail = fmt.Sprintf("speaker view: %s", tiles[0].Name)
 	default:
 		l.Stage, l.Detail = StageNoRingMatch, fmt.Sprintf("no highlighted tile among %d", len(tiles))
