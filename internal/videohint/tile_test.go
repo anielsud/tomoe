@@ -42,3 +42,36 @@ func TestKeepTile(t *testing.T) {
 		t.Error("a look that names nobody kept a tile")
 	}
 }
+
+func TestBackfillTiles(t *testing.T) {
+	dir := t.TempDir()
+	log := NewLookLog(dir)
+	// A 1600x1200 frame: its 320-wide thumbnail shows a 500-wide tile at
+	// 100 px (kept) and a 200-wide one at 40 (a blur: skipped).
+	thumb, err := encodeJPEG(make([]byte, 1600*1200*3), 1600, 1200, thumbWidth, 70)
+	if err != nil {
+		t.Fatal(err)
+	}
+	at := time.Now()
+	looks := []Look{
+		{ID: 1, Time: at, Name: "Ilse Novak", Usable: true, Ring: &RingMatch{X: 100, Y: 100, Width: 500, Height: 300}, Width: 1600, Height: 1200, Thumb: thumb},
+		{ID: 2, Time: at.Add(5 * time.Second), Name: "Ilse Novak", Usable: true, Ring: &RingMatch{X: 100, Y: 100, Width: 500, Height: 300}, Width: 1600, Height: 1200, ThumbOf: 1},
+		{ID: 3, Time: at.Add(70 * time.Second), Name: "Wayde Tyrrel", Usable: true, Ring: &RingMatch{X: 100, Y: 600, Width: 200, Height: 200}, Width: 1600, Height: 1200, ThumbOf: 1},
+		{ID: 4, Time: at.Add(80 * time.Second), Name: "Ilse Novak", Usable: true, Ring: &RingMatch{X: 100, Y: 100, Width: 500, Height: 300}, Width: 1600, Height: 1200, ThumbOf: 1},
+	}
+	for _, l := range looks {
+		if err := log.Write(l); err != nil {
+			t.Fatal(err)
+		}
+	}
+	n, err := BackfillTiles(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 || !HasTileFile(dir, 1) || HasTileFile(dir, 2) || HasTileFile(dir, 3) || !HasTileFile(dir, 4) {
+		t.Errorf("kept %d: want looks 1 and 4 (a minute apart), not 2 (too soon) or 3 (too small)", n)
+	}
+	if n, _ := BackfillTiles(dir); n != 0 {
+		t.Errorf("a second run kept %d more", n)
+	}
+}

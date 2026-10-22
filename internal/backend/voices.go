@@ -454,6 +454,7 @@ func (a *App) LearnVoicesFromSavedSessions() (int, error) {
 			continue
 		}
 		dir := filepath.Join(config.SessionDir(), s.ID)
+		_, _ = videohint.BackfillTiles(dir)
 		names, err := diarize.LearnSaved(m, dir, full, savedHints(dir, full))
 		if err != nil {
 			continue
@@ -693,7 +694,7 @@ func tilesOf(sessionID string, names []string, n int) []TileRef {
 		e = tilesEntry{mod: st.ModTime()}
 		looks, _ := videohint.ReadLooks(dir)
 		for _, l := range looks {
-			if l.HasTile {
+			if l.HasTile || (l.Name != "" && videohint.HasTileFile(dir, l.ID)) {
 				e.tiles = append(e.tiles, sessionTile{l.ID, l.Name})
 			}
 		}

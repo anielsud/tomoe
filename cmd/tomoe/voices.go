@@ -69,7 +69,7 @@ func runVoicesLearn(cmd *cobra.Command, args []string) error {
 		}
 	}
 	store := session.NewStore(config.SessionDir())
-	meetings, people := 0, map[string]bool{}
+	meetings, people, tiles := 0, map[string]bool{}, 0
 	for _, id := range ids {
 		sess, err := store.Load(id)
 		if err != nil || sess.CreatedAt.Before(since) {
@@ -78,6 +78,9 @@ func runVoicesLearn(cmd *cobra.Command, args []string) error {
 		dir := filepath.Join(config.SessionDir(), id)
 		if _, err := os.Stat(filepath.Join(dir, "diarization.gob")); err != nil {
 			continue
+		}
+		if n, err := videohint.BackfillTiles(dir); err == nil && n > 0 {
+			tiles += n
 		}
 		names, err := diarize.LearnSaved(cfg.Meeting, dir, sess, savedHints(dir, sess))
 		if err != nil {
@@ -92,7 +95,7 @@ func runVoicesLearn(cmd *cobra.Command, args []string) error {
 			fmt.Printf("%s %s: %d voices\n", sess.CreatedAt.Local().Format("2006-01-02 15:04"), id[:8], len(names))
 		}
 	}
-	fmt.Printf("Learnt from %d meetings: %d people.\n", meetings, len(people))
+	fmt.Printf("Learnt from %d meetings: %d people. Kept %d tile pictures from saved looks.\n", meetings, len(people), tiles)
 	return nil
 }
 
