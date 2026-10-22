@@ -139,6 +139,9 @@ type Profile struct {
 	// Excluded are meetings the user took out of the profile (or all its
 	// meetings when it was started over): never learnt from again.
 	Excluded []string `json:"excluded,omitempty"`
+	// Confirmed: the user said this is the person's voice, so it names
+	// voices before it's been heard in Params.MinMeetings.
+	Confirmed bool `json:"confirmed,omitempty"`
 
 	centroid []float32
 	n        int
@@ -177,6 +180,11 @@ type Params struct {
 	Margin float64
 	// MinFingerprints is the least a voice, and a profile, must have.
 	MinFingerprints int
+	// MinMeetings is how many meetings a profile must be heard in before
+	// it names anyone, unless the user confirmed it (or named the person
+	// themselves in one): one meeting's misread tile shouldn't name
+	// people in the next.
+	MinMeetings int
 	// LearnFloor: a meeting's voice that's less like the profile of the
 	// same name than this (once the profile has LearnFloorAfter
 	// fingerprints) isn't learnt: a misread name or a ring on the wrong
@@ -187,7 +195,7 @@ type Params struct {
 
 // DefaultParams are measured on saved meetings (see the package comment).
 func DefaultParams() Params {
-	return Params{Threshold: 0.7, Margin: 0.1, MinFingerprints: 8, LearnFloor: 0.5, LearnFloorAfter: 30}
+	return Params{Threshold: 0.7, Margin: 0.1, MinFingerprints: 8, MinMeetings: 2, LearnFloor: 0.5, LearnFloorAfter: 30}
 }
 
 // Store is the profiles on disk. Safe for concurrent use.
@@ -419,7 +427,7 @@ func (s *Store) Match(voices map[int]Voice, taken func(name string) bool) map[in
 		c := v.Centroid()
 		best, second := cand{key: key, sim: -2}, -2.0
 		for _, p := range s.profiles {
-			if p.n < s.params.MinFingerprints {
+			if !s.inUseLocked(p) {
 				continue
 			}
 			sim := Similarity(c, p.centroid)
@@ -447,6 +455,42 @@ func (s *Store) Match(voices map[int]Voice, taken func(name string) bool) map[in
 		out[c.key] = Matched{c.p.Name, c.p.ID, c.sim}
 	}
 	return out
+}
+
+// InUse reports whether a profile names voices: enough fingerprints, and
+// heard in MinMeetings meetings or confirmed by the user.
+func (s *Store) InUse(p *Profile) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.inUseLocked(p)
+}
+
+func (s *Store) inUseLocked(p *Profile) bool {
+	if p.n < s.params.MinFingerprints {
+		return false
+	}
+	if p.Confirmed || len(p.Meetings) >= s.params.MinMeetings {
+		return true
+	}
+	for _, h := range p.Meetings {
+		if h.Source == FromNamed {
+			return true
+		}
+	}
+	return false
+}
+
+// Confirm records that the profile is the person's voice.
+func (s *Store) Confirm(id string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncLocked()
+	p := s.byIDLocked(id)
+	if p == nil {
+		return fmt.Errorf("no voice profile %q", id)
+	}
+	p.Confirmed = true
+	return s.saveLocked()
 }
 
 // rejectedLike reports whether centroid c is at least as like a voice the
@@ -496,6 +540,7 @@ func (s *Store) StartOver(id string) error {
 		p.Excluded = appendOnce(p.Excluded, h.Session)
 	}
 	p.Meetings = nil
+	p.Confirmed = false
 	p.refresh()
 	return s.saveLocked()
 }

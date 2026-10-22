@@ -231,6 +231,8 @@ export interface VoiceProfile {
   heard: VoiceMeeting[];
   rejected: number;
   startedOver: boolean;
+  inUse: boolean;
+  confirmed: boolean;
 }
 
 export interface VoiceMeeting {

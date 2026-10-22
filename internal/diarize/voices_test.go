@@ -21,7 +21,9 @@ func voiceAlong(axis, n int) voices.Voice {
 }
 
 func TestSpeakersNamedFromVoiceProfiles(t *testing.T) {
-	store, err := voices.Open(filepath.Join(t.TempDir(), "v.json"), SameName, voices.DefaultParams())
+	params := voices.DefaultParams()
+	params.MinMeetings = 1
+	store, err := voices.Open(filepath.Join(t.TempDir(), "v.json"), SameName, params)
 	if err != nil {
 		t.Fatal(err)
 	}

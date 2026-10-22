@@ -179,6 +179,9 @@ func VoiceStore(m config.MeetingConfig, model string) (*voices.Store, error) {
 	if m.VoiceProfileMargin > 0 {
 		params.Margin = m.VoiceProfileMargin
 	}
+	if m.VoiceProfileMinMeetings > 0 {
+		params.MinMeetings = m.VoiceProfileMinMeetings
+	}
 	if s := voiceStores[model]; s != nil {
 		s.SetParams(params)
 		return s, nil
