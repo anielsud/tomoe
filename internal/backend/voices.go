@@ -73,6 +73,9 @@ type VoiceProfileView struct {
 	// StartedOver: the user cleared what it learnt; it learns from new
 	// meetings.
 	StartedOver bool `json:"startedOver"`
+	// TakenOut are meetings the user took out of the profile (they can
+	// still be moved to the right person).
+	TakenOut []VoiceMeetingView `json:"takenOut"`
 	// Face is one of the person's tiles, from the latest meeting with one.
 	Face *TileRef `json:"face,omitempty"`
 	// InUse: the profile names voices (heard in enough meetings, or
@@ -207,6 +210,10 @@ func (a *App) Voices() (*VoicesView, error) {
 					Tiles: tilesOf(h.Session, append([]string{p.Name}, p.Aliases...), tilesPerMeeting)})
 			}
 			sort.Slice(v.Heard, func(i, j int) bool { return v.Heard[i].At.After(v.Heard[j].At) })
+			v.TakenOut = []VoiceMeetingView{}
+			for _, sid := range p.Excluded {
+				v.TakenOut = append(v.TakenOut, VoiceMeetingView{Session: sid, Title: titles[sid], Tiles: tilesOf(sid, append([]string{p.Name}, p.Aliases...), tilesPerMeeting)})
+			}
 			for _, h := range v.Heard {
 				if len(h.Tiles) > 0 {
 					v.Face = &h.Tiles[0]
@@ -721,4 +728,84 @@ func (a *App) GetLookTile(sessionID string, look int) (string, error) {
 		return "", err
 	}
 	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b), nil
+}
+
+// MoveVoiceMeeting says what a profile learnt from a meeting was someone
+// else's: it teaches toName's profile instead (see voices.Store.Move). A
+// meeting already taken out is worked out again from the saved meeting.
+func (a *App) MoveVoiceMeeting(model, id, sessionID, toName string) error {
+	a.fixSignals()
+	if toName == "" {
+		return fmt.Errorf("a name is needed")
+	}
+	store, err := a.voiceStore(model)
+	if err != nil {
+		return err
+	}
+	var prof *voices.Profile
+	for _, p := range store.Profiles() {
+		if p.ID == id {
+			prof = &p
+			break
+		}
+	}
+	if prof == nil {
+		return fmt.Errorf("no voice profile %q", id)
+	}
+	sess, err := a.store.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	for _, h := range prof.Meetings {
+		if h.Session == sessionID {
+			return store.Move(id, sessionID, sess.CreatedAt, h.Voice, toName)
+		}
+	}
+	dir := filepath.Join(config.SessionDir(), sessionID)
+	p, info, err := loadSavedCached(dir)
+	if err != nil {
+		return err
+	}
+	names := append([]string{prof.Name}, prof.Aliases...)
+	for _, l := range diarize.VoicesFromTiles(p, savedHints(dir, sess), info.Offset) {
+		for _, n := range names {
+			if diarize.SameName(l.Name, n) {
+				return store.Move(id, sessionID, sess.CreatedAt, l.Voice, toName)
+			}
+		}
+	}
+	return fmt.Errorf("no voice under %s's tile in that meeting", prof.Name)
+}
+
+// DiscardedVoiceClip is a clip of the voice a profile learnt from a
+// meeting it no longer learns from, worked out again from the meeting.
+func (a *App) DiscardedVoiceClip(model, id, sessionID string) (VoiceClip, error) {
+	a.fixSignals()
+	store, err := a.voiceStore(model)
+	if err != nil {
+		return VoiceClip{}, err
+	}
+	var names []string
+	for _, p := range store.Profiles() {
+		if p.ID == id {
+			names = append([]string{p.Name}, p.Aliases...)
+		}
+	}
+	sess, err := a.store.Load(sessionID)
+	if err != nil {
+		return VoiceClip{}, err
+	}
+	dir := filepath.Join(config.SessionDir(), sessionID)
+	p, info, err := loadSavedCached(dir)
+	if err != nil {
+		return VoiceClip{}, err
+	}
+	for _, l := range diarize.VoicesFromTiles(p, savedHints(dir, sess), info.Offset) {
+		for _, n := range names {
+			if diarize.SameName(l.Name, n) {
+				return VoiceClip{sessionID, l.Clip.Start, l.Clip.End}, nil
+			}
+		}
+	}
+	return VoiceClip{}, fmt.Errorf("no voice under that tile in the meeting")
 }

@@ -1080,8 +1080,10 @@ What a profile did must be checkable, so it can earn trust:
   the profile never names a voice more like a rejection than like itself;
 - each profile shows the meetings it learnt from, each with a clip and how
   alike it is to the rest of the profile (flagged below 0.6; across saved
-  meetings, 95% of one person's meetings agree at 0.68 or more), and any
-  meeting can be taken out for good;
+  meetings, 95% of one person's meetings agree at 0.68 or more); a
+  meeting's voice can be moved to the right person ("It's someone
+  else…", which teaches their profile as the user's naming) or discarded
+  for good;
 - "Start over" clears what a profile learnt and learns from new meetings
   only; "Forget" deletes it and its names are never learnt again, unless
   the user names someone that;

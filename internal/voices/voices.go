@@ -750,3 +750,70 @@ func contains(xs []string, x string) bool {
 	}
 	return false
 }
+
+// Move says what a profile learnt from one meeting was someone else's:
+// it leaves the profile (never learnt by it again) and teaches toName's
+// profile instead, as the user's naming (a new profile if none matches).
+// v is the meeting's voice for the profile: what it learnt, or, for a
+// meeting already taken out, the voice worked out again from the meeting.
+func (s *Store) Move(fromID, sessionID string, at time.Time, v Voice, toName string) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncLocked()
+	from := s.byIDLocked(fromID)
+	if from == nil {
+		return fmt.Errorf("no voice profile %q", fromID)
+	}
+	if v.N == 0 {
+		return fmt.Errorf("no voice to move")
+	}
+	to := s.findLocked(toName)
+	if to == from {
+		return fmt.Errorf("that's the same profile")
+	}
+	if to == nil {
+		to = &Profile{ID: newID(), Name: toName, Created: time.Now()}
+		s.profiles = append(s.profiles, to)
+	}
+	kept := from.Meetings[:0]
+	for _, h := range from.Meetings {
+		if h.Session != sessionID {
+			kept = append(kept, h)
+		}
+	}
+	from.Meetings = kept
+	from.Excluded = appendOnce(from.Excluded, sessionID)
+	from.refresh()
+
+	to.Excluded = removeString(to.Excluded, sessionID)
+	merged := false
+	for i := range to.Meetings {
+		if to.Meetings[i].Session == sessionID {
+			to.Meetings[i].Voice.Merge(v)
+			to.Meetings[i].Source = FromNamed
+			merged = true
+		}
+	}
+	if !merged {
+		to.Meetings = append(to.Meetings, Heard{Session: sessionID, At: at, Source: FromNamed, Voice: v})
+	}
+	to.refresh()
+	var keptForgotten []string
+	for _, f := range s.forgotten {
+		if !s.sameLocked(f, toName) {
+			keptForgotten = append(keptForgotten, f)
+		}
+	}
+	s.forgotten = keptForgotten
+	return s.saveLocked()
+}
+
+func removeString(xs []string, x string) []string {
+	var out []string
+	for _, y := range xs {
+		if y != x {
+			out = append(out, y)
+		}
+	}
+	return out
+}
