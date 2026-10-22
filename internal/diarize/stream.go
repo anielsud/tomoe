@@ -41,6 +41,13 @@ type StreamConfig struct {
 	// change signal, before any clustering. On the Stream's goroutine;
 	// must return quickly.
 	OnSpeakerChange func(at float64)
+	// Tiles, if set, gives the meeting window's tile timeline (session
+	// time) and the offset from the Stream's audio time to session time;
+	// each recluster then keeps a meeting room's audio apart from everyone
+	// else's and clusters it on its own at RoomThreshold, merging two room
+	// clusters only at RoomMerge similarity (Prepared.WithRoomSplit).
+	Tiles                    func() (tileAt func(t float64) string, offset float64)
+	RoomThreshold, RoomMerge float64
 }
 
 // Timeline is who spoke when, as of a recluster. Speakers are stable IDs
@@ -426,6 +433,11 @@ func (s *Stream) recluster(final bool) Timeline {
 	if len(s.embs) > 0 {
 		pairs, embs := thin(s.pairs, s.embs, maxCluster)
 		p := &Prepared{Meta: m, NumSamples: numSamples, Labels: s.labels, Pairs: pairs, Embeddings: embs}
+		if s.cfg.Tiles != nil {
+			if at, offset := s.cfg.Tiles(); at != nil {
+				p = p.WithTiles(p.PairTiles(RoomOnly(at), offset, roomTileShare)).WithRoomSplit(s.cfg.RoomThreshold, s.cfg.RoomMerge)
+			}
+		}
 		clusters := p.Cluster(s.cfg.Params.Threshold, s.cfg.Params.NumClusters)
 		if s.cfg.Params.MergeSimilarity > 0 {
 			clusters = p.MergeClusters(clusters, s.cfg.Params.MergeSimilarity)

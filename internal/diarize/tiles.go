@@ -13,6 +13,10 @@ import (
 // clusters (Prepared.WithTiles). Only a clear read counts: one tile lit,
 // recent, and most of an embedding's speech under it.
 
+// roomTileShare is how much of an embedding's speech must be under one
+// tile for the embedding to count as heard under it.
+const roomTileShare = 0.6
+
 // tileMaxGap is how long a read of the ring holds when no newer read
 // replaces it (seconds): the watcher looks about once a second while
 // someone talks.
@@ -93,7 +97,9 @@ func (p *Prepared) PairTiles(tileAt func(t float64) string, offset, minShare flo
 		count := map[string]int{}
 		active := 0
 		for f, row := range p.Labels[pair.Chunk] {
-			if pair.Speaker >= len(row) || row[pair.Speaker] == 0 {
+			// Every 4th frame (about 70 ms) is plenty to tell which tile
+			// was lit, at a quarter of the lookups.
+			if f%4 != 0 || pair.Speaker >= len(row) || row[pair.Speaker] == 0 {
 				continue
 			}
 			active++

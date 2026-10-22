@@ -146,8 +146,18 @@ type MeetingConfig struct {
 	// overloaded machine the transcript is late, not missing (decoding
 	// inline once lost 14% of a meeting's audio). false decodes inline.
 	DecodeAsync bool `toml:"decode_async"`
-	AutoSave    bool `toml:"auto_save"`   // save session on stop
-	AutoDetect  bool `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
+	// DiarizeRoomSplit uses the meeting window to keep a meeting room's
+	// audio (the room device's tile) apart from everyone else's, and
+	// clusters it on its own, more finely (RoomSplitThreshold; two room
+	// clusters merge only at RoomSplitMerge similarity), so the room's
+	// people come out as separate speakers instead of one. On a labelled
+	// room meeting: speakers right 94.7 -> 98.1%. Meetings without a room
+	// tile are unchanged. false: one clustering for everyone, as before.
+	DiarizeRoomSplit   bool    `toml:"diarize_room_split"`
+	RoomSplitThreshold float64 `toml:"room_split_threshold"`
+	RoomSplitMerge     float64 `toml:"room_split_merge"`
+	AutoSave           bool    `toml:"auto_save"`   // save session on stop
+	AutoDetect         bool    `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
 	// StickyGraceWindow/StickyThresholdMargin/MinAssignDuration/
 	// ShortSegmentGraceWindow mirror speaker.Tuning's fields exactly
@@ -314,6 +324,8 @@ func DefaultConfig() *Config {
 			HighlightShortLines:     true,
 			LiveLabelsFromHighlight: true,
 			DecodeAsync:             true,
+			RoomSplitThreshold:      0.45,
+			RoomSplitMerge:          0.7,
 			AutoSave:                true,
 			AutoDetect:              true,
 			SpeakerModel:            "auto",
