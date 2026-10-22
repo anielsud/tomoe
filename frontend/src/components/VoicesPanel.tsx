@@ -71,7 +71,7 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
   view?.profiles.forEach(p => { byId[`${p.model}/${p.id}`] = p; });
 
   return (
-    <div className="hint-timeline">
+    <div style={{ flex: 1, overflow: 'auto' }}>
       <div className="panel-header">
         <h2>Voices</h2>
         <button
