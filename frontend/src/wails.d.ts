@@ -40,6 +40,13 @@ interface Window {
         GetLookThumb(sessionId: string, look: number): Promise<string>;
         SaveLookForAnalysis(sessionId: string, look: number): Promise<string>;
         RenameSpeaker(sessionId: string, label: string, name: string): Promise<void>;
+        Voices(): Promise<any>;
+        PlayVoiceClip(clip: any): Promise<string>;
+        RenameVoice(model: string, id: string, name: string): Promise<void>;
+        MergeVoices(model: string, into: string, from: string): Promise<void>;
+        KeepVoicesApart(model: string, a: string, b: string): Promise<void>;
+        ForgetVoice(model: string, id: string): Promise<void>;
+        LearnVoicesFromSavedSessions(): Promise<number>;
       };
     };
   };

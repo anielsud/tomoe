@@ -347,6 +347,8 @@ export default function SettingsPanel() {
             <>
               <Row label="Fingerprint every Nth window" hint="Sets CPU use during the call: higher uses less (5 is a fifth of 1), 2 is about as accurate as 1">{num('Meeting', 'DiarizeStride', 1, 1)}</Row>
               <Row label="Recluster every (seconds)" hint="How often labels during the meeting are updated">{num('Meeting', 'DiarizeRecluster', 5, 5)}</Row>
+              <Row label="Split meeting rooms into their people" hint="A meeting room joins as one tile for everyone in it: keep its audio apart from everyone else's and tell its voices apart more finely, so the room's people come out as separate speakers. Uses the meeting window">{toggle('Meeting', 'DiarizeRoomSplit')}</Row>
+              <Row label="Voice profiles" hint="Learn each person's voice from meetings where their own tile was lit or you named them (kept on this computer, fingerprints only), and name voices the meeting window can't: people in a meeting room, on the phone, in calls with no window. Manage them on the Voices page">{toggle('Meeting', 'VoiceProfiles')}</Row>
             </>
           )}
         </Group>

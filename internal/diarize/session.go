@@ -13,6 +13,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/config"
 	"github.com/sosuke-ai/tomoe-pc/internal/models"
 	"github.com/sosuke-ai/tomoe-pc/internal/session"
+	"github.com/sosuke-ai/tomoe-pc/internal/voices"
 )
 
 // SessionDiarizer diarizes a recording session while it's recorded
@@ -61,6 +62,9 @@ type SessionDiarizer struct {
 	hints   []Hint
 	names   map[int]string
 	renames map[int]string
+	// voiceNames are names from voice profiles, for speakers the meeting
+	// window didn't name, or named only by a room's tile.
+	voiceNames map[int]string
 }
 
 // SessionOptions are a SessionDiarizer's callbacks; any may be nil.
@@ -72,6 +76,10 @@ type SessionOptions struct {
 	// just before (see StreamConfig.OnSpeakerChange), with the session
 	// time of the window that showed it.
 	OnSpeakerChange func(at float64)
+	// Voices, if set, names speakers the meeting window can't from voice
+	// profiles, and learns profiles from the meeting when it ends
+	// (MeetingConfig.VoiceProfiles).
+	Voices *voices.Store
 }
 
 // NewSessionDiarizer starts diarizing a meeting in lang, or returns nil and
@@ -84,6 +92,11 @@ func NewSessionDiarizer(m config.MeetingConfig, status *models.Status, lang stri
 	sc, err := StreamConfigFor(m, status, lang)
 	if err != nil {
 		return nil, err
+	}
+	if m.VoiceProfiles && opts.Voices == nil {
+		if opts.Voices, err = VoiceStore(m, sc.EmbeddingModelID); err != nil {
+			fmt.Printf("voice profiles off for this meeting: %v\n", err)
+		}
 	}
 	d := &SessionDiarizer{lock: lock, split: m.SplitOnSpeakerChange, minWords: m.MinSpeakerWords, shortLines: m.HighlightShortLines, hintFirst: m.LiveLabelsFromHighlight, opts: opts, liveTo: map[string]string{}, renames: map[int]string{}}
 	sc.OnTimeline = d.apply
@@ -273,10 +286,12 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 }
 
 // labelsLocked labels the timeline's speakers: the user's rename, else
-// "Person N (Name)" for a speaker hints have named by the time through,
-// else "Person N".
+// "Person N (Name)" for a speaker hints have named by the time through
+// (or a voice profile has, if hints didn't or named only a room), else
+// "Person N".
 func (d *SessionDiarizer) labelsLocked(through float64) map[int]string {
 	d.names = nameSpeakers(d.timeline.Turns, d.hints, through)
+	d.voiceNames = d.matchVoicesLocked()
 	out := make(map[int]string, len(d.timeline.Labels))
 	for k := range d.timeline.Labels {
 		out[k] = d.labelFor(k)
@@ -287,6 +302,9 @@ func (d *SessionDiarizer) labelsLocked(through float64) map[int]string {
 func (d *SessionDiarizer) labelFor(k int) string {
 	if name := d.renames[k]; name != "" {
 		return name
+	}
+	if name := d.voiceNames[k]; name != "" {
+		return fmt.Sprintf("Person %d (%s)", k+1, name)
 	}
 	if name := d.names[k]; name != "" {
 		return fmt.Sprintf("Person %d (%s)", k+1, name)
@@ -299,12 +317,42 @@ func (d *SessionDiarizer) labelFor(k int) string {
 func (d *SessionDiarizer) speakerNamedLocked(name string) (int, bool) {
 	found, n := -1, 0
 	for k := range d.timeline.Labels {
-		if SameName(d.renames[k], name) || SameName(d.names[k], name) {
+		if SameName(d.renames[k], name) || SameName(d.names[k], name) || SameName(d.voiceNames[k], name) {
 			found = k
 			n++
 		}
 	}
 	return found, n == 1
+}
+
+// matchVoicesLocked names, from the voice profiles, the timeline's
+// speakers that have no name but a room's (a room's tile is lit for
+// everyone in it) and no rename. A name the window or the user gave
+// another speaker is taken.
+func (d *SessionDiarizer) matchVoicesLocked() map[int]string {
+	if d.opts.Voices == nil || d.timeline == nil || len(d.timeline.Voices) == 0 {
+		return nil
+	}
+	open := map[int]voices.Voice{}
+	for k := range d.timeline.Labels {
+		if d.renames[k] != "" || (d.names[k] != "" && !IsRoomTile(d.names[k])) {
+			continue
+		}
+		if v, ok := d.timeline.Voices[k]; ok {
+			open[k] = v
+		}
+	}
+	if len(open) == 0 {
+		return nil
+	}
+	return d.opts.Voices.Match(open, func(name string) bool {
+		for k := range d.timeline.Labels {
+			if SameName(d.renames[k], name) || (!IsRoomTile(d.names[k]) && SameName(d.names[k], name)) {
+				return true
+			}
+		}
+		return false
+	})
 }
 
 // shortLineLabelLocked is ShortLineLabel, when the setting is on.
@@ -426,7 +474,14 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	}
 	session.AbsorbSmallSpeakers(d.sess.Segments, d.minWords, d.isRenamedLabel)
 	id := d.sess.ID
+	var learn func()
+	if d.opts.Voices != nil {
+		learn = d.learnLocked()
+	}
 	d.lock.Unlock()
+	if learn != nil {
+		learn()
+	}
 	st := d.stream.Stats()
 	fmt.Printf("session %s: final speaker labels %.1fs after the meeting ended (diarizer was %.1fs behind then, at most %.1fs; %d reclusters took %.1fs, slowest %.2fs; %d windows, %d fingerprints; %d caught up in parallel in %.1fs)\n",
 		id, time.Since(began).Seconds(), st.BehindAtEnd, st.MaxBehind, st.Reclusters, st.ReclusterTotal, st.ReclusterMax, st.Windows, st.Fingerprints, st.CatchUpWindows, st.CatchUpSeconds)
@@ -445,7 +500,7 @@ func (d *SessionDiarizer) Finish(dir string) error {
 	// What replaying the fingerprints needs besides them: where the
 	// stream's audio starts in session time, and the settings used.
 	info, _ := json.MarshalIndent(StreamInfo{
-		Offset: d.offset, Stride: d.stream.cfg.Stride, ReclusterSeconds: d.stream.cfg.ReclusterSeconds, Params: d.stream.cfg.Params, MinSpeakerSeconds: d.stream.cfg.MinSpeakerSeconds, Stats: &st,
+		Offset: d.offset, Model: d.stream.cfg.EmbeddingModelID, Stride: d.stream.cfg.Stride, ReclusterSeconds: d.stream.cfg.ReclusterSeconds, Params: d.stream.cfg.Params, MinSpeakerSeconds: d.stream.cfg.MinSpeakerSeconds, Stats: &st,
 	}, "", "  ")
 	_ = os.WriteFile(filepath.Join(dir, "diarization.json"), info, 0o644)
 	return nil
@@ -455,7 +510,10 @@ func (d *SessionDiarizer) Finish(dir string) error {
 // (diarization.json): the session time the diarized audio starts at, and
 // the settings it was diarized with.
 type StreamInfo struct {
-	Offset            float64 `json:"offset_seconds"`
+	Offset float64 `json:"offset_seconds"`
+	// Model is the speaker model the fingerprints are from (absent before
+	// 2026-10-22).
+	Model             string  `json:"model,omitempty"`
 	Stride            int     `json:"stride"`
 	ReclusterSeconds  float64 `json:"recluster_seconds"`
 	Params            Params  `json:"params"`
@@ -520,4 +578,35 @@ func (d *SessionDiarizer) tileTimeline() (func(t float64) string, float64) {
 		return nil, 0
 	}
 	return TileTimeline(hints, hintLag), offset
+}
+
+// learnLocked returns what teaches the voice profiles from this meeting,
+// to run once the lock is released: the voices heard while a person's own
+// tile was lit, then those of the speakers the user named (which win).
+func (d *SessionDiarizer) learnLocked() func() {
+	hints := append([]Hint(nil), d.hints...)
+	segs := append([]session.Segment(nil), d.sess.Segments...)
+	renamed := map[string]bool{}
+	for _, n := range d.renames {
+		renamed[n] = true
+	}
+	id, at, offset, store := d.sess.ID, d.sess.CreatedAt, d.offset, d.opts.Voices
+	return func() {
+		p := d.stream.Prepared()
+		learned := VoicesFromTiles(p, hints, offset)
+		if len(renamed) > 0 {
+			learned = append(learned, VoicesFromSpeakers(p, offset, SpeakerAt(segs, func(label string) string {
+				if renamed[label] {
+					return label
+				}
+				return ""
+			}))...)
+		}
+		names, err := store.Learn(id, at, learned)
+		if err != nil {
+			fmt.Printf("session %s: couldn't save voice profiles: %v\n", id, err)
+		} else if len(names) > 0 {
+			fmt.Printf("session %s: voice profiles learnt for %d people\n", id, len(names))
+		}
+	}
 }

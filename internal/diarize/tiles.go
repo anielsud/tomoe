@@ -3,6 +3,7 @@ package diarize
 import (
 	"sort"
 	"strings"
+	"unicode"
 )
 
 // Tiles: the meeting window says who is talking (the tile with the ring),
@@ -58,9 +59,15 @@ func TileTimeline(hints []Hint, lag float64) func(t float64) string {
 }
 
 // IsRoomTile reports whether a tile's name is a meeting room's (a room
-// device joins as one participant for everyone in the room).
+// device joins as one participant for everyone in the room): the word
+// "room" anywhere ("Room - Oslo", "Harbour Zoom Room").
 func IsRoomTile(key string) bool {
-	return strings.HasPrefix(strings.ToLower(strings.TrimSpace(key)), "room")
+	for _, w := range strings.FieldsFunc(strings.ToLower(key), func(r rune) bool { return !unicode.IsLetter(r) }) {
+		if w == "room" || w == "rooms" {
+			return true
+		}
+	}
+	return false
 }
 
 // RoomOnly folds every person's own tile into one: the only constraint

@@ -67,8 +67,8 @@ func TestMergeAndAbsorbKeepTilesApart(t *testing.T) {
 
 func TestTileTimeline(t *testing.T) {
 	at := TileTimeline([]Hint{
-		{T: 10.5, Name: "Room - New York - Prospect Park"},
-		{T: 12.5, Name: "Room - New Yor…"}, // the same tile, cut short
+		{T: 10.5, Name: "Room - Oslo - Fjord 2"},
+		{T: 12.5, Name: "Room - Oslo - Fj…"}, // the same tile, cut short
 		{T: 20.5, Candidates: []string{"Ilse Novak", "Wayde Tyrrel"}},
 		{T: 30.5, Name: "Ilse Novak"},
 	}, 0.5)

@@ -70,6 +70,7 @@ Mic Capturer → StreamCapturer → VAD → Transcribe(lang) → Segment
 
 - **Speaker models per language**: `speaker_model = "auto"` uses the English-trained ERes2Net for English meetings and the Mandarin-trained base model otherwise (`models.SpeakerModels` holds each model's diarization settings). `eres2net-base` restores the previous model everywhere.
 - **Diarizing during the meeting** (`diarize_during_meeting`, on by default): `diarize.Stream` segments, fingerprints and reclusters the monitor audio as it arrives, and `diarize.SessionDiarizer` relabels transcript lines from each timeline, so final labels are ready when the meeting ends. `false` restores the previous post-meeting sherpa-onnx subprocess exactly, which also runs by itself if the in-process diarizer can't load. Design: `docs/speaker-pipeline-design.md`; measurements: `docs/speaker-attribution-research.md`.
+- **Meeting rooms and voice profiles** (`diarize_room_split`, `voice_profiles`, both off by default): a room's audio (its tile is lit for everyone in it) is clustered apart and more finely; `internal/voices` keeps each person's voice fingerprint, learnt from their own lit tile or a name the user gave, per speaker model (`~/.local/share/tomoe/voices/<model>.json`), and names speakers the window can't. Managed on the Voices page. Measurements: `docs/speaker-attribution-research.md`, "Meeting rooms".
 - **System audio (macOS)**: the default source "Meeting app (automatic)" (`meetingaudio.AutoSource`) captures the meeting app making sound (Teams, Zoom, Webex, FaceTime, Discord, Slack, or a browser window titled for Meet/Teams/Zoom/Webex), else the whole system until one does, switching live via `audio.SwitchCapturer`. "Everything" is diarized like any other source.
 - **Video hints (macOS)**: `videohint.Watcher` looks at the Teams window often while a speaker needs naming or right after a speaker change, records every look with the session (`looks.jsonl`, thumbnails; shown in the hint timeline), and its name reads are attributed by vote against the diarization timeline and constrain clustering. See `docs/macos-video-hints.md`, including tuning with `record_for_tuning` and `tomoe tune`.
 
@@ -187,6 +188,8 @@ tomoe config              # Print current config
 tomoe session replay <id> # Replay a session's audio: default pipeline vs current config
 tomoe eval <media> --ref <transcript>  # Score every pass against a reviewed transcript (see docs/speaker-attribution-research.md)
 tomoe tune <id> --ref <transcript>     # Find the best speaker-naming settings from a session recorded for tuning
+tomoe voices learn [id...]             # Learn voice profiles from saved meetings (own tiles, names you gave)
+tomoe voices list                      # List voice profiles and pairs that may be one person
 ```
 
 ## Coding Conventions

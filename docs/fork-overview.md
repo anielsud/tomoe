@@ -43,6 +43,18 @@ Upstream PR #3 makes merging similar speakers deterministic.
 - a macOS fix: Objective-C entry points called from Go drain their own
   autorelease pools (a thread had spun at full CPU for hours after a
   meeting);
+- meeting rooms (opt-in): the room's audio clustered apart and more
+  finely, so its people come out as separate speakers
+  (`diarize_room_split`; 94.7 → 98.1% speakers right on a labelled room
+  meeting);
+- voice profiles (opt-in, `voice_profiles`): each person's voice learnt
+  from meetings where their own tile was lit or the user named them, and
+  used to name voices the meeting window can't; a Voices page to play,
+  name, merge and forget them (on a labelled room meeting, lines named
+  right 21 → 40 of 45);
+- overload never drops audio: the meeting audio is read on its own,
+  finished lines decode on a worker, and a backlog is caught up later
+  (`decode_async`);
 - research: single-pass line length, per-utterance hotwords, speaker
   identity from what is said.
 
