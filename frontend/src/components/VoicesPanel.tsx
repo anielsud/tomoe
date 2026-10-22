@@ -181,6 +181,7 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
                 busy={busy === `r/${p.id}`}
                 play={<PlayButton id={`r/${p.id}`} clip={p.clip} />}
                 onRename={name => act(`r/${p.id}`, () => window.go.backend.App.RenameVoice(p.model, p.id, name))}
+                onConfirm={() => act(`r/${p.id}`, () => window.go.backend.App.ConfirmVoice(p.model, p.id), `${p.name}'s voice now names speakers.`)}
                 onStartOver={() => act(`r/${p.id}`, () => window.go.backend.App.StartVoiceOver(p.model, p.id), `${p.name} starts over: learnt from new meetings only.`)}
                 onRemoveMeeting={sid => act(`r/${p.id}`, () => window.go.backend.App.RemoveVoiceMeeting(p.model, p.id, sid), `Took that meeting out of ${p.name}.`)}
                 playClip={(key, clip) => <PlayButton id={key} clip={clip} />}
@@ -277,8 +278,8 @@ function NamedRow({ n, play, busy, onRight, onNotThem, onName }: {
   );
 }
 
-function ProfileRow({ p, play, busy, onRename, onForget, onStartOver, onRemoveMeeting, playClip }: {
-  p: VoiceProfile; play: JSX.Element; busy: boolean; onRename: (name: string) => void; onForget: () => void;
+function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver, onRemoveMeeting, playClip }: {
+  p: VoiceProfile; play: JSX.Element; busy: boolean; onRename: (name: string) => void; onForget: () => void; onConfirm: () => void;
   onStartOver: () => void; onRemoveMeeting: (session: string) => void; playClip: (key: string, clip: VoiceClip) => JSX.Element;
 }) {
   const [editing, setEditing] = useState(false);
@@ -305,6 +306,9 @@ function ProfileRow({ p, play, busy, onRename, onForget, onStartOver, onRemoveMe
             <div className="tool-name">
               {p.name}
               {flagged > 0 && <span className="voice-flag" title="A meeting sounds unlike the rest: open the meetings to check">{flagged} to check</span>}
+              {!p.inUse && !p.startedOver && p.meetings > 0 && (
+                <span className="voice-unused" title="Heard in one meeting: it names nobody until it's heard in another, or you confirm the clip is them">not used yet</span>
+              )}
             </div>
           )}
           <div className="tool-detail">
@@ -319,6 +323,9 @@ function ProfileRow({ p, play, busy, onRename, onForget, onStartOver, onRemoveMe
         </div>
         {!editing && !confirming && (
           <div className="voice-actions">
+            {!p.inUse && !p.startedOver && p.meetings > 0 && (
+              <button className="btn btn-primary btn-sm" disabled={busy} title="The clip is them: use this profile now" onClick={onConfirm}>Confirm</button>
+            )}
             <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setEditing(true)}>Rename</button>
             <button className="btn btn-secondary btn-sm" disabled={busy || p.startedOver} onClick={() => setConfirming('startOver')}>Start over</button>
             <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => setConfirming('forget')}>Forget</button>

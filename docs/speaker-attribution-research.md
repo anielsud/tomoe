@@ -1086,7 +1086,13 @@ What a profile did must be checkable, so it can earn trust:
   only; "Forget" deletes it and its names are never learnt again, unless
   the user names someone that;
 - tile names with a colon aren't learnt (the window's own text misread as
-  a name, such as a notification).
+  a name, such as a notification);
+- a profile names nobody until it's been heard in two meetings
+  (`voice_profile_min_meetings`), unless the user confirmed it or named
+  the person themselves: a single meeting's misread tile can't name
+  people in the next. On the owner's 92 profiles, 57 come from one
+  meeting; 38 are in use (35 heard twice or more, 3 named by the user).
+  People met once aren't named by voice until they're heard again.
 
 ## Open questions
 

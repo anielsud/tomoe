@@ -64,6 +64,10 @@ type VoiceProfileView struct {
 	// StartedOver: the user cleared what it learnt; it learns from new
 	// meetings.
 	StartedOver bool `json:"startedOver"`
+	// InUse: the profile names voices (heard in enough meetings, or
+	// confirmed).
+	InUse     bool `json:"inUse"`
+	Confirmed bool `json:"confirmed"`
 }
 
 // NamedByVoiceView is a speaker a profile named in a recent meeting.
@@ -175,7 +179,8 @@ func (a *App) Voices() (*VoicesView, error) {
 	for model, s := range stores {
 		for _, p := range s.Profiles() {
 			v := VoiceProfileView{Model: model, ID: p.ID, Name: p.Name, Meetings: len(p.Meetings), Fingerprints: p.Voice().N, LastHeard: p.LastHeard(),
-				Heard: []VoiceMeetingView{}, Rejected: len(p.Rejected), StartedOver: len(p.Meetings) == 0 && len(p.Excluded) > 0}
+				Heard: []VoiceMeetingView{}, Rejected: len(p.Rejected), StartedOver: len(p.Meetings) == 0 && len(p.Excluded) > 0,
+				InUse: s.InUse(&p), Confirmed: p.Confirmed}
 			for i, h := range p.Meetings {
 				var rest voices.Voice
 				for j, o := range p.Meetings {
@@ -616,4 +621,14 @@ func (a *App) StartVoiceOver(model, id string) error {
 		return err
 	}
 	return s.StartOver(id)
+}
+
+// ConfirmVoice says a profile is the person's voice: it names voices
+// before it's been heard in enough meetings.
+func (a *App) ConfirmVoice(model, id string) error {
+	s, err := a.voiceStore(model)
+	if err != nil {
+		return err
+	}
+	return s.Confirm(id)
 }

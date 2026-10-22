@@ -31,7 +31,10 @@ func sameFold(a, b string) bool { return strings.EqualFold(a, b) }
 func open(t *testing.T) (*Store, string) {
 	t.Helper()
 	path := filepath.Join(t.TempDir(), "voices", "m.json")
-	s, err := Open(path, sameFold, DefaultParams())
+	// One meeting is enough here; TestMinMeetings covers the rule.
+	params := DefaultParams()
+	params.MinMeetings = 1
+	s, err := Open(path, sameFold, params)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -62,7 +65,7 @@ func TestLearnAndMatch(t *testing.T) {
 	}
 
 	// Reopened from disk, it's the same.
-	s2, err := Open(path, sameFold, DefaultParams())
+	s2, err := Open(path, sameFold, s.params)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -241,5 +244,34 @@ func TestUnforget(t *testing.T) {
 	}
 	if names, _ := s.Learn("m2", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(20, unit(0, 1, 0))}}); len(names) != 1 {
 		t.Errorf("a name the user gave again wasn't learnt: %v", names)
+	}
+}
+
+func TestMinMeetings(t *testing.T) {
+	s, err := Open(filepath.Join(t.TempDir(), "v.json"), sameFold, DefaultParams())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ilse := voiceOf(10, unit(0, 1, 0))
+	_, _ = s.Learn("m1", time.Now(), []Learned{
+		{Name: "Ilse Novak", Source: FromTile, Voice: voiceOf(20, unit(0, 1, 0))},
+		{Name: "Wayde Tyrrel", Source: FromNamed, Voice: voiceOf(20, unit(1, 0, 0))},
+		{Name: "Bodil Ekdahl", Source: FromTile, Voice: voiceOf(20, unit(2, 0, 0))},
+	})
+	got := s.Match(map[int]Voice{1: ilse, 2: voiceOf(10, unit(1, 0, 0)), 3: voiceOf(10, unit(2, 0, 0))}, nil)
+	if got[1].Name != "" || got[2].Name != "Wayde Tyrrel" || got[3].Name != "" {
+		t.Errorf("after one meeting only a person the user named should name voices: %v", got)
+	}
+	_, _ = s.Learn("m2", time.Now(), []Learned{{Name: "Ilse Novak", Source: FromTile, Voice: voiceOf(20, unit(0, 1, 0.05))}})
+	var bodil string
+	for _, p := range s.Profiles() {
+		if p.Name == "Bodil Ekdahl" {
+			bodil = p.ID
+		}
+	}
+	_ = s.Confirm(bodil)
+	got = s.Match(map[int]Voice{1: ilse, 3: voiceOf(10, unit(2, 0, 0))}, nil)
+	if got[1].Name != "Ilse Novak" || got[3].Name != "Bodil Ekdahl" {
+		t.Errorf("heard twice, or confirmed, should name voices: %v", got)
 	}
 }

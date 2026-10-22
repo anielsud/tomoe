@@ -167,6 +167,10 @@ type MeetingConfig struct {
 	VoiceProfiles         bool    `toml:"voice_profiles"`
 	VoiceProfileThreshold float64 `toml:"voice_profile_threshold"`
 	VoiceProfileMargin    float64 `toml:"voice_profile_margin"`
+	// VoiceProfileMinMeetings: a profile names nobody until it's been
+	// heard in this many meetings, unless the user confirmed it or named
+	// the person themselves (1: any profile names voices, as before).
+	VoiceProfileMinMeetings int `toml:"voice_profile_min_meetings"`
 	AutoSave              bool    `toml:"auto_save"`   // save session on stop
 	AutoDetect            bool    `toml:"auto_detect"` // auto-detect meetings: an app using mic and speaker at once (PulseAudio on Linux, CoreAudio on macOS)
 
@@ -339,6 +343,7 @@ func DefaultConfig() *Config {
 			RoomSplitMerge:          0.7,
 			VoiceProfileThreshold:   0.7,
 			VoiceProfileMargin:      0.1,
+			VoiceProfileMinMeetings: 2,
 			AutoSave:                true,
 			AutoDetect:              true,
 			SpeakerModel:            "auto",
