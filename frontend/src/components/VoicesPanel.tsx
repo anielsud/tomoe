@@ -183,7 +183,9 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
                 onRename={name => act(`r/${p.id}`, () => window.go.backend.App.RenameVoice(p.model, p.id, name))}
                 onConfirm={() => act(`r/${p.id}`, () => window.go.backend.App.ConfirmVoice(p.model, p.id), `${p.name}'s voice now names speakers.`)}
                 onStartOver={() => act(`r/${p.id}`, () => window.go.backend.App.StartVoiceOver(p.model, p.id), `${p.name} starts over: learnt from new meetings only.`)}
-                onRemoveMeeting={sid => act(`r/${p.id}`, () => window.go.backend.App.RemoveVoiceMeeting(p.model, p.id, sid), `Took that meeting out of ${p.name}.`)}
+                names={view.profiles.map(q => q.name)}
+                onMoveMeeting={(sid, to) => act(`r/${p.id}`, () => window.go.backend.App.MoveVoiceMeeting(p.model, p.id, sid, to), `Moved that meeting from ${p.name} to ${to}.`)}
+                onRemoveMeeting={sid => act(`r/${p.id}`, () => window.go.backend.App.RemoveVoiceMeeting(p.model, p.id, sid), `Discarded that meeting from ${p.name}.`)}
                 playClip={(key, clip) => <PlayButton id={key} clip={clip} />}
                 onForget={() => act(`r/${p.id}`, () => window.go.backend.App.ForgetVoice(p.model, p.id), `Forgot ${p.name}.`)}
               />
@@ -278,7 +280,8 @@ function NamedRow({ n, play, busy, onRight, onNotThem, onName }: {
   );
 }
 
-function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver, onRemoveMeeting, playClip }: {
+function ProfileRow({ p, play, busy, names, onRename, onForget, onConfirm, onStartOver, onMoveMeeting, onRemoveMeeting, playClip }: {
+  names: string[]; onMoveMeeting: (session: string, to: string) => void;
   p: VoiceProfile; play: JSX.Element; busy: boolean; onRename: (name: string) => void; onForget: () => void; onConfirm: () => void;
   onStartOver: () => void; onRemoveMeeting: (session: string) => void; playClip: (key: string, clip: VoiceClip) => JSX.Element;
 }) {
@@ -287,6 +290,18 @@ function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver,
   // confirmations are in the row.
   const [confirming, setConfirming] = useState<'forget' | 'startOver' | null>(null);
   const [removing, setRemoving] = useState<string | null>(null);
+  const [moving, setMoving] = useState<string | null>(null);
+  const [moveTo, setMoveTo] = useState('');
+  const listId = `names-${p.id}`;
+  function moveForm(session: string) {
+    return (
+      <form className="voice-name" onSubmit={e => { e.preventDefault(); if (moveTo.trim()) { onMoveMeeting(session, moveTo.trim()); setMoving(null); setMoveTo(''); } }}>
+        <input className="setting-input" list={listId} value={moveTo} autoFocus placeholder="Who is it?" onChange={e => setMoveTo(e.target.value)} disabled={busy} />
+        <button className="btn btn-primary btn-sm" type="submit" disabled={busy || !moveTo.trim()}>Move</button>
+        <button className="btn btn-secondary btn-sm" type="button" onClick={() => { setMoving(null); setMoveTo(''); }}>Cancel</button>
+      </form>
+    );
+  }
   const [open, setOpen] = useState(false);
   const [name, setName] = useState(p.name);
   const from = [p.fromTiles ? `own tile in ${p.fromTiles}` : '', p.fromNamed ? `named by you in ${p.fromNamed}` : ''].filter(Boolean).join(', ');
@@ -319,6 +334,9 @@ function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver,
             {p.rejected > 0 && <> · {p.rejected} {p.rejected === 1 ? 'voice' : 'voices'} you said aren't them</>}
             {p.heard.length > 0 && (
               <> · <button className="link-button" onClick={() => setOpen(!open)}>{open ? 'Hide meetings' : 'Meetings'}</button></>
+            )}
+            {p.heard.length === 0 && p.takenOut.length > 0 && (
+              <> · <button className="link-button" onClick={() => setOpen(!open)}>{open ? 'Hide discarded' : 'Discarded'}</button></>
             )}
           </div>
         </div>
@@ -365,20 +383,36 @@ function ProfileRow({ p, play, busy, onRename, onForget, onConfirm, onStartOver,
                       : 'Only meeting'}
                   </div>
                 </div>
-                {removing === h.session ? (
+                {moving === h.session ? moveForm(h.session) : removing === h.session ? (
                   <div className="voice-actions">
-                    <span className="voice-meta">Take it out for good?</span>
-                    <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRemoving(null); onRemoveMeeting(h.session); }}>Take out</button>
+                    <span className="voice-meta">Not {p.name}: discard what this meeting taught, for good?</span>
+                    <button className="btn btn-danger btn-sm" disabled={busy} onClick={() => { setRemoving(null); onRemoveMeeting(h.session); }}>Discard</button>
                     <button className="btn btn-secondary btn-sm" onClick={() => setRemoving(null)}>Keep</button>
                   </div>
                 ) : (
                   <div className="voice-actions">
-                    <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setRemoving(h.session)}>Take out</button>
+                    <button className="btn btn-secondary btn-sm" disabled={busy} title="This meeting's voice is someone else: teach their profile instead" onClick={() => setMoving(h.session)}>It's someone else…</button>
+                    <button className="btn btn-secondary btn-sm" disabled={busy} title="Not them, and you can't tell who it is (or it's noise): throw it away" onClick={() => setRemoving(h.session)}>Discard</button>
                   </div>
                 )}
               </div>
             );
           })}
+          {p.takenOut.map(h => (
+            <div key={`out/${h.session}`} className="tool-row voice-row voice-taken-out">
+              <DiscardedPlay model={p.model} id={p.id} session={h.session} playClip={playClip} />
+              {h.tiles.map(t => <TileImg key={t.look} tile={t} size={56} title="Their tile in that meeting" />)}
+              <div className="tool-body">
+                <div className="tool-name">{h.title || h.session.slice(0, 8)} <span className="voice-meta">discarded: not learnt from</span></div>
+              </div>
+              {moving === h.session ? moveForm(h.session) : (
+                <div className="voice-actions">
+                  <button className="btn btn-secondary btn-sm" disabled={busy} title="Teach this meeting's voice to the right person" onClick={() => setMoving(h.session)}>It's someone else…</button>
+                </div>
+              )}
+            </div>
+          ))}
+          <datalist id={listId}>{names.filter(n => n !== p.name).map(n => <option key={n} value={n} />)}</datalist>
         </div>
       )}
     </div>
@@ -401,8 +435,20 @@ function TileImg({ tile, size, title }: { tile?: TileRef; size: number; title?: 
   }, [tile?.session, tile?.look]);
   // Tiles are wide (a video) or square (a picture): keep their shape,
   // the height fixed.
-  if (!tile) return <span className="voice-tile voice-tile-empty" style={{ width: size, height: size }} />;
+  if (!tile) return null;
   return src
     ? <img className="voice-tile" src={src} style={{ height: size, maxWidth: size * 1.8 }} title={title} alt="" />
     : <span className="voice-tile voice-tile-empty" style={{ width: size * 1.6, height: size }} />;
+}
+
+// DiscardedPlay plays a discarded meeting's voice, worked out again from
+// the meeting when the row is shown.
+function DiscardedPlay({ model, id, session, playClip }: { model: string; id: string; session: string; playClip: (key: string, clip: VoiceClip) => JSX.Element }) {
+  const [clip, setClip] = useState<VoiceClip | null>(null);
+  useEffect(() => {
+    let live = true;
+    window.go.backend.App.DiscardedVoiceClip(model, id, session).then(c => { if (live) setClip(c as VoiceClip); }).catch(() => {});
+    return () => { live = false; };
+  }, [model, id, session]);
+  return clip ? playClip(`out/${id}/${session}`, clip) : <span className="btn btn-secondary btn-sm voice-play" style={{ opacity: 0.4 }}>…</span>;
 }

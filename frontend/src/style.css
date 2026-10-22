@@ -1141,3 +1141,7 @@ body {
   font-size: 0.75em;
   text-align: center;
 }
+
+.voice-taken-out {
+  opacity: 0.6;
+}

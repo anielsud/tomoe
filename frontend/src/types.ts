@@ -234,6 +234,7 @@ export interface VoiceProfile {
   inUse: boolean;
   confirmed: boolean;
   face?: TileRef;
+  takenOut: VoiceMeeting[];
 }
 
 export interface VoiceMeeting {

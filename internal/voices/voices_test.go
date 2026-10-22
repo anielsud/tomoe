@@ -275,3 +275,40 @@ func TestMinMeetings(t *testing.T) {
 		t.Errorf("heard twice, or confirmed, should name voices: %v", got)
 	}
 }
+
+func TestMove(t *testing.T) {
+	s, _ := open(t)
+	_, _ = s.Learn("m1", time.Now(), []Learned{
+		{Name: "Ilse Novak", Source: FromTile, Voice: voiceOf(20, unit(0, 1, 0))},
+		{Name: "Wayde Tyrrel", Source: FromTile, Voice: voiceOf(20, unit(1, 0, 0))},
+	})
+	_, _ = s.Learn("m2", time.Now(), []Learned{{Name: "Ilse Novak", Source: FromTile, Voice: voiceOf(30, unit(1, 0, 0.05))}}) // Wayde, misread
+	var ilse Profile
+	for _, p := range s.Profiles() {
+		if p.Name == "Ilse Novak" {
+			ilse = p
+		}
+	}
+	if err := s.Move(ilse.ID, "m2", time.Now(), ilse.Meetings[1].Voice, "wayde tyrrel"); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range s.Profiles() {
+		switch p.Name {
+		case "Ilse Novak":
+			if len(p.Meetings) != 1 || !contains(p.Excluded, "m2") {
+				t.Errorf("Ilse after the move: %+v", p.Meetings)
+			}
+		case "Wayde Tyrrel":
+			if len(p.Meetings) != 2 || p.Voice().N != 50 {
+				t.Errorf("Wayde after the move: %d meetings, %d fingerprints", len(p.Meetings), p.Voice().N)
+			}
+		}
+	}
+	// Ilse never learns m2 again.
+	_, _ = s.Learn("m2", time.Now(), []Learned{{Name: "Ilse Novak", Voice: voiceOf(30, unit(1, 0, 0.05))}})
+	for _, p := range s.Profiles() {
+		if p.Name == "Ilse Novak" && len(p.Meetings) != 1 {
+			t.Errorf("a moved meeting came back: %+v", p.Meetings)
+		}
+	}
+}

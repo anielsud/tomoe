@@ -52,6 +52,8 @@ interface Window {
         StartVoiceOver(model: string, id: string): Promise<void>;
         ConfirmVoice(model: string, id: string): Promise<void>;
         GetLookTile(sessionId: string, look: number): Promise<string>;
+        DiscardedVoiceClip(model: string, id: string, sessionId: string): Promise<any>;
+        MoveVoiceMeeting(model: string, id: string, sessionId: string, toName: string): Promise<void>;
       };
     };
   };
