@@ -44,6 +44,15 @@ type VoiceMeetingView struct {
 	// the others is likely someone else.
 	Agreement float64   `json:"agreement"`
 	Clip      VoiceClip `json:"clip"`
+	// Tiles are a few of the person's tile as the meeting window showed
+	// it while their voice was learnt (meetings since tiles were kept).
+	Tiles []TileRef `json:"tiles"`
+}
+
+// TileRef is a kept tile crop: look Look of session Session.
+type TileRef struct {
+	Session string `json:"session"`
+	Look    int    `json:"look"`
 }
 
 // VoiceProfileView is one profile on the Voices page.
@@ -64,6 +73,8 @@ type VoiceProfileView struct {
 	// StartedOver: the user cleared what it learnt; it learns from new
 	// meetings.
 	StartedOver bool `json:"startedOver"`
+	// Face is one of the person's tiles, from the latest meeting with one.
+	Face *TileRef `json:"face,omitempty"`
 	// InUse: the profile names voices (heard in enough meetings, or
 	// confirmed).
 	InUse     bool `json:"inUse"`
@@ -192,9 +203,16 @@ func (a *App) Voices() (*VoicesView, error) {
 				if rest.N > 0 {
 					agree = voices.Similarity(h.Voice.Centroid(), rest.Centroid())
 				}
-				v.Heard = append(v.Heard, VoiceMeetingView{Session: h.Session, Title: titles[h.Session], At: h.At, Source: h.Source, Fingerprints: h.Voice.N, Agreement: agree, Clip: VoiceClip{h.Session, h.Clip.Start, h.Clip.End}})
+				v.Heard = append(v.Heard, VoiceMeetingView{Session: h.Session, Title: titles[h.Session], At: h.At, Source: h.Source, Fingerprints: h.Voice.N, Agreement: agree, Clip: VoiceClip{h.Session, h.Clip.Start, h.Clip.End},
+					Tiles: tilesOf(h.Session, append([]string{p.Name}, p.Aliases...), tilesPerMeeting)})
 			}
 			sort.Slice(v.Heard, func(i, j int) bool { return v.Heard[i].At.After(v.Heard[j].At) })
+			for _, h := range v.Heard {
+				if len(h.Tiles) > 0 {
+					v.Face = &h.Tiles[0]
+					break
+				}
+			}
 			var latest time.Time
 			for _, h := range p.Meetings {
 				switch h.Source {
@@ -631,4 +649,76 @@ func (a *App) ConfirmVoice(model, id string) error {
 		return err
 	}
 	return s.Confirm(id)
+}
+
+// tilesPerMeeting is how many of a person's tiles a profile shows per
+// meeting.
+const tilesPerMeeting = 2
+
+type sessionTile struct {
+	look int
+	name string
+}
+
+// Kept tiles by session, read from looks.jsonl (cached while it's
+// unchanged).
+var (
+	tilesMu    sync.Mutex
+	tilesCache = map[string]tilesEntry{}
+)
+
+type tilesEntry struct {
+	mod   time.Time
+	tiles []sessionTile
+}
+
+// tilesOf picks up to n of a session's kept tiles named any of names,
+// spread over the meeting.
+func tilesOf(sessionID string, names []string, n int) []TileRef {
+	dir := filepath.Join(config.SessionDir(), sessionID)
+	st, err := os.Stat(filepath.Join(dir, "looks.jsonl"))
+	if err != nil {
+		return []TileRef{}
+	}
+	tilesMu.Lock()
+	e, ok := tilesCache[dir]
+	if !ok || !e.mod.Equal(st.ModTime()) {
+		e = tilesEntry{mod: st.ModTime()}
+		looks, _ := videohint.ReadLooks(dir)
+		for _, l := range looks {
+			if l.HasTile {
+				e.tiles = append(e.tiles, sessionTile{l.ID, l.Name})
+			}
+		}
+		tilesCache[dir] = e
+	}
+	tilesMu.Unlock()
+	var match []sessionTile
+	for _, t := range e.tiles {
+		for _, n := range names {
+			if diarize.SameName(t.name, n) {
+				match = append(match, t)
+				break
+			}
+		}
+	}
+	out := []TileRef{}
+	for i := 0; i < n && i < len(match); i++ {
+		// First, then spread evenly to the last.
+		j := 0
+		if n > 1 {
+			j = i * (len(match) - 1) / (n - 1)
+		}
+		out = append(out, TileRef{sessionID, match[j].look})
+	}
+	return out
+}
+
+// GetLookTile returns a kept tile crop as a JPEG data URL.
+func (a *App) GetLookTile(sessionID string, look int) (string, error) {
+	b, err := videohint.ReadTile(filepath.Join(config.SessionDir(), filepath.Base(sessionID)), look)
+	if err != nil {
+		return "", err
+	}
+	return "data:image/jpeg;base64," + base64.StdEncoding.EncodeToString(b), nil
 }

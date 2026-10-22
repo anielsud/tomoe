@@ -233,6 +233,7 @@ export interface VoiceProfile {
   startedOver: boolean;
   inUse: boolean;
   confirmed: boolean;
+  face?: TileRef;
 }
 
 export interface VoiceMeeting {
@@ -243,6 +244,12 @@ export interface VoiceMeeting {
   fingerprints: number;
   agreement: number;
   clip: VoiceClip;
+  tiles: TileRef[];
+}
+
+export interface TileRef {
+  session: string;
+  look: number;
 }
 
 export interface NamedByVoice {

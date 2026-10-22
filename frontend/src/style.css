@@ -1123,3 +1123,21 @@ body {
   padding: 0 4px;
   margin-left: 8px;
 }
+
+.voice-tile {
+  object-fit: cover;
+  border-radius: 6px;
+  flex-shrink: 0;
+  display: inline-block;
+}
+
+.voice-tile-empty {
+  background: var(--surface);
+  border: 1px dashed var(--border);
+}
+
+.voice-no-tile {
+  width: 56px;
+  font-size: 0.75em;
+  text-align: center;
+}

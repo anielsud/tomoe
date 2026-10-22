@@ -68,6 +68,14 @@ type Look struct {
 	// same as look ThumbOf's (same result a moment earlier).
 	Thumb   []byte `json:"-"`
 	ThumbOf int    `json:"thumb_of,omitempty"`
+	// TileCrop is the speaker's tile at full resolution (a JPEG saved as
+	// looks/<id>-tile.jpg; HasTile says there is one), at most once a
+	// minute per name: what the voice profiles show to say who a voice
+	// was learnt from.
+	TileCrop []byte `json:"-"`
+	HasTile  bool   `json:"tile,omitempty"`
+	// tileRect is where the speaker's tile is in the frame, in pixels.
+	tileRect image.Rectangle
 	// Content is the shared screen when it changed since the last one
 	// kept (a JPEG saved as content/<id>.jpg); ContentRect is where it
 	// was in the frame.
@@ -139,6 +147,11 @@ func (l *LookLog) Write(look Look) error {
 	}
 	if len(look.Thumb) > 0 {
 		if err := os.WriteFile(filepath.Join(l.dir, "looks", fmt.Sprintf("%d.jpg", look.ID)), look.Thumb, 0o644); err != nil {
+			return err
+		}
+	}
+	if len(look.TileCrop) > 0 {
+		if err := os.WriteFile(filepath.Join(l.dir, "looks", fmt.Sprintf("%d-tile.jpg", look.ID)), look.TileCrop, 0o644); err != nil {
 			return err
 		}
 	}
@@ -226,6 +239,11 @@ func ReadLooks(dir string) ([]Look, error) {
 		}
 	}
 	return out, sc.Err()
+}
+
+// ReadTile returns look id's tile crop from dir.
+func ReadTile(dir string, id int) ([]byte, error) {
+	return os.ReadFile(filepath.Join(dir, "looks", fmt.Sprintf("%d-tile.jpg", id)))
 }
 
 // ReadThumb returns look id's thumbnail from dir (following ThumbOf is
