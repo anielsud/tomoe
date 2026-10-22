@@ -43,7 +43,10 @@ var tuneCmd = &cobra.Command{
 		auto := !cmd.Flags().Changed("ref-offset")
 		segmentsPath, _ := cmd.Flags().GetString("segments")
 		spreadWords, _ := cmd.Flags().GetBool("spread-words")
-		return runTune(args[0], ref, out, offset, auto, threads, segmentsPath, spreadWords)
+		tiles, _ := cmd.Flags().GetString("tiles")
+		roomThreshold, _ = cmd.Flags().GetFloat64("room-threshold")
+		roomMerge, _ = cmd.Flags().GetFloat64("room-merge")
+		return runTune(args[0], ref, out, offset, auto, threads, segmentsPath, spreadWords, tiles)
 	},
 }
 
@@ -52,6 +55,9 @@ func init() {
 	tuneCmd.Flags().String("out", "", "Output directory (default tune-<session>)")
 	tuneCmd.Flags().Float64("ref-offset", 0, "Seconds to add to the reference's times to match the recording (default: estimated from the text)")
 	tuneCmd.Flags().String("segments", "", "Score this transcript of the session's audio (a replay's .json) instead of the saved one")
+	tuneCmd.Flags().Float64("room-threshold", 0, "With --tiles: cluster a room tile's audio by itself at this threshold (0: the session's)")
+	tuneCmd.Flags().Float64("room-merge", 0, "With --tiles: two clusters heard under a room merge only at this similarity (0: the session's)")
+	tuneCmd.Flags().String("tiles", "", "Cluster under meeting-tile constraints: \"room\" keeps a meeting room's audio apart from everyone else's; \"all\" also keeps people on different tiles apart")
 	tuneCmd.Flags().Bool("spread-words", false, "Replace word timings with estimates spread across each line (as for models without timestamps)")
 	tuneCmd.Flags().Int("threads", 2, "Threads per worker if fingerprints have to be computed")
 	rootCmd.AddCommand(tuneCmd)
@@ -94,7 +100,7 @@ type tuneResult struct {
 // against (a wrong name is worse than none).
 func (r tuneResult) nameScore() float64 { return r.NameRight - 2*r.NameWrong }
 
-func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, threads int, segmentsPath string, spreadWords bool) error {
+func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, threads int, segmentsPath string, spreadWords bool, tiles string) error {
 	began := time.Now()
 	cfg, err := config.Load(config.Path())
 	if err != nil {
@@ -217,6 +223,13 @@ func runTune(id, refPath, outDir string, refOffset float64, autoOffset bool, thr
 	}
 	intervals := []float64{0, 0.7, 1, 2, 5}
 
+	if tiles != "" {
+		all, _ := thinLooks(looks, 0, duration)
+		tileAt = diarize.TileTimeline(all, diarize.DefaultNameParams().Lag)
+		if tiles == "room" {
+			tileAt = diarize.RoomOnly(tileAt)
+		}
+	}
 	// Stage 1: naming rules, at each look rate, recorded stride.
 	base := clusterStride(prep, info, info.Stride)
 	var stage1 []tuneResult
@@ -338,8 +351,26 @@ type strideClusters struct {
 	clusters []int
 }
 
+// tileAt, when set (tune --tiles), clusters under meeting-tile constraints;
+// roomThreshold and roomMerge split a room's audio more finely.
+var (
+	tileAt                   func(t float64) string
+	roomThreshold, roomMerge float64
+)
+
 func clusterStride(prep *diarize.Prepared, info diarize.StreamInfo, stride int) strideClusters {
 	p := prep.EveryNth(stride)
+	if tileAt != nil {
+		ts := p.PairTiles(tileAt, info.Offset, 0.6)
+		n := 0
+		for _, t := range ts {
+			if t != "" {
+				n++
+			}
+		}
+		fmt.Printf("Tiles: %d of %d fingerprints heard under one tile (stride %d)\n", n, len(ts), stride)
+		p = p.WithTiles(ts).WithRoomSplit(roomThreshold, roomMerge)
+	}
 	c := p.Cluster(info.Params.Threshold, 0)
 	if info.Params.MergeSimilarity > 0 {
 		c = p.MergeClusters(c, info.Params.MergeSimilarity)
