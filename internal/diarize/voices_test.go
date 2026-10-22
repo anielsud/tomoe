@@ -55,9 +55,26 @@ func TestSpeakersNamedFromVoiceProfiles(t *testing.T) {
 			t.Errorf("speaker %d: %q, want %q", k, got[k], w)
 		}
 	}
-	d.renames[0] = "Ilse"
-	if got := d.labelsLocked(1e9); got[0] != "Ilse" {
+	if vm := d.voiceByLabelLocked()["Person 1 (Ilse Novak)"]; vm == nil || vm.Similarity < 0.99 {
+		t.Errorf("a voice-named speaker isn't marked: %+v", vm)
+	}
+	if vm := d.voiceByLabelLocked()["Person 3 (Bodil Ekdahl)"]; vm != nil {
+		t.Errorf("a window-named speaker is marked as named by voice: %+v", vm)
+	}
+	// The user says speaker 1 is someone else: the profile learns it.
+	d.sess = &session.Session{Segments: []session.Segment{{Speaker: "Person 1 (Ilse Novak)", LiveSpeaker: "Person 7", StartTime: 1, EndTime: 9, Source: "monitor"}}}
+	d.timeline.Through = 1e9
+	if _, ok := d.RenameLocked("Person 1 (Ilse Novak)", "Ilka Varga"); !ok {
+		t.Fatal("rename failed")
+	}
+	if m := d.corrected[0]; m.Name != "Ilse Novak" {
+		t.Errorf("the wrong voice name wasn't recorded: %+v", d.corrected)
+	}
+	if got := d.labelsLocked(1e9); got[0] != "Ilka Varga" {
 		t.Errorf("the user's name should beat the voice's: %q", got[0])
+	}
+	if d.sess.Segments[0].Speaker != "Ilka Varga" || d.sess.Segments[0].VoiceMatch != nil {
+		t.Errorf("renamed line: %+v", d.sess.Segments[0])
 	}
 }
 

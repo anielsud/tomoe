@@ -14,6 +14,25 @@ type Session struct {
 	Sources   []string  `json:"sources"`  // e.g., ["mic", "monitor"]
 	Segments  []Segment `json:"segments"`
 	AudioPath string    `json:"audio_path,omitempty"`
+	// VoiceNames are the speakers voice profiles named in this meeting
+	// (MeetingConfig.VoiceProfiles), for reviewing them.
+	VoiceNames []VoiceName `json:"voice_names,omitempty"`
+}
+
+// VoiceName is a speaker a voice profile named.
+type VoiceName struct {
+	Label      string  `json:"label"` // the speaker's label on its lines
+	Name       string  `json:"name"`
+	Profile    string  `json:"profile"` // profile ID
+	Model      string  `json:"model"`   // speaker model the profile is for
+	Similarity float64 `json:"similarity"`
+}
+
+// VoiceMatch says a line's speaker was named by a voice profile, not by
+// the meeting window or the user.
+type VoiceMatch struct {
+	Profile    string  `json:"profile"`
+	Similarity float64 `json:"similarity"`
 }
 
 // Segment is a single transcribed utterance within a session.
@@ -59,6 +78,8 @@ type Segment struct {
 	// ShownSpeaker is the label the line first showed during the meeting,
 	// for measuring how often live labels change before the final ones.
 	ShownSpeaker string `json:"shown_speaker,omitempty"`
+	// VoiceMatch is set when Speaker's name came from a voice profile.
+	VoiceMatch *VoiceMatch `json:"voice_match,omitempty"`
 }
 
 // LiveLabel is the label the live pass gave seg (see LiveSpeaker).

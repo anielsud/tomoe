@@ -18,6 +18,8 @@ export interface Segment {
   // clustering ran. Diagnostic only -- see DiagnosticsPane; the normal
   // TranscriptPane ignores this field entirely.
   decision?: string;
+  // Set when the speaker's name came from a voice profile.
+  voice_match?: { profile: string; similarity: number };
 }
 
 // One look at the meeting window (backend.LookView).
@@ -226,6 +228,32 @@ export interface VoiceProfile {
   fromNamed: number;
   lastHeard: string;
   clip: VoiceClip;
+  heard: VoiceMeeting[];
+  rejected: number;
+  startedOver: boolean;
+}
+
+export interface VoiceMeeting {
+  session: string;
+  title: string;
+  at: string;
+  source: string;
+  fingerprints: number;
+  agreement: number;
+  clip: VoiceClip;
+}
+
+export interface NamedByVoice {
+  session: string;
+  title: string;
+  at: string;
+  label: string;
+  name: string;
+  model: string;
+  profile: string;
+  similarity: number;
+  seconds: number;
+  clip: VoiceClip;
 }
 
 export interface VoicePair {
@@ -251,4 +279,5 @@ export interface VoicesView {
   profiles: VoiceProfile[];
   pairs: VoicePair[];
   unknown: UnknownVoice[];
+  namedByVoice: NamedByVoice[];
 }

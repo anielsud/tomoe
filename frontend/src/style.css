@@ -1074,3 +1074,42 @@ body {
   flex-wrap: wrap;
   justify-content: flex-end;
 }
+
+.voice-badge {
+  font-size: 0.75em;
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-right: 6px;
+}
+
+.voice-flag {
+  font-size: 0.75em;
+  font-weight: normal;
+  color: #e0b050;
+  border: 1px solid #e0b050;
+  border-radius: 4px;
+  padding: 0 4px;
+  margin-left: 8px;
+}
+
+.voice-odd {
+  color: #e0b050;
+}
+
+.voice-meetings {
+  margin-left: 42px;
+  border-left: 2px solid var(--border);
+  padding-left: 8px;
+}
+
+.link-button {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--speaker-1);
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}

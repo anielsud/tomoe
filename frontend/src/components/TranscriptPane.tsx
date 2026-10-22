@@ -98,6 +98,11 @@ export default function TranscriptPane({ segments, isRecording, onRename }: Prop
               {seg.speaker}:
             </span>
           )}
+          {seg.voice_match && (
+            <span className="voice-badge" title={`Named by voice: ${Math.round(seg.voice_match.similarity * 100)}% like the profile (70% needed), not by the meeting window or you. Click the name to correct it.`}>
+              by voice {Math.round(seg.voice_match.similarity * 100)}%
+            </span>
+          )}
           {seg.language && seg.language !== 'en' && (
             <span className="lang-badge">{seg.language.toUpperCase()}</span>
           )}
