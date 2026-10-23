@@ -1105,6 +1105,22 @@ What a profile did must be checkable, so it can earn trust:
   it is at least 80 px wide (median 120). On the owner's sessions: 1,830
   crops, 13 MB, 94 s of one core; 61 of 91 profiles have one.
 
+## Rediarizing saved meetings (2026-10-23)
+
+`tomoe session rediarize` names saved meetings' speakers as a meeting
+recorded today would be: the saved fingerprints clustered again (room
+split), named from the window's reads, then from voice profiles. Lines
+keep their text and timing; names the user gave stay. A report unless
+`--apply` (each `session.json` backed up).
+
+On the owner's 55 changed meetings (of 84 with fingerprints): speech with
+a person's name 92% → 99% of 23.5 h; 102 minutes gain a name, 62 minutes
+only change spelling (a cut-off tile name completed), 5 minutes lose one,
+10 minutes change person. On the one meeting with a reviewed transcript
+(five people on their own devices), lines with the right name 72.7% →
+75.9%, wrong 26.1% → 23.9% (by line, the transcript aligned by one shift);
+its largest change of person (3.6 minutes) is a correction.
+
 ## Refining speaker cuts (2026-10-22)
 
 Where two people talk back to back with no pause, a line is cut where the
