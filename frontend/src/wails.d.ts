@@ -42,6 +42,8 @@ interface Window {
         RenameSpeaker(sessionId: string, label: string, name: string): Promise<void>;
         Voices(): Promise<any>;
         PlayVoiceClip(clip: any): Promise<string>;
+        StartVoiceClip(clip: any): Promise<number>;
+        StopVoiceClip(): Promise<void>;
         RenameVoice(model: string, id: string, name: string): Promise<void>;
         MergeVoices(model: string, into: string, from: string): Promise<void>;
         KeepVoicesApart(model: string, a: string, b: string): Promise<void>;

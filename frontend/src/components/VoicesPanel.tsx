@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from 'react';
+import { EventsOn } from '../../wailsjs/runtime/runtime';
 import { NamedByVoice, TileRef, UnknownVoice, VoiceClip, VoicePair, VoiceProfile, VoicesView } from '../types';
 
 // A meeting whose voice is less like the profile's other meetings than this
@@ -17,6 +18,8 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
   const [note, setNote] = useState<string | null>(null);
   const [playing, setPlaying] = useState<string | null>(null);
   const audio = useRef<HTMLAudioElement | null>(null);
+  // The clip playing natively (macOS), by the id StartVoiceClip returned.
+  const native = useRef<{ id: number; key: string } | null>(null);
 
   async function load() {
     try {
@@ -29,16 +32,37 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
 
   useEffect(() => {
     load();
-    return () => audio.current?.pause();
+    const off = EventsOn('voices:clip-ended', (id: number) => {
+      const n = native.current;
+      if (n?.id !== id) return;
+      native.current = null;
+      setPlaying(p => (p === n.key ? null : p));
+    });
+    return () => {
+      off();
+      audio.current?.pause();
+      if (native.current) window.go.backend.App.StopVoiceClip();
+    };
   }, []);
 
   async function play(key: string, clip: VoiceClip) {
     audio.current?.pause();
+    if (native.current) {
+      native.current = null;
+      window.go.backend.App.StopVoiceClip();
+    }
     if (playing === key) {
       setPlaying(null);
       return;
     }
     try {
+      // macOS plays the clip natively, on the current output device.
+      const id = await window.go.backend.App.StartVoiceClip(clip);
+      if (id) {
+        native.current = { id, key };
+        setPlaying(key);
+        return;
+      }
       const url = await window.go.backend.App.PlayVoiceClip(clip);
       const a = new Audio(url);
       audio.current = a;

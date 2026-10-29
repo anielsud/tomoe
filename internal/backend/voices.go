@@ -498,17 +498,27 @@ func savedHints(dir string, sess *session.Session) []diarize.Hint {
 // PlayVoiceClip returns a stretch of a meeting's audio (the meeting's
 // side, not the mic) as a WAV data URL to play.
 func (a *App) PlayVoiceClip(clip VoiceClip) (string, error) {
+	wav, err := a.cutVoiceClip(clip)
+	if err != nil {
+		return "", err
+	}
+	return "data:audio/wav;base64," + base64.StdEncoding.EncodeToString(wav), nil
+}
+
+// cutVoiceClip cuts a stretch of a meeting's audio (the meeting's side,
+// not the mic) as a WAV.
+func (a *App) cutVoiceClip(clip VoiceClip) ([]byte, error) {
 	a.fixSignals()
 	if clip.End <= clip.Start {
-		return "", fmt.Errorf("no clip")
+		return nil, fmt.Errorf("no clip")
 	}
 	path := filepath.Join(config.SessionDir(), filepath.Base(clip.Session), "audio.m4a")
 	if _, err := os.Stat(path); err != nil {
-		return "", fmt.Errorf("this meeting's audio isn't saved")
+		return nil, fmt.Errorf("this meeting's audio isn't saved")
 	}
 	ffmpeg, err := toolpath.FFmpeg()
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	dur := min(clip.End-clip.Start, clipSeconds)
 	// A meeting with a mic has three tracks: the mix, the mic, the meeting
@@ -519,10 +529,10 @@ func (a *App) PlayVoiceClip(clip VoiceClip) (string, error) {
 		var out bytes.Buffer
 		cmd.Stdout = &out
 		if cmd.Run() == nil && out.Len() > 44 {
-			return "data:audio/wav;base64," + base64.StdEncoding.EncodeToString(out.Bytes()), nil
+			return out.Bytes(), nil
 		}
 	}
-	return "", fmt.Errorf("couldn't cut the clip")
+	return nil, fmt.Errorf("couldn't cut the clip")
 }
 
 // unforgetVoice lets a name the user just gave be learnt again, if it
