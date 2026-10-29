@@ -334,6 +334,7 @@ func (a *App) RenameSpeaker(id, label, name string) error {
 		return fmt.Errorf("no lines labeled %q", label)
 	}
 	a.correctVoiceName(saved, label, name)
+	dropVoiceDoubt(saved, label)
 	if err := a.store.Save(saved); err != nil {
 		return err
 	}

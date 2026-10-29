@@ -64,8 +64,12 @@ type SessionDiarizer struct {
 	names   map[int]string
 	renames map[int]string
 	// voiceNames are names from voice profiles, for speakers the meeting
-	// window didn't name, or named only by a room's tile.
-	voiceNames map[int]voices.Matched
+	// window didn't name, named only by a room's tile, or named someone
+	// else (voiceWindow has the window's name). voiceDoubts are speakers
+	// the window named whose voice is somewhat like someone else's.
+	voiceNames  map[int]voices.Matched
+	voiceWindow map[int]string
+	voiceDoubts map[int]voices.Matched
 	// corrected are speakers a profile named that the user then named
 	// otherwise: the profile learns they aren't them.
 	corrected map[int]voices.Matched
@@ -293,12 +297,12 @@ func (d *SessionDiarizer) LabelNewLocked(seg *session.Segment) {
 }
 
 // labelsLocked labels the timeline's speakers: the user's rename, else
-// "Person N (Name)" for a speaker hints have named by the time through
-// (or a voice profile has, if hints didn't or named only a room), else
-// "Person N".
+// "Person N (Name)" for a speaker a voice profile names (see callVoices)
+// or hints have named by the time through, else "Person N".
 func (d *SessionDiarizer) labelsLocked(through float64) map[int]string {
 	d.names = nameSpeakers(d.timeline.Turns, d.hints, through)
-	d.voiceNames = d.matchVoicesLocked()
+	call := d.matchVoicesLocked()
+	d.voiceNames, d.voiceWindow, d.voiceDoubts = call.named, call.window, call.doubts
 	out := make(map[int]string, len(d.timeline.Labels))
 	for k := range d.timeline.Labels {
 		out[k] = d.labelFor(k)
@@ -324,7 +328,8 @@ func (d *SessionDiarizer) labelFor(k int) string {
 func (d *SessionDiarizer) speakerNamedLocked(name string) (int, bool) {
 	found, n := -1, 0
 	for k := range d.timeline.Labels {
-		if SameName(d.renames[k], name) || SameName(d.names[k], name) || SameName(d.voiceNames[k].Name, name) {
+		window := d.voiceWindow[k] == "" && SameName(d.names[k], name) // not if the voice overruled it
+		if SameName(d.renames[k], name) || window || SameName(d.voiceNames[k].Name, name) {
 			found = k
 			n++
 		}
@@ -333,28 +338,25 @@ func (d *SessionDiarizer) speakerNamedLocked(name string) (int, bool) {
 }
 
 // matchVoicesLocked names, from the voice profiles, the timeline's
-// speakers that have no name but a room's (a room's tile is lit for
-// everyone in it) and no rename. A name the window or the user gave
-// another speaker is taken.
-func (d *SessionDiarizer) matchVoicesLocked() map[int]voices.Matched {
+// speakers the user didn't rename: over the window's name when the voice
+// clearly disagrees (callVoices). A name the user gave another speaker is
+// taken.
+func (d *SessionDiarizer) matchVoicesLocked() voiceCall {
 	if d.opts.Voices == nil || d.timeline == nil || len(d.timeline.Voices) == 0 {
-		return nil
+		return voiceCall{}
 	}
 	open := map[int]voices.Voice{}
 	for k := range d.timeline.Labels {
-		if d.renames[k] != "" || (d.names[k] != "" && !IsRoomTile(d.names[k])) {
+		if d.renames[k] != "" {
 			continue
 		}
 		if v, ok := d.timeline.Voices[k]; ok {
 			open[k] = v
 		}
 	}
-	if len(open) == 0 {
-		return nil
-	}
-	return d.opts.Voices.Match(open, func(name string) bool {
+	return callVoices(d.opts.Voices, open, d.names, func(name string) bool {
 		for k := range d.timeline.Labels {
-			if SameName(d.renames[k], name) || (!IsRoomTile(d.names[k]) && SameName(d.names[k], name)) {
+			if SameName(d.renames[k], name) {
 				return true
 			}
 		}
@@ -618,10 +620,13 @@ func (d *SessionDiarizer) tileTimeline() (func(t float64) string, float64) {
 
 // learnLocked returns what teaches the voice profiles from this meeting,
 // to run once the lock is released: the voices heard while a person's own
-// tile was lit, then those of the speakers the user named (which win).
+// tile was lit (except speakers the window and the voice disagree on),
+// then those of the speakers the user named (which win). Call after
+// markVoiceNamesLocked.
 func (d *SessionDiarizer) learnLocked() func() {
 	hints := append([]Hint(nil), d.hints...)
 	segs := append([]session.Segment(nil), d.sess.Segments...)
+	unsure := unsureLabels(d.sess)
 	renamed := map[string]bool{}
 	for _, n := range d.renames {
 		renamed[n] = true
@@ -647,7 +652,7 @@ func (d *SessionDiarizer) learnLocked() func() {
 			_ = store.Unforget(n) // the user named someone that: they mean it
 		}
 		p := d.stream.Prepared()
-		learned := VoicesFromTiles(p, hints, offset)
+		learned := voicesFromTilesSkipping(p, hints, offset, unsureAt(segs, unsure))
 		if len(renamed) > 0 {
 			learned = append(learned, VoicesFromSpeakers(p, offset, SpeakerAt(segs, func(label string) string {
 				if renamed[label] {
@@ -676,8 +681,13 @@ func (d *SessionDiarizer) markVoiceNamesLocked() {
 	d.sess.VoiceNames = nil
 	for k, m := range d.voiceNames {
 		if m.Name != "" {
-			d.sess.VoiceNames = append(d.sess.VoiceNames, session.VoiceName{Label: d.labelFor(k), Name: m.Name, Profile: m.Profile, Model: d.stream.cfg.EmbeddingModelID, Similarity: m.Similarity})
+			d.sess.VoiceNames = append(d.sess.VoiceNames, session.VoiceName{Label: d.labelFor(k), Name: m.Name, Profile: m.Profile, Model: d.stream.cfg.EmbeddingModelID, Similarity: m.Similarity, Window: d.voiceWindow[k]})
 		}
 	}
 	sort.Slice(d.sess.VoiceNames, func(i, j int) bool { return d.sess.VoiceNames[i].Label < d.sess.VoiceNames[j].Label })
+	d.sess.VoiceDoubts = nil
+	for k, m := range d.voiceDoubts {
+		d.sess.VoiceDoubts = append(d.sess.VoiceDoubts, session.VoiceDoubt{Label: d.labelFor(k), Window: d.names[k], Name: m.Name, Profile: m.Profile, Model: d.stream.cfg.EmbeddingModelID, Similarity: m.Similarity})
+	}
+	sort.Slice(d.sess.VoiceDoubts, func(i, j int) bool { return d.sess.VoiceDoubts[i].Label < d.sess.VoiceDoubts[j].Label })
 }

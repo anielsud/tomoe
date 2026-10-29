@@ -265,6 +265,19 @@ export interface NamedByVoice {
   similarity: number;
   seconds: number;
   clip: VoiceClip;
+  window?: string;
+}
+
+export interface VoiceDoubt {
+  session: string;
+  title: string;
+  at: string;
+  label: string;
+  window: string;
+  name: string;
+  similarity: number;
+  seconds: number;
+  clip: VoiceClip;
 }
 
 export interface VoicePair {
@@ -291,4 +304,5 @@ export interface VoicesView {
   pairs: VoicePair[];
   unknown: UnknownVoice[];
   namedByVoice: NamedByVoice[];
+  doubts: VoiceDoubt[];
 }

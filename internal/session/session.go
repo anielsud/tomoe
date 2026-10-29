@@ -17,6 +17,9 @@ type Session struct {
 	// VoiceNames are the speakers voice profiles named in this meeting
 	// (MeetingConfig.VoiceProfiles), for reviewing them.
 	VoiceNames []VoiceName `json:"voice_names,omitempty"`
+	// VoiceDoubts are speakers the meeting window named whose voice
+	// sounds a little like someone else, to check.
+	VoiceDoubts []VoiceDoubt `json:"voice_doubts,omitempty"`
 }
 
 // VoiceName is a speaker a voice profile named.
@@ -26,9 +29,25 @@ type VoiceName struct {
 	Profile    string  `json:"profile"` // profile ID
 	Model      string  `json:"model"`   // speaker model the profile is for
 	Similarity float64 `json:"similarity"`
+	// Window is the name the meeting window gave the speaker, when the
+	// voice profile disagreed and was trusted over it.
+	Window string `json:"window,omitempty"`
 	// Skipped: the user couldn't tell from its clip, so it isn't asked
 	// about again. It teaches the profile nothing either way.
 	Skipped bool `json:"skipped,omitempty"`
+}
+
+// VoiceDoubt is a speaker the meeting window named whose voice is
+// somewhat like another person's profile: not enough to overrule the
+// window, enough to ask.
+type VoiceDoubt struct {
+	Label      string  `json:"label"`  // the speaker's label on its lines
+	Window     string  `json:"window"` // the name the window gave
+	Name       string  `json:"name"`   // whom the voice sounds like
+	Profile    string  `json:"profile"`
+	Model      string  `json:"model"`
+	Similarity float64 `json:"similarity"`
+	Skipped    bool    `json:"skipped,omitempty"`
 }
 
 // VoiceMatch says a line's speaker was named by a voice profile, not by

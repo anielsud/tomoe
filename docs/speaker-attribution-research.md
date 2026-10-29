@@ -1121,6 +1121,65 @@ only change spelling (a cut-off tile name completed), 5 minutes lose one,
 75.9%, wrong 26.1% → 23.9% (by line, the transcript aligned by one shift);
 its largest change of person (3.6 minutes) is a correction.
 
+## Voice over the window's highlight (2026-10-29)
+
+Until now a name read from the meeting window always beat a voice
+profile: profiles only named speakers the window hadn't named, or had
+named only a meeting room. On a one-hour all-hands (about 9,800 words; a
+meeting room with eight people, ten remote speakers), checked word by word
+against the Teams transcript, every naming error came from the window.
+None came from voice:
+
+- remote speakers were 98–100% right where they had a tile of their own;
+- 404 words of room speech carried a remote speaker's name (the highlight
+  sat on that person's tile while the room talked); the speaker's voice
+  matched the room presenter's profile at 0.97;
+- two short remote speakers took a nearby speaker's name (348 words): one
+  had no profile yet, and the other's voice was clustered with that
+  speaker's.
+
+Teams itself credits all of a room's speech to the room's tile, so it can
+check remote speakers only.
+
+The window and the voice are now weighed together (`internal/diarize/byvoice.go`):
+
+| Voice | Result |
+|---|---|
+| none, or not enough to name anyone | the window's name |
+| clearly the window's person | the window's name |
+| clearly someone else (the naming bar: ≥ 0.70, 0.10 ahead of the next profile, a profile in use) | the voice's name, with the window's kept (`VoiceName.Window`) and listed on the Voices page |
+| more like someone else than like the window's person's own profile, ≥ 0.5 | the window's name, listed to check (`VoiceDoubt`) |
+
+Speech the window and voice disagree on teaches no profile from the
+window's tiles until the user says who it is. This keeps a lingering
+highlight from teaching a remote person a room voice, and keeps someone
+on another person's laptop from teaching that person's profile.
+
+A name the user gave another speaker doesn't stop a voice overruling the
+window, since one person's speech is often split between two speakers. It
+still stops an unnamed speaker taking that name.
+
+Only flag a doubt when the window's person has a profile in use. Without
+one, someone else's profile is always the likest: the first version
+raised four doubts on the all-hands, all of them about speakers named
+correctly, at 0.54–0.69.
+
+Rediarizing the all-hands with the voice profiles as they were before it
+(minus what it taught):
+
+| | remote words wrong | room words under a remote name |
+|---|---|---|
+| as recorded / old rule | 359 | 404 |
+| new rule | 362 | 4 |
+| new rule, with today's profiles | 191 | 4 |
+
+The extra three are within one line's noise. With today's profiles (which
+learnt from this meeting, so this is optimistic) one short remote speaker
+is also fixed. The other stays wrong: their voice is clustered with
+someone else's, which naming can't undo. Four earlier meetings with Teams
+references (five to six people on their own devices, 2.3 h) are
+unchanged: nothing in them disagreed.
+
 ## Refining speaker cuts (2026-10-22)
 
 Where two people talk back to back with no pause, a line is cut where the

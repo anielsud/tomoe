@@ -11,8 +11,8 @@ import (
 
 // Rediarizing a saved meeting names its speakers as a meeting recorded
 // today would be: the saved fingerprints clustered again (splitting a
-// meeting room's voices when that's on), named from the meeting window's
-// reads, then from voice profiles. Lines keep their text and timing (they
+// meeting room's voices when that's on), named from voice profiles and the
+// meeting window's reads (see callVoices). Lines keep their text and timing (they
 // aren't split again); names the user gave stay.
 
 // RediarizeOptions are how a saved meeting is rediarized.
@@ -36,6 +36,7 @@ type RediarizeResult struct {
 	NamedBefore, NamedAfter, Speech float64
 	Changes                         []RediarizeChange // by name, most speech first
 	VoiceNamed                      int               // speakers named from profiles
+	VoiceOverWindow                 int               // of those, ones the window named someone else
 }
 
 // Rediarize relabels a saved session's lines (sess, in dir) from its
@@ -63,29 +64,24 @@ func Rediarize(dir string, sess *session.Session, hints []Hint, o RediarizeOptio
 	}
 	names := NameSpeakers(DefaultNameParams(), turns, hints, math.Inf(1))
 
-	// Names already someone's in this meeting: the window's, and the user's.
+	// Names already someone's in this meeting: the user's.
 	given := map[string]bool{}
 	for _, s := range sess.Segments {
 		if n := GivenName(s.Speaker); n != "" {
 			given[n] = true
 		}
 	}
-	var matched map[int]voices.Matched
+	var call voiceCall
 	if o.Voices != nil {
 		vs := map[int]voices.Voice{}
 		for i, c := range cl {
-			if c >= 0 && (names[c] == "" || IsRoomTile(names[c])) {
+			if c >= 0 {
 				v := vs[c]
 				v.Add(p.Embeddings[i])
 				vs[c] = v
 			}
 		}
-		matched = o.Voices.Match(vs, func(name string) bool {
-			for _, n := range names {
-				if !IsRoomTile(n) && SameName(n, name) {
-					return true
-				}
-			}
+		call = callVoices(o.Voices, vs, names, func(name string) bool {
 			for n := range given {
 				if SameName(n, name) {
 					return true
@@ -94,6 +90,7 @@ func Rediarize(dir string, sess *session.Session, hints []Hint, o RediarizeOptio
 			return false
 		})
 	}
+	matched := call.named
 	labels := map[int]string{}
 	for _, t := range turns {
 		k := t.Speaker
@@ -113,9 +110,17 @@ func Rediarize(dir string, sess *session.Session, hints []Hint, o RediarizeOptio
 			continue
 		}
 		byLabel[labels[k]] = &session.VoiceMatch{Profile: m.Profile, Similarity: m.Similarity}
-		sess.VoiceNames = append(sess.VoiceNames, session.VoiceName{Label: labels[k], Name: m.Name, Profile: m.Profile, Model: info.Model, Similarity: m.Similarity})
+		sess.VoiceNames = append(sess.VoiceNames, session.VoiceName{Label: labels[k], Name: m.Name, Profile: m.Profile, Model: info.Model, Similarity: m.Similarity, Window: call.window[k]})
 		res.VoiceNamed++
+		if call.window[k] != "" {
+			res.VoiceOverWindow++
+		}
 	}
+	sess.VoiceDoubts = nil
+	for k, m := range call.doubts {
+		sess.VoiceDoubts = append(sess.VoiceDoubts, session.VoiceDoubt{Label: labels[k], Window: names[k], Name: m.Name, Profile: m.Profile, Model: info.Model, Similarity: m.Similarity})
+	}
+	sort.Slice(sess.VoiceDoubts, func(i, j int) bool { return sess.VoiceDoubts[i].Label < sess.VoiceDoubts[j].Label })
 	sort.Slice(sess.VoiceNames, func(i, j int) bool { return sess.VoiceNames[i].Label < sess.VoiceNames[j].Label })
 
 	assigned, labs := session.DiarizationLabels(sess.Segments, turns, labels)

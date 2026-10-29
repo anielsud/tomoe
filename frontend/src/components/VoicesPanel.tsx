@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { EventsOn } from '../../wailsjs/runtime/runtime';
-import { NamedByVoice, TileRef, UnknownVoice, VoiceClip, VoicePair, VoiceProfile, VoicesView } from '../types';
+import { NamedByVoice, TileRef, VoiceDoubt, UnknownVoice, VoiceClip, VoicePair, VoiceProfile, VoicesView } from '../types';
 
 // A meeting whose voice is less like the profile's other meetings than this
 // is flagged: across saved meetings, 95% of one person's meetings agree at
@@ -154,6 +154,26 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
           </section>
         )}
 
+        {view && view.doubts.length > 0 && (
+          <section className="tool-group">
+            <div className="tool-group-header"><h3>Window or voice?</h3></div>
+            <p className="tool-needed">The meeting window named these speakers, but their voice sounds a little like someone else. Until you say, they keep the window's name and teach no profile.</p>
+            {view.doubts.map(d => {
+              const key = `d/${d.session}/${d.label}`;
+              return (
+                <DoubtRow
+                  key={key}
+                  d={d}
+                  busy={busy === key}
+                  play={<PlayButton id={key} clip={d.clip} />}
+                  onName={name => act(key, () => window.go.backend.App.RenameSpeaker(d.session, d.label, name), `Named them ${name} in "${d.title}".`)}
+                  onSkip={() => act(key, () => window.go.backend.App.SkipVoiceDoubt(d.session, d.label), `Won't ask about that one again; it keeps the window's name.`)}
+                />
+              );
+            })}
+          </section>
+        )}
+
         {view && view.unknown.length > 0 && (
           <section className="tool-group">
             <div className="tool-group-header"><h3>Who's this?</h3></div>
@@ -292,7 +312,10 @@ function NamedRow({ n, play, busy, onRight, onNotThem, onName, onSkip }: {
       {play}
       <div className="tool-body">
         <div className="tool-name">{n.name} <span className="voice-meta">as {n.label.replace(/ \(.*\)$/, '')} in {n.title} · {when(n.at)} · spoke {minutes(n.seconds)}</span></div>
-        <div className="tool-detail">{Math.round(n.similarity * 100)}% like {n.name}'s profile (70% needed)</div>
+        <div className="tool-detail">
+          {Math.round(n.similarity * 100)}% like {n.name}'s profile (70% needed)
+          {n.window && <> · the meeting window said {n.window}, but the voice is clearly {n.name}'s</>}
+        </div>
       </div>
       {naming ? (
         <form className="voice-name" onSubmit={e => { e.preventDefault(); if (name.trim()) onName(name.trim()); }}>
@@ -307,6 +330,37 @@ function NamedRow({ n, play, busy, onRight, onNotThem, onName, onSkip }: {
           <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setNaming(true)}>It's someone else…</button>
           <button className="btn btn-secondary btn-sm" disabled={busy} onClick={onSkip}
             title="The clip is noise, crosstalk or too short: stop asking, and teach the profile nothing">Can't tell</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function DoubtRow({ d, play, busy, onName, onSkip }: {
+  d: VoiceDoubt; play: JSX.Element; busy: boolean; onName: (name: string) => void; onSkip: () => void;
+}) {
+  const [naming, setNaming] = useState(false);
+  const [name, setName] = useState('');
+  return (
+    <div className="tool-row voice-row">
+      {play}
+      <div className="tool-body">
+        <div className="tool-name">{d.window}? <span className="voice-meta">as {d.label.replace(/ \(.*\)$/, '')} in {d.title} · {when(d.at)} · spoke {minutes(d.seconds)}</span></div>
+        <div className="tool-detail">The meeting window said {d.window}; the voice sounds a little like {d.name} ({Math.round(d.similarity * 100)}% alike)</div>
+      </div>
+      {naming ? (
+        <form className="voice-name" onSubmit={e => { e.preventDefault(); if (name.trim()) onName(name.trim()); }}>
+          <input className="setting-input" value={name} autoFocus placeholder="Who is it?" onChange={e => setName(e.target.value)} disabled={busy} />
+          <button className="btn btn-primary btn-sm" type="submit" disabled={busy || !name.trim()}>Name</button>
+          <button className="btn btn-secondary btn-sm" type="button" onClick={() => setNaming(false)}>Cancel</button>
+        </form>
+      ) : (
+        <div className="voice-actions">
+          <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => onName(d.window)}>It's {d.window}</button>
+          <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => onName(d.name)}>It's {d.name}</button>
+          <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setNaming(true)}>Someone else…</button>
+          <button className="btn btn-secondary btn-sm" disabled={busy} onClick={onSkip}
+            title="The clip can't settle it: keep the window's name, stop asking, and teach no profile">Can't tell</button>
         </div>
       )}
     </div>

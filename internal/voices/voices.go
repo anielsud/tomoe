@@ -457,6 +457,47 @@ func (s *Store) Match(voices map[int]Voice, taken func(name string) bool) map[in
 	return out
 }
 
+// Likest is, for each voice (by key), the profile in use it's most like
+// and how alike, whether or not that's enough for Match to name it.
+// Voices with too few fingerprints, and profiles the user rejected the
+// voice for, are left out as in Match.
+func (s *Store) Likest(voices map[int]Voice) map[int]Matched {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncLocked()
+	out := map[int]Matched{}
+	for key, v := range voices {
+		if v.N < s.params.MinFingerprints {
+			continue
+		}
+		c := v.Centroid()
+		var best *Profile
+		bestSim := -2.0
+		for _, p := range s.profiles {
+			if !s.inUseLocked(p) {
+				continue
+			}
+			sim := Similarity(c, p.centroid)
+			if !rejectedLike(c, p, sim) && sim > bestSim {
+				best, bestSim = p, sim
+			}
+		}
+		if best != nil {
+			out[key] = Matched{best.Name, best.ID, bestSim}
+		}
+	}
+	return out
+}
+
+// Knows reports whether a profile in use (see InUse) has the name.
+func (s *Store) Knows(name string) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.syncLocked()
+	p := s.findLocked(name)
+	return p != nil && s.inUseLocked(p)
+}
+
 // InUse reports whether a profile names voices: enough fingerprints, and
 // heard in MinMeetings meetings or confirmed by the user.
 func (s *Store) InUse(p *Profile) bool {

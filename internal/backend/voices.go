@@ -96,6 +96,23 @@ type NamedByVoiceView struct {
 	Similarity float64   `json:"similarity"`
 	Seconds    float64   `json:"seconds"`
 	Clip       VoiceClip `json:"clip"`
+	// Window is the name the meeting window gave the speaker, when the
+	// voice disagreed and was trusted over it.
+	Window string `json:"window,omitempty"`
+}
+
+// VoiceDoubtView is a speaker the meeting window named whose voice sounds
+// a little like someone else: which is it?
+type VoiceDoubtView struct {
+	Session    string    `json:"session"`
+	Title      string    `json:"title"`
+	At         time.Time `json:"at"`
+	Label      string    `json:"label"`
+	Window     string    `json:"window"`
+	Name       string    `json:"name"`
+	Similarity float64   `json:"similarity"`
+	Seconds    float64   `json:"seconds"`
+	Clip       VoiceClip `json:"clip"`
 }
 
 // VoicePairView is two profiles that sound alike: one person?
@@ -127,6 +144,8 @@ type VoicesView struct {
 	Unknown  []UnknownVoice     `json:"unknown"`
 	// NamedByVoice are recent speakers the profiles named, to check.
 	NamedByVoice []NamedByVoiceView `json:"namedByVoice"`
+	// Doubts are recent speakers the window and the voice disagree on.
+	Doubts []VoiceDoubtView `json:"doubts"`
 }
 
 const (
@@ -187,7 +206,7 @@ func (a *App) config() config.Config {
 // voices from recent meetings.
 func (a *App) Voices() (*VoicesView, error) {
 	a.fixSignals()
-	view := &VoicesView{Enabled: a.config().Meeting.VoiceProfiles, Profiles: []VoiceProfileView{}, Pairs: []VoicePairView{}, Unknown: []UnknownVoice{}, NamedByVoice: []NamedByVoiceView{}}
+	view := &VoicesView{Enabled: a.config().Meeting.VoiceProfiles, Profiles: []VoiceProfileView{}, Pairs: []VoicePairView{}, Unknown: []UnknownVoice{}, NamedByVoice: []NamedByVoiceView{}, Doubts: []VoiceDoubtView{}}
 	titles := a.sessionTitles()
 	stores, err := a.voiceStores()
 	if err != nil {
@@ -243,7 +262,7 @@ func (a *App) Voices() (*VoicesView, error) {
 	}
 	sort.SliceStable(view.Profiles, func(i, j int) bool { return view.Profiles[i].LastHeard.After(view.Profiles[j].LastHeard) })
 	sort.SliceStable(view.Pairs, func(i, j int) bool { return view.Pairs[i].Similarity > view.Pairs[j].Similarity })
-	view.Unknown, view.NamedByVoice = a.recentVoices(stores)
+	view.Unknown, view.NamedByVoice, view.Doubts = a.recentVoices(stores)
 	return view, nil
 }
 
@@ -261,11 +280,11 @@ func (a *App) sessionTitles() map[string]string {
 // recentVoices are, from recent saved meetings: the speakers with no name
 // who spoke for a while, each with the profile it's closest to if that's
 // close enough to suggest; and the speakers profiles named.
-func (a *App) recentVoices(stores map[string]*voices.Store) ([]UnknownVoice, []NamedByVoiceView) {
-	named := []NamedByVoiceView{}
+func (a *App) recentVoices(stores map[string]*voices.Store) ([]UnknownVoice, []NamedByVoiceView, []VoiceDoubtView) {
+	named, doubts := []NamedByVoiceView{}, []VoiceDoubtView{}
 	list, err := a.store.List()
 	if err != nil {
-		return nil, named
+		return nil, named, doubts
 	}
 	since := time.Now().AddDate(0, 0, -unknownDays)
 	out := []UnknownVoice{}
@@ -286,9 +305,14 @@ func (a *App) recentVoices(stores map[string]*voices.Store) ([]UnknownVoice, []N
 		for _, vn := range full.VoiceNames {
 			byVoice[vn.Label] = vn
 		}
+		byDoubt := map[string]session.VoiceDoubt{}
+		for _, vd := range full.VoiceDoubts {
+			byDoubt[vd.Label] = vd
+		}
 		for _, seg := range full.Segments {
 			_, voiceNamed := byVoice[seg.Speaker]
-			if !isUnnamed(seg.Speaker) && !voiceNamed {
+			_, doubted := byDoubt[seg.Speaker]
+			if !isUnnamed(seg.Speaker) && !voiceNamed && !doubted {
 				continue
 			}
 			sp := by[seg.Speaker]
@@ -305,12 +329,20 @@ func (a *App) recentVoices(stores map[string]*voices.Store) ([]UnknownVoice, []N
 		var cands []UnknownVoice
 		for label, sp := range by {
 			start := sp.longest.StartTime
+			clip := VoiceClip{sess.ID, start, min(sp.longest.EndTime, start+clipSeconds)}
 			if vn, ok := byVoice[label]; ok {
 				if vn.Skipped || sp.seconds < namedSeconds {
 					continue
 				}
 				named = append(named, NamedByVoiceView{Session: sess.ID, Title: full.Title, At: full.CreatedAt, Label: label, Name: vn.Name, Model: vn.Model, Profile: vn.Profile,
-					Similarity: vn.Similarity, Seconds: sp.seconds, Clip: VoiceClip{sess.ID, start, min(sp.longest.EndTime, start+clipSeconds)}})
+					Similarity: vn.Similarity, Seconds: sp.seconds, Clip: clip, Window: vn.Window})
+				continue
+			}
+			if vd, ok := byDoubt[label]; ok {
+				if !vd.Skipped && sp.seconds >= namedSeconds {
+					doubts = append(doubts, VoiceDoubtView{Session: sess.ID, Title: full.Title, At: full.CreatedAt, Label: label, Window: vd.Window, Name: vd.Name,
+						Similarity: vd.Similarity, Seconds: sp.seconds, Clip: clip})
+				}
 				continue
 			}
 			if sp.seconds < unknownSeconds {
@@ -339,7 +371,13 @@ func (a *App) recentVoices(stores map[string]*voices.Store) ([]UnknownVoice, []N
 		}
 		return named[i].Seconds > named[j].Seconds
 	})
-	return out, named
+	sort.SliceStable(doubts, func(i, j int) bool {
+		if !doubts[i].At.Equal(doubts[j].At) {
+			return doubts[i].At.After(doubts[j].At)
+		}
+		return doubts[i].Seconds > doubts[j].Seconds
+	})
+	return out, named, doubts
 }
 
 // suggest fills in the profile each nameless voice sounds most like, from
@@ -573,6 +611,17 @@ func (a *App) correctVoiceName(sess *session.Session, label, name string) {
 	sess.VoiceNames = kept
 }
 
+// dropVoiceDoubt forgets the doubt about a speaker the user just named.
+func dropVoiceDoubt(sess *session.Session, label string) {
+	kept := sess.VoiceDoubts[:0]
+	for _, vd := range sess.VoiceDoubts {
+		if vd.Label != label {
+			kept = append(kept, vd)
+		}
+	}
+	sess.VoiceDoubts = kept
+}
+
 // rejectVoice records that the voice labeled label in sess isn't vn's
 // profile's person. Call before relabeling the lines.
 func (a *App) rejectVoice(sess *session.Session, vn session.VoiceName, label string) error {
@@ -630,6 +679,9 @@ func (a *App) NotThem(sessionID, label string) error {
 	if anon == "" {
 		anon = label
 	}
+	if vn.Window != "" {
+		anon += " (" + vn.Window + ")" // the voice overruled the window: back to the window's name
+	}
 	for i := range sess.Segments {
 		if seg := &sess.Segments[i]; seg.Speaker == label {
 			seg.Speaker, seg.VoiceMatch = anon, nil
@@ -667,6 +719,24 @@ func (a *App) SkipVoiceName(sessionID, label string) error {
 		}
 	}
 	return fmt.Errorf("%q wasn't named by voice", label)
+}
+
+// SkipVoiceDoubt stops asking about a speaker the window and the voice
+// disagree on, when its clip can't settle it. The lines keep the
+// window's name and teach no profile.
+func (a *App) SkipVoiceDoubt(sessionID, label string) error {
+	a.fixSignals()
+	sess, err := a.store.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	for i := range sess.VoiceDoubts {
+		if sess.VoiceDoubts[i].Label == label {
+			sess.VoiceDoubts[i].Skipped = true
+			return a.store.Save(sess)
+		}
+	}
+	return fmt.Errorf("no doubt about %q", label)
 }
 
 // RemoveVoiceMeeting takes a meeting out of a profile: what it taught is

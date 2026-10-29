@@ -77,8 +77,8 @@ var sessionRediarizeCmd = &cobra.Command{
 				continue
 			}
 			touched++
-			fmt.Printf("%s %s %-36.36s named %3.0f%% -> %3.0f%%  (%d by voice)\n", sess.CreatedAt.Local().Format("2006-01-02 15:04"), id[:8], sess.Title,
-				share(res.NamedBefore, res.Speech), share(res.NamedAfter, res.Speech), res.VoiceNamed)
+			fmt.Printf("%s %s %-36.36s named %3.0f%% -> %3.0f%%  (%d by voice, %d over the window; %d to check)\n", sess.CreatedAt.Local().Format("2006-01-02 15:04"), id[:8], sess.Title,
+				share(res.NamedBefore, res.Speech), share(res.NamedAfter, res.Speech), res.VoiceNamed, res.VoiceOverWindow, len(sess.VoiceDoubts))
 			sort.SliceStable(res.Changes, func(i, j int) bool { return res.Changes[i].Seconds > res.Changes[j].Seconds })
 			for i, c := range res.Changes {
 				if i == 6 {

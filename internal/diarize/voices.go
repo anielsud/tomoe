@@ -26,9 +26,18 @@ const learnShare = 0.8
 // tile is lit for everyone in it). offset converts the fingerprints' time
 // to session time (StreamInfo.Offset).
 func VoicesFromTiles(p *Prepared, hints []Hint, offset float64) []voices.Learned {
+	return voicesFromTilesSkipping(p, hints, offset, nil)
+}
+
+// voicesFromTilesSkipping is VoicesFromTiles, leaving out session times
+// skip says are unsure (nil: none).
+func voicesFromTilesSkipping(p *Prepared, hints []Hint, offset float64, skip func(t float64) bool) []voices.Learned {
 	at := TileTimeline(hints, hintLag)
 	display := tileDisplayNames(hints)
 	return voicesBy(p, offset, func(t float64) string {
+		if skip != nil && skip(t) {
+			return ""
+		}
 		k := at(t)
 		if k == "" || IsRoomTile(k) || !learnableName(display[k]) {
 			return ""
@@ -249,8 +258,9 @@ func modelBySettings(threshold float64) string {
 }
 
 // LearnSaved teaches the voice profiles from a saved session: the voices
-// heard while a person's own tile was lit, and the speakers given a name
-// (GivenName). hints are the session's name reads.
+// heard while a person's own tile was lit (except speakers the window and
+// the voice disagree on), and the speakers given a name (GivenName).
+// hints are the session's name reads.
 func LearnSaved(m config.MeetingConfig, dir string, sess *session.Session, hints []Hint) ([]string, error) {
 	p, info, err := LoadSaved(dir)
 	if err != nil {
@@ -263,7 +273,7 @@ func LearnSaved(m config.MeetingConfig, dir string, sess *session.Session, hints
 	if err != nil {
 		return nil, err
 	}
-	learned := VoicesFromTiles(p, hints, info.Offset)
+	learned := voicesFromTilesSkipping(p, hints, info.Offset, unsureAt(sess.Segments, unsureLabels(sess)))
 	learned = append(learned, VoicesFromSpeakers(p, info.Offset, SpeakerAt(sess.Segments, GivenName))...)
 	return store.Learn(sess.ID, sess.CreatedAt, learned)
 }

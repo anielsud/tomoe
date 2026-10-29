@@ -51,6 +51,7 @@ interface Window {
         LearnVoicesFromSavedSessions(): Promise<number>;
         NotThem(sessionId: string, label: string): Promise<void>;
         SkipVoiceName(sessionId: string, label: string): Promise<void>;
+        SkipVoiceDoubt(sessionId: string, label: string): Promise<void>;
         RemoveVoiceMeeting(model: string, id: string, sessionId: string): Promise<void>;
         StartVoiceOver(model: string, id: string): Promise<void>;
         ConfirmVoice(model: string, id: string): Promise<void>;
