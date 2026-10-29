@@ -134,6 +134,9 @@ const (
 	// from meetings this recent, speaking this long.
 	unknownDays    = 14
 	unknownSeconds = 30
+	// namedSeconds is the least speech a voice-named speaker needs to be
+	// asked about: shorter clips are too short to judge.
+	namedSeconds = 3
 	// suggestAbove is how alike a nameless voice and a profile must be to
 	// suggest it ("sounds like"): below the naming bar, as the user
 	// decides.
@@ -303,6 +306,9 @@ func (a *App) recentVoices(stores map[string]*voices.Store) ([]UnknownVoice, []N
 		for label, sp := range by {
 			start := sp.longest.StartTime
 			if vn, ok := byVoice[label]; ok {
+				if vn.Skipped || sp.seconds < namedSeconds {
+					continue
+				}
 				named = append(named, NamedByVoiceView{Session: sess.ID, Title: full.Title, At: full.CreatedAt, Label: label, Name: vn.Name, Model: vn.Model, Profile: vn.Profile,
 					Similarity: vn.Similarity, Seconds: sp.seconds, Clip: VoiceClip{sess.ID, start, min(sp.longest.EndTime, start+clipSeconds)}})
 				continue
@@ -637,6 +643,30 @@ func (a *App) NotThem(sessionID, label string) error {
 	}
 	sess.VoiceNames = kept
 	return a.store.Save(sess)
+}
+
+// SkipVoiceName stops asking about a speaker a profile named in a saved
+// meeting when its clip can't be judged (too short, noise, crosstalk).
+// The profile learns nothing and the lines keep their name.
+func (a *App) SkipVoiceName(sessionID, label string) error {
+	a.fixSignals()
+	a.mu.Lock()
+	recording := a.currentSess != nil && a.currentSess.ID == sessionID
+	a.mu.Unlock()
+	if recording {
+		return fmt.Errorf("this meeting is still recording")
+	}
+	sess, err := a.store.Load(sessionID)
+	if err != nil {
+		return err
+	}
+	for i := range sess.VoiceNames {
+		if sess.VoiceNames[i].Label == label {
+			sess.VoiceNames[i].Skipped = true
+			return a.store.Save(sess)
+		}
+	}
+	return fmt.Errorf("%q wasn't named by voice", label)
 }
 
 // RemoveVoiceMeeting takes a meeting out of a profile: what it taught is

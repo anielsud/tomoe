@@ -26,6 +26,9 @@ type VoiceName struct {
 	Profile    string  `json:"profile"` // profile ID
 	Model      string  `json:"model"`   // speaker model the profile is for
 	Similarity float64 `json:"similarity"`
+	// Skipped: the user couldn't tell from its clip, so it isn't asked
+	// about again. It teaches the profile nothing either way.
+	Skipped bool `json:"skipped,omitempty"`
 }
 
 // VoiceMatch says a line's speaker was named by a voice profile, not by

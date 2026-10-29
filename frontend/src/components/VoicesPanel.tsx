@@ -131,7 +131,7 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
             <div className="tool-group-header"><h3>Named by voice</h3></div>
             <p className="tool-needed">
               {view.namedByVoice.length > 0
-                ? "Speakers in the last two weeks that a profile named, not the meeting window or you. Play them and say if they're right: either answer teaches the profile."
+                ? "Speakers in the last two weeks that a profile named, not the meeting window or you. Play them and say if they're right: either answer teaches the profile. If the clip is too poor to tell, say so and it's dropped."
                 : view.enabled
                   ? 'None yet. Meetings recorded from now on list here any speaker a profile named, to check.'
                   : 'Voice profiles are off, so meetings name nobody by voice.'}
@@ -147,6 +147,7 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
                   onRight={() => act(key, () => window.go.backend.App.RenameSpeaker(n.session, n.label, n.name), `Confirmed ${n.name} in "${n.title}".`)}
                   onNotThem={() => act(key, () => window.go.backend.App.NotThem(n.session, n.label), `${n.name}'s profile won't name that voice again.`)}
                   onName={name => act(key, () => window.go.backend.App.RenameSpeaker(n.session, n.label, name), `Named them ${name}; ${n.name}'s profile won't name that voice again.`)}
+                  onSkip={() => act(key, () => window.go.backend.App.SkipVoiceName(n.session, n.label), `Won't ask about that one again; ${n.name}'s profile learnt nothing from it.`)}
                 />
               );
             })}
@@ -281,8 +282,8 @@ function PairRow({ pair, a, b, busy, playA, playB, onSame, onApart }: {
   );
 }
 
-function NamedRow({ n, play, busy, onRight, onNotThem, onName }: {
-  n: NamedByVoice; play: JSX.Element; busy: boolean; onRight: () => void; onNotThem: () => void; onName: (name: string) => void;
+function NamedRow({ n, play, busy, onRight, onNotThem, onName, onSkip }: {
+  n: NamedByVoice; play: JSX.Element; busy: boolean; onRight: () => void; onNotThem: () => void; onName: (name: string) => void; onSkip: () => void;
 }) {
   const [naming, setNaming] = useState(false);
   const [name, setName] = useState('');
@@ -304,6 +305,8 @@ function NamedRow({ n, play, busy, onRight, onNotThem, onName }: {
           <button className="btn btn-secondary btn-sm" disabled={busy} onClick={onRight}>Right</button>
           <button className="btn btn-secondary btn-sm" disabled={busy} onClick={onNotThem}>Not them</button>
           <button className="btn btn-secondary btn-sm" disabled={busy} onClick={() => setNaming(true)}>It's someone else…</button>
+          <button className="btn btn-secondary btn-sm" disabled={busy} onClick={onSkip}
+            title="The clip is noise, crosstalk or too short: stop asking, and teach the profile nothing">Can't tell</button>
         </div>
       )}
     </div>
