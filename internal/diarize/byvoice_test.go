@@ -52,8 +52,10 @@ func TestCallVoicesOverTheWindow(t *testing.T) {
 		2: voiceToward(10, 0, 0.6, 0, 0.8), // somewhat like Wayde (0.6); the window says Ines
 		3: voiceToward(10, 0, 0, 0, 1),     // like nobody; the window says Ines
 		4: voiceAlong(2, 10),               // Bodil's voice; the window named only the room
+		5: voiceToward(10, 0, 0.6, 0, 0.8), // somewhat like Wayde; the window says Ulla, who has no profile
+		6: voiceAlong(2, 10),               // Bodil's voice; the window says Ulla, who has no profile
 	}
-	names := map[int]string{0: "Ilse Novak", 1: "Ilse Novak", 2: "Ines Moro", 3: "Ines Moro", 4: "Room - Oslo 4", 5: "Ulla Berg"}
+	names := map[int]string{0: "Ilse Novak", 1: "Ilse Novak", 2: "Ines Moro", 3: "Ines Moro", 4: "Room - Oslo 4", 5: "Ulla Berg", 6: "Ulla Berg"}
 	call := callVoices(store, vs, names, nil)
 
 	if _, ok := call.named[0]; ok {
@@ -72,7 +74,13 @@ func TestCallVoicesOverTheWindow(t *testing.T) {
 		t.Errorf("a voice likest its own profile isn't a doubt: %+v", call.doubts[3])
 	}
 	if _, ok := call.doubts[5]; ok {
-		t.Errorf("without a profile of the window's person there's nothing to doubt: %+v", call.doubts[5])
+		t.Errorf("without a profile of the window's person a weak voice is nothing to doubt: %+v", call.doubts[5])
+	}
+	if _, ok := call.named[6]; ok {
+		t.Errorf("a voice shouldn't overrule the window's person when they have no profile to be unlike: %+v", call.named[6])
+	}
+	if d := call.doubts[6]; d.Name != "Bodil Ekdahl" {
+		t.Errorf("a clear voice against a window's person with no profile should be a doubt: %+v", call.doubts)
 	}
 	if m := call.named[4]; m.Name != "Bodil Ekdahl" {
 		t.Errorf("a room's name should give way to the voice's: %+v", m)

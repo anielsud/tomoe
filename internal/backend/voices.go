@@ -113,6 +113,9 @@ type VoiceDoubtView struct {
 	Similarity float64   `json:"similarity"`
 	Seconds    float64   `json:"seconds"`
 	Clip       VoiceClip `json:"clip"`
+	// NoProfile is set when the window's person has no voice profile in
+	// use, so the voice couldn't be checked against theirs.
+	NoProfile bool `json:"noProfile"`
 }
 
 // VoicePairView is two profiles that sound alike: one person?
@@ -340,8 +343,9 @@ func (a *App) recentVoices(stores map[string]*voices.Store) ([]UnknownVoice, []N
 			}
 			if vd, ok := byDoubt[label]; ok {
 				if !vd.Skipped && sp.seconds >= namedSeconds {
+					s := stores[vd.Model]
 					doubts = append(doubts, VoiceDoubtView{Session: sess.ID, Title: full.Title, At: full.CreatedAt, Label: label, Window: vd.Window, Name: vd.Name,
-						Similarity: vd.Similarity, Seconds: sp.seconds, Clip: clip})
+						Similarity: vd.Similarity, Seconds: sp.seconds, Clip: clip, NoProfile: s == nil || !s.Knows(vd.Window)})
 				}
 				continue
 			}

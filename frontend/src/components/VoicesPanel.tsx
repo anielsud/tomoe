@@ -218,14 +218,15 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
 
         {view && (
           <section className="tool-group">
-            <div className="tool-group-header"><h3>People ({view.profiles.length})</h3></div>
+            <div className="tool-group-header"><h3>People ({view.profiles.filter(p => !p.startedOver).length})</h3></div>
             {view.profiles.length === 0 && (
               <p className="tool-needed">
                 No profiles yet. They're learnt from meetings where a person's own tile was lit, and from speakers you name.
                 Learn from saved meetings to start with the people you've already met.
               </p>
             )}
-            {view.profiles.map(p => (
+            {(() => {
+              const row = (p: VoiceProfile) => (
               <ProfileRow
                 key={`${p.model}/${p.id}`}
                 p={p}
@@ -240,10 +241,31 @@ export default function VoicesPanel({ onSettings }: { onSettings: () => void }) 
                 playClip={(key, clip) => <PlayButton id={key} clip={clip} />}
                 onForget={() => act(`r/${p.id}`, () => window.go.backend.App.ForgetVoice(p.model, p.id), `Forgot ${p.name}.`)}
               />
-            ))}
+              );
+              const waiting = view.profiles.filter(p => p.startedOver);
+              return <>
+                {view.profiles.filter(p => !p.startedOver).map(row)}
+                {waiting.length > 0 && <WaitingProfiles count={waiting.length}>{waiting.map(row)}</WaitingProfiles>}
+              </>;
+            })()}
           </section>
         )}
       </div>
+    </div>
+  );
+}
+
+// WaitingProfiles folds away profiles with nothing learnt (started over, or
+// their meetings taken out): nothing to do, they learn from new meetings.
+function WaitingProfiles({ count, children }: { count: number; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="voice-waiting">
+      <div className="tool-detail">
+        {count} {count === 1 ? 'person' : 'people'} waiting for a new meeting: nothing learnt yet, nothing to do{' · '}
+        <button className="link-button" onClick={() => setOpen(!open)}>{open ? 'Hide' : 'Show'}</button>
+      </div>
+      {open && children}
     </div>
   );
 }
@@ -346,7 +368,10 @@ function DoubtRow({ d, play, busy, onName, onSkip }: {
       {play}
       <div className="tool-body">
         <div className="tool-name">{d.window}? <span className="voice-meta">as {d.label.replace(/ \(.*\)$/, '')} in {d.title} · {when(d.at)} · spoke {minutes(d.seconds)}</span></div>
-        <div className="tool-detail">The meeting window said {d.window}; the voice sounds a little like {d.name} ({Math.round(d.similarity * 100)}% alike)</div>
+        <div className="tool-detail">
+          The meeting window said {d.window}; the voice sounds {d.similarity >= 0.7 ? '' : 'a little '}like {d.name} ({Math.round(d.similarity * 100)}% alike)
+          {d.noProfile && <>, but {d.window} has no voice profile yet to compare</>}
+        </div>
       </div>
       {naming ? (
         <form className="voice-name" onSubmit={e => { e.preventDefault(); if (name.trim()) onName(name.trim()); }}>
@@ -416,7 +441,7 @@ function ProfileRow({ p, play, busy, names, onRename, onForget, onConfirm, onSta
           )}
           <div className="tool-detail">
             {p.startedOver
-              ? 'Started over: learns from new meetings'
+              ? 'Nothing learnt yet: learns from new meetings'
               : <>{p.meetings} {p.meetings === 1 ? 'meeting' : 'meetings'} ({from}) · last heard {when(p.lastHeard)}</>}
             {p.rejected > 0 && <> · {p.rejected} {p.rejected === 1 ? 'voice' : 'voices'} you said aren't them</>}
             {p.heard.length > 0 && (

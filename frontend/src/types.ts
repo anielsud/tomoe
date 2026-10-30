@@ -278,6 +278,7 @@ export interface VoiceDoubt {
   similarity: number;
   seconds: number;
   clip: VoiceClip;
+  noProfile: boolean;
 }
 
 export interface VoicePair {

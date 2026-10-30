@@ -14,14 +14,16 @@ const doubtAbove = 0.5
 // voiceCall is what the voice profiles say about a meeting's speakers.
 type voiceCall struct {
 	// named are the speakers a profile names: ones the window didn't name
-	// (or named only a room), and ones it named someone else.
+	// (or named only a room), and ones it named someone else whose own
+	// profile the voice is clearly unlike.
 	named map[int]voices.Matched
 	// window is, for a named speaker the window had named someone else,
 	// the window's name.
 	window map[int]string
 	// doubts are speakers the window named whose voice is more like
 	// someone else's profile than their own, though not enough to name
-	// them.
+	// them, or is clearly someone else's when the window's person has no
+	// profile to compare.
 	doubts map[int]voices.Matched
 }
 
@@ -29,7 +31,9 @@ type voiceCall struct {
 // the meeting window's names (names, by key) when they clearly disagree:
 // the window's highlight can sit on the wrong tile, and a person can join
 // from someone else's laptop. Speakers the window named are settled
-// first (a profile that agrees leaves the window's name); then the ones it
+// first (a profile that agrees leaves the window's name; one that
+// disagrees overrules it only when the window's person has a profile of
+// their own, and otherwise asks); then the ones it
 // didn't name (or named only a room) may take a name nobody else has.
 // taken says a name is already someone else's for sure (the user's); it
 // doesn't stop a voice overruling the window, as one person's speech is
@@ -51,14 +55,22 @@ func callVoices(store *voices.Store, vs map[int]voices.Voice, names map[int]stri
 		}
 	}
 	for k, m := range store.Match(byWindow, nil) {
-		if !SameName(names[k], m.Name) {
+		switch {
+		case SameName(names[k], m.Name):
+		case store.Knows(names[k]):
 			call.named[k], call.window[k] = m, names[k]
+		default:
+			// The window's person has no profile to be unlike: someone with
+			// no voice yet can sound like someone else's, so ask.
+			call.doubts[k] = m
 		}
 	}
 	for k, m := range store.Likest(byWindow) {
 		// Only against a profile of the window's person: without one,
 		// someone else's is always likest.
-		if _, ok := call.named[k]; ok || SameName(names[k], m.Name) || m.Similarity < doubtAbove || !store.Knows(names[k]) {
+		_, named := call.named[k]
+		_, doubted := call.doubts[k]
+		if named || doubted || SameName(names[k], m.Name) || m.Similarity < doubtAbove || !store.Knows(names[k]) {
 			continue
 		}
 		call.doubts[k] = m
