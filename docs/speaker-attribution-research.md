@@ -1147,7 +1147,8 @@ The window and the voice are now weighed together (`internal/diarize/byvoice.go`
 |---|---|
 | none, or not enough to name anyone | the window's name |
 | clearly the window's person | the window's name |
-| clearly someone else (the naming bar: ≥ 0.70, 0.10 ahead of the next profile, a profile in use) | the voice's name, with the window's kept (`VoiceName.Window`) and listed on the Voices page |
+| clearly someone else (the naming bar: ≥ 0.70, 0.10 ahead of the next profile, a profile in use), and the window's person has a profile in use | the voice's name, with the window's kept (`VoiceName.Window`) and listed on the Voices page |
+| clearly someone else, but the window's person has no profile in use | the window's name, listed to check (`VoiceDoubt`) |
 | more like someone else than like the window's person's own profile, ≥ 0.5 | the window's name, listed to check (`VoiceDoubt`) |
 
 Speech the window and voice disagree on teaches no profile from the
@@ -1179,6 +1180,19 @@ is also fixed. The other stays wrong: their voice is clustered with
 someone else's, which naming can't undo. Four earlier meetings with Teams
 references (five to six people on their own devices, 2.3 h) are
 unchanged: nothing in them disagreed.
+
+Applied to two weeks of saved meetings, the first version renamed one
+presenter's speech (3 min, on their own device, the window right) to
+two other people at 0.93 and 0.80. Bluedot's transcript and the user's
+ear both had the presenter. Their profile had nothing in use: its one
+meeting had been taken out. So nothing was checking the voice against
+the window's person, and their voice landed near two unrelated
+profiles. Those profiles were clean: each of their meetings agreed with
+the rest at 0.81–0.93, and their samples were the right people. A clear
+voice now overrules the window only when the window's person has a
+profile in use (and the voice wasn't theirs). Otherwise it's a doubt
+for the user to settle. Someone joining from another person's laptop
+is still caught, because the laptop owner has a profile.
 
 ## Refining speaker cuts (2026-10-22)
 
