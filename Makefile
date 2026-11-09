@@ -1,4 +1,4 @@
-.PHONY: dev-deps dev-tools stage-frontend fmt lint vet test test-integration test-coverage build build-gui build-cuda package install dev-cert-mac install-gui-mac install-gpu clean download-model dev-gui
+.PHONY: dev-deps dev-tools stage-frontend fmt lint vet test test-integration test-coverage build build-gui build-cuda package install dev-cert-mac install-gui-mac install-relaunch-mac uninstall-relaunch-mac install-gpu clean download-model dev-gui
 
 BINARY      := tomoe
 GUI_BINARY  := tomoe-gui
@@ -200,6 +200,24 @@ endif
 	ditto $(APP_BUNDLE) "$(APPLICATIONS_DIR)/$(APP_NAME).app"
 	@echo "Installed $(APPLICATIONS_DIR)/$(APP_NAME).app (version $(VERSION)), signed with '$(CODESIGN_IDENTITY)'."
 	@echo "First install with this identity still needs Screen Recording/Microphone/Accessibility granted once in System Settings > Privacy & Security -- after that, rebuilds should keep working without re-granting."
+
+RELAUNCH_DIR   := $(HOME)/Library/Application Support/Tomoe
+RELAUNCH_PLIST := $(HOME)/Library/LaunchAgents/ai.sosuke.tomoe-gui.relaunch.plist
+
+install-relaunch-mac: ## Reopen Tomoe within a minute if it crashes (not when quit); needs a build that logs its clean quits (macOS only)
+ifneq ($(UNAME),Darwin)
+	$(error install-relaunch-mac is macOS-only)
+endif
+	mkdir -p "$(RELAUNCH_DIR)" "$(HOME)/Library/LaunchAgents"
+	install -m 755 packaging/macos/tomoe-relaunch.sh "$(RELAUNCH_DIR)/tomoe-relaunch.sh"
+	sed 's|__SCRIPT__|$(RELAUNCH_DIR)/tomoe-relaunch.sh|' packaging/macos/relaunch.plist.template > "$(RELAUNCH_PLIST)"
+	-launchctl bootout gui/$$(id -u) "$(RELAUNCH_PLIST)" 2>/dev/null
+	launchctl bootstrap gui/$$(id -u) "$(RELAUNCH_PLIST)"
+	@echo "Installed the relaunch agent: Tomoe reopens within a minute if it dies without quitting."
+
+uninstall-relaunch-mac: ## Remove the relaunch agent (macOS only)
+	-launchctl bootout gui/$$(id -u) "$(RELAUNCH_PLIST)" 2>/dev/null
+	rm -f "$(RELAUNCH_PLIST)" "$(RELAUNCH_DIR)/tomoe-relaunch.sh"
 
 install-gpu: ## Install CUDA toolkit + sherpa-onnx GPU libraries for NVIDIA acceleration
 	@echo "=== Step 1: Installing CUDA 12 toolkit + cuDNN 9 ==="
