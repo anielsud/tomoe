@@ -20,6 +20,12 @@ const maxLogBytes = 20 << 20
 // descriptors themselves are redirected, so native code's output and the
 // Go runtime's fatal errors land there too. A log over 20 MB is kept as
 // tomoe-gui.log.1 and a new one started.
+//
+// The descriptors point at a pipe whose reader stamps each line with the
+// time, so the log says when a meeting was detected or a save started. A
+// crash report goes to the file directly (SetCrashOutput), so it doesn't
+// depend on the reader outliving the crash. Without a pipe, output goes to
+// the file unstamped, as before.
 func setupLogFile() {
 	home, err := os.UserHomeDir()
 	if err != nil {
@@ -37,8 +43,14 @@ func setupLogFile() {
 	if err != nil {
 		return
 	}
-	_ = syscall.Dup2(int(f.Fd()), 1)
-	_ = syscall.Dup2(int(f.Fd()), 2)
+	out := int(f.Fd())
+	if pr, pw, err := os.Pipe(); err == nil {
+		go stampLines(pr, f, time.Now)
+		out = int(pw.Fd())
+		defer pw.Close() // descriptors 1 and 2 keep the pipe open
+	}
+	_ = syscall.Dup2(out, 1)
+	_ = syscall.Dup2(out, 2)
 	_ = debug.SetCrashOutput(f, debug.CrashOptions{})
 	fmt.Printf("\n===== Tomoe started %s (pid %d) =====\n", time.Now().Format(time.RFC3339), os.Getpid())
 }

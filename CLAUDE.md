@@ -165,7 +165,7 @@ make install-gpu      # Install CUDA toolkit + sherpa-onnx GPU libraries
 Config: `~/.config/tomoe/config.toml`
 Models: `~/.local/share/tomoe/models/`
 Sessions: `~/.local/share/tomoe/sessions/` (each: `session.json`, `audio.m4a`; with diarizing during the meeting `diarization.gob`/`.json`; on macOS `looks.jsonl` + `looks/` thumbnails)
-macOS app log: `~/Library/Logs/Tomoe/tomoe-gui.log` (stdout/stderr and crash traces; check here first after a crash)
+macOS app log: `~/Library/Logs/Tomoe/tomoe-gui.log` (stdout/stderr, each line timestamped, and crash traces; check here first after a crash)
 
 ### Default Hotkeys
 
