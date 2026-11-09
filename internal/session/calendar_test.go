@@ -64,3 +64,34 @@ func TestCalendarSubjectLimits(t *testing.T) {
 		}
 	}
 }
+
+// A recording with no calendar event shows the name the companion app
+// gave it; a calendar subject, when there is one, wins.
+func TestGivenTitleFallback(t *testing.T) {
+	base := t.TempDir()
+	s := &Store{baseDir: base}
+	dir := filepath.Join(base, "s1")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := s.CalendarSubject("s1"); got != "" {
+		t.Fatalf("no files: %q", got)
+	}
+	write("title.json", `{"writer":"someone-else","title":"Not trusted"}`)
+	if got := s.CalendarSubject("s1"); got != "" {
+		t.Errorf("other writer: %q", got)
+	}
+	write("title.json", `{"writer":"musubi","title":"Plan hand-off with Kai","source":"generated"}`)
+	if got := s.CalendarSubject("s1"); got != "Plan hand-off with Kai" {
+		t.Errorf("given title: %q", got)
+	}
+	write("calendar.json", `{"writer":"musubi","subject":"Weekly planning"}`)
+	if got := s.CalendarSubject("s1"); got != "Weekly planning" {
+		t.Errorf("calendar wins: %q", got)
+	}
+}
