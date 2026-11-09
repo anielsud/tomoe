@@ -20,6 +20,10 @@ type Session struct {
 	// VoiceDoubts are speakers the meeting window named whose voice
 	// sounds a little like someone else, to check.
 	VoiceDoubts []VoiceDoubt `json:"voice_doubts,omitempty"`
+	// TitleSet means the user named the session: its title is kept over
+	// any name Tomoe finds for it (the meeting window's, a calendar
+	// event's).
+	TitleSet bool `json:"title_set,omitempty"`
 }
 
 // VoiceName is a speaker a voice profile named.
