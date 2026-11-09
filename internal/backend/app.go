@@ -715,14 +715,9 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		sources = append(sources, "monitor")
 	}
 
-	title := fmt.Sprintf("Session %s", time.Now().Format("2006-01-02 15:04"))
-	if platform != "" {
-		title = fmt.Sprintf("%s Meeting %s", platform, time.Now().Format("2006-01-02 15:04"))
-	}
-
 	a.currentSess = &session.Session{
 		ID:        uuid.New().String(),
-		Title:     title,
+		Title:     defaultTitle(platform, time.Now()),
 		Platform:  platform,
 		Language:  lang,
 		CreatedAt: time.Now(),
@@ -877,6 +872,8 @@ func (a *App) persistSession(req *saveRequest) {
 		}
 	}
 
+	a.titleFromWindow(sess)
+
 	// Persist before diarization so the session survives a diarize crash.
 	if err := a.store.Save(sess); err != nil {
 		fmt.Printf("Error saving session: %v\n", err)
@@ -919,7 +916,11 @@ func (a *App) GetSessionList() ([]*session.Session, error) {
 	if a.store == nil {
 		return nil, nil
 	}
-	return a.store.List()
+	sessions, err := a.store.List()
+	for _, sess := range sessions {
+		a.showCalendarTitle(sess)
+	}
+	return sessions, err
 }
 
 // LoadSession returns a stored session by ID.
@@ -928,7 +929,12 @@ func (a *App) LoadSession(id string) (*session.Session, error) {
 	if a.store == nil {
 		return nil, fmt.Errorf("session store not initialized")
 	}
-	return a.store.Load(id)
+	sess, err := a.store.Load(id)
+	if err != nil {
+		return nil, err
+	}
+	a.showCalendarTitle(sess)
+	return sess, nil
 }
 
 // ExportSession exports a session in the specified format and returns the content.
@@ -938,6 +944,7 @@ func (a *App) ExportSession(id, format string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	a.showCalendarTitle(sess)
 
 	var buf []byte
 	w := &bytesWriter{buf: &buf}
@@ -970,8 +977,14 @@ func (a *App) UpdateSession(id, title, platform string) error {
 	if err != nil {
 		return err
 	}
-	if title != "" {
+	// The title shown may be the calendar event's (see showCalendarTitle);
+	// sent back unchanged (only the platform was edited), it isn't a
+	// rename.
+	shown := *sess
+	a.showCalendarTitle(&shown)
+	if title != "" && title != shown.Title {
 		sess.Title = title
+		sess.TitleSet = true
 	}
 	if platform != "" {
 		sess.Platform = platform
