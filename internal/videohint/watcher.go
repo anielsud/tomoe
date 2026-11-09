@@ -115,6 +115,7 @@ type Watcher struct {
 	tiles       []tileName
 	thumbID     int                  // the last look that has its own thumbnail
 	tileAt      map[string]time.Time // when each name's tile was last kept
+	portraits   map[string]portraitState
 	thumbAt     time.Time
 	thumbSig    []uint8 // the picture last kept of the watched window
 	shots       map[int]*shotState
@@ -271,6 +272,7 @@ func (w *Watcher) look(learning bool) {
 		began := time.Now()
 		w.keepThumb(&l, fr)
 		w.keepTile(&l, fr)
+		w.keepPortrait(&l, fr)
 		l.Cost.Encode = msSince(began)
 	}
 	w.last = &l
@@ -650,6 +652,63 @@ const (
 	tileWidth = 192
 )
 
+// Portraits: at most portraitMax per name per session, each at most
+// portraitWidth wide, and a new one only when the tile is portraitGrow
+// times the area of the largest kept so far. The small tile above is
+// enough to recognise a voice's owner; a people page wants a face, and a
+// gallery tile's 192-pixel copy is too small for one.
+const (
+	portraitMax   = 3
+	portraitWidth = 640
+	portraitGrow  = 1.25
+)
+
+type portraitState struct {
+	kept, area int
+}
+
+// keepPortrait keeps a larger crop of the named speaker's tile when it is
+// bigger than any kept for that name yet (see portraitMax).
+func (w *Watcher) keepPortrait(l *Look, fr *frame) {
+	if !l.Usable || l.Name == "" || l.tileRect.Empty() {
+		return
+	}
+	if w.portraits == nil {
+		w.portraits = map[string]portraitState{}
+	}
+	st := w.portraits[l.Name]
+	area := l.tileRect.Dx() * l.tileRect.Dy()
+	if st.kept >= portraitMax || st.kept > 0 && float64(area) < portraitGrow*float64(st.area) {
+		return
+	}
+	crop, r, ok := tileCrop(l.tileRect, fr)
+	if !ok {
+		return
+	}
+	jpg, err := encodeJPEG(crop, r.Dx(), r.Dy(), portraitWidth, 85)
+	if err != nil {
+		return
+	}
+	l.Portrait, l.HasPortrait = jpg, true
+	w.portraits[l.Name] = portraitState{kept: st.kept + 1, area: area}
+}
+
+// tileCrop copies the speaker's tile, with a thin margin, out of the frame.
+func tileCrop(rect image.Rectangle, fr *frame) ([]byte, image.Rectangle, bool) {
+	r := rect
+	pad := max(4, min(r.Dx(), r.Dy())/20)
+	r = image.Rect(r.Min.X-pad, r.Min.Y-pad, r.Max.X+pad, r.Max.Y+pad).Intersect(image.Rect(0, 0, fr.width, fr.height))
+	if r.Dx() < 8 || r.Dy() < 8 {
+		return nil, r, false
+	}
+	crop := make([]byte, 0, r.Dx()*r.Dy()*3)
+	for y := r.Min.Y; y < r.Max.Y; y++ {
+		i := (y*fr.width + r.Min.X) * 3
+		crop = append(crop, fr.pix[i:i+r.Dx()*3]...)
+	}
+	return crop, r, true
+}
+
 // keepTile keeps a crop of the speaker's tile when a look names one and
 // that name's tile wasn't kept in the last tileEvery. Teams' ring outlines
 // the whole tile, name included, so the margin is thin: a wider one takes
@@ -664,16 +723,9 @@ func (w *Watcher) keepTile(l *Look, fr *frame) {
 	if at, ok := w.tileAt[l.Name]; ok && l.Time.Sub(at) < tileEvery {
 		return
 	}
-	r := l.tileRect
-	pad := max(4, min(r.Dx(), r.Dy())/20)
-	r = image.Rect(r.Min.X-pad, r.Min.Y-pad, r.Max.X+pad, r.Max.Y+pad).Intersect(image.Rect(0, 0, fr.width, fr.height))
-	if r.Dx() < 8 || r.Dy() < 8 {
+	crop, r, ok := tileCrop(l.tileRect, fr)
+	if !ok {
 		return
-	}
-	crop := make([]byte, 0, r.Dx()*r.Dy()*3)
-	for y := r.Min.Y; y < r.Max.Y; y++ {
-		i := (y*fr.width + r.Min.X) * 3
-		crop = append(crop, fr.pix[i:i+r.Dx()*3]...)
 	}
 	jpg, err := encodeJPEG(crop, r.Dx(), r.Dy(), tileWidth, 80)
 	if err != nil {

@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"image"
 	"image/jpeg"
+	"os"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -73,5 +75,58 @@ func TestBackfillTiles(t *testing.T) {
 	}
 	if n, _ := BackfillTiles(dir); n != 0 {
 		t.Errorf("a second run kept %d more", n)
+	}
+}
+
+// Portraits: a name's first tile is kept large; a later one only when the
+// tile is clearly bigger; at most portraitMax a session; wider than the
+// small tile, up to portraitWidth.
+func TestKeepPortrait(t *testing.T) {
+	const w, h = 2000, 1200
+	fr := &frame{width: w, height: h, pix: make([]byte, w*h*3)}
+	w0 := &Watcher{}
+	look := func(r image.Rectangle) Look {
+		return Look{Time: time.Now(), Name: "Ilse Novak", Usable: true, tileRect: r}
+	}
+	small := look(image.Rect(100, 100, 400, 270)) // a gallery tile
+	w0.keepPortrait(&small, fr)
+	if !small.HasPortrait {
+		t.Fatal("first tile not kept")
+	}
+	if img, err := jpeg.Decode(bytes.NewReader(small.Portrait)); err != nil || img.Bounds().Dx() <= tileWidth {
+		t.Errorf("portrait not larger than the small tile: %v %v", img.Bounds(), err)
+	}
+	same := look(image.Rect(120, 100, 420, 270))
+	w0.keepPortrait(&same, fr)
+	if same.HasPortrait {
+		t.Error("a tile no bigger was kept again")
+	}
+	big := look(image.Rect(0, 0, 1600, 900)) // the speaker view
+	w0.keepPortrait(&big, fr)
+	if !big.HasPortrait {
+		t.Fatal("a much bigger tile wasn't kept")
+	}
+	if img, _ := jpeg.Decode(bytes.NewReader(big.Portrait)); img.Bounds().Dx() != portraitWidth {
+		t.Errorf("portrait %v, want %d wide", img.Bounds(), portraitWidth)
+	}
+	bigger := look(image.Rect(0, 0, 1990, 1190))
+	w0.keepPortrait(&bigger, fr)
+	biggest := look(image.Rect(0, 0, 2000, 1200))
+	biggest.Name = "Ilse Novak"
+	w0.portraits["Ilse Novak"] = portraitState{kept: portraitMax, area: 1}
+	w0.keepPortrait(&biggest, fr)
+	if biggest.HasPortrait {
+		t.Error("more than portraitMax kept")
+	}
+}
+
+// The look log writes the portrait next to the look's other files.
+func TestLookLogWritesPortrait(t *testing.T) {
+	dir := t.TempDir()
+	if err := NewLookLog(dir).Write(Look{ID: 7, Name: "Ilse Novak", Portrait: []byte("jpeg"), HasPortrait: true}); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "looks", "7-portrait.jpg")); err != nil || string(b) != "jpeg" {
+		t.Errorf("portrait file: %q %v", b, err)
 	}
 }
