@@ -15,6 +15,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/sigfix"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/voices"
 )
 
 const (
@@ -693,7 +694,7 @@ func (c *Coordinator) assignSpeaker(source SourceType, samples []float32, startT
 
 // probePrefixes records Config.ProbePrefixes labels for an utterance.
 func (c *Coordinator) probePrefixes(source SourceType, samples []float32, startTime float64) {
-	if len(c.cfg.ProbePrefixes) == 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
+	if source == SourceMic || len(c.cfg.ProbePrefixes) == 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
 		return
 	}
 	var labels []ProbeLabel
@@ -712,7 +713,7 @@ func (c *Coordinator) probePrefixes(source SourceType, samples []float32, startT
 // probeWindows records Config.WindowSize labels for an utterance.
 func (c *Coordinator) probeWindows(source SourceType, samples []float32, startTime float64) {
 	size, step := c.cfg.WindowSize, c.cfg.WindowStep
-	if size <= 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
+	if source == SourceMic || size <= 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
 		return
 	}
 	if step <= 0 {
@@ -750,6 +751,7 @@ func sampleDuration(samples []float32) time.Duration {
 // utterance is complete.
 func (c *Coordinator) provisionalSpeaker(source SourceType, samples []float32) string {
 	if source == SourceMic {
+		// Settled once the utterance is complete (micLabel).
 		return "You"
 	}
 	if c.cfg.SkipMonitorDiarization {
@@ -766,7 +768,17 @@ func (c *Coordinator) provisionalSpeaker(source SourceType, samples []float32) s
 // can be computed on the pipeline goroutine (the Embedder is not safe for
 // concurrent use) while the label is decided later by refineWorker.
 func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []float32 {
-	if source == SourceMic || c.cfg.SkipMonitorDiarization || c.cfg.Embedder == nil || c.cfg.Tracker == nil {
+	if source == SourceMic {
+		if !c.micVoices() || sampleDuration(samples) < micMinOther {
+			return nil
+		}
+		emb, err := c.cfg.MicEmbedder.Extract(samples)
+		if err != nil {
+			return nil
+		}
+		return emb
+	}
+	if c.cfg.SkipMonitorDiarization || c.cfg.Embedder == nil || c.cfg.Tracker == nil {
 		return nil
 	}
 	embedBegan := time.Now()
@@ -787,7 +799,7 @@ func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []f
 // computed from (see minAssignDuration's doc comment in internal/speaker).
 func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, duration time.Duration) (string, speaker.AssignDecision) {
 	if source == SourceMic {
-		return "You", ""
+		return c.micLabel(embedding, duration)
 	}
 
 	if c.cfg.SkipMonitorDiarization {
@@ -828,6 +840,43 @@ func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, durat
 	}
 
 	return "Other", ""
+}
+
+// micMinOther is the shortest mic utterance that can be someone else's:
+// a short one's fingerprint is unreliable, and the mic is mostly the
+// user. micSurelyOwner is the similarity above which (for an utterance of
+// at least micLearnFrom) a fingerprint is added to the user's voice.
+const (
+	micMinOther    = 1500 * time.Millisecond
+	micLearnFrom   = 2 * time.Second
+	micSurelyOwner = 0.6
+)
+
+func (c *Coordinator) micVoices() bool {
+	return c.cfg.MicEmbedder != nil && len(c.cfg.OwnerVoice) > 0 && c.cfg.MicOtherBelow > 0
+}
+
+// micLabel labels a mic utterance: "You" unless it's long enough to tell
+// and its voice is unlike the user's (config mic_other_below), then a
+// speaker clustered with the monitor's (no video hint is sought: the
+// person is in the room, not on screen).
+func (c *Coordinator) micLabel(embedding []float32, duration time.Duration) (string, speaker.AssignDecision) {
+	if len(embedding) == 0 || !c.micVoices() {
+		return "You", ""
+	}
+	norm := voices.Normalized(embedding)
+	sim := voices.Similarity(c.cfg.OwnerVoice, norm)
+	if sim >= c.cfg.MicOtherBelow || duration < micMinOther {
+		if sim >= micSurelyOwner && duration >= micLearnFrom && c.cfg.HeardOwner != nil {
+			c.cfg.HeardOwner(norm)
+		}
+		return "You", ""
+	}
+	if c.cfg.Tracker == nil {
+		return "Other", ""
+	}
+	label, _ := c.cfg.Tracker.Assign(embedding, duration)
+	return label, c.cfg.Tracker.LastDecision()
 }
 
 // hasSignal reports whether a window holds anything above about -80

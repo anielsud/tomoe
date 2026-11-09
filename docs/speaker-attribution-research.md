@@ -1372,3 +1372,34 @@ taskpolicy -b tomoe eval meeting.mp4 --ref meeting.reviewed.txt --no-cache --ski
 
 The reference format is a Teams transcript export (`Name   0:12` header
 lines followed by the text). Turns that overlap share a start time.
+
+## The user's voice on their own microphone (2026-11-09)
+
+Everything on the mic was labelled "You", which is wrong in an in-person
+meeting (the laptop hears the whole room) and when someone sits beside
+the user. `meeting.mic_voices` keeps a saved voice for the user
+(`voices/<model>-you.json`), seeded from their mic track in recent
+meetings and topped up from utterances that are surely theirs, and labels
+a mic utterance as someone else when its fingerprint is less like that
+voice than `meeting.mic_other_below`.
+
+Measured with eres2net-en on the last 14 meetings with a separate mic
+track: a voice from up to 12 mic utterances of 2.5 s or more from each of
+9 meetings (96 fingerprints), tested on the other 5 meetings' mic
+utterances (56) and on other speakers' utterances from the call side
+(168), all L2-normalized:
+
+| | min | p05 | p25 | p50 | p75 | p95 | max |
+|---|---|---|---|---|---|---|---|
+| user, held out | 0.41 | 0.57 | 0.86 | 0.89 | 0.91 | 0.92 | 0.93 |
+| others | -0.11 | -0.04 | 0.04 | 0.10 | 0.22 | 0.31 | 0.41 |
+
+`mic_other_below` is 0.35: above the others' 95th percentile and below
+the user's 5th, leaning to "You" (the asked-for high bar). Utterances
+under 1.5 s stay "You" (their fingerprints are unreliable), and only
+utterances of 2 s or more scoring 0.6 or above teach the voice.
+
+Not measured yet: someone in the same room through the same mic will
+sound more like the user than a call participant does (same room and
+microphone), so the others' scores above are likely optimistic. To check
+on the first in-person recording.

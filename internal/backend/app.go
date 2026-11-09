@@ -262,6 +262,17 @@ func (a *App) setupEngines(ctx context.Context, cfg *config.Config, status *mode
 
 	detector := startDetector(ctx, cfg)
 
+	// Learn the user's voice from their past meetings' mic tracks, once.
+	if cfg.Meeting.MicVoices {
+		seeded := map[string]bool{}
+		for _, lang := range cfg.MeetingLanguages() {
+			if m, path, _ := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, lang); status.SpeakerModelReady(m) && !seeded[m.ID] {
+				seeded[m.ID] = true
+				go ownerSeed(m.ID, path)
+			}
+		}
+	}
+
 	a.mu.Lock()
 	a.bundle = bundle
 	a.tracker = tracker
@@ -294,6 +305,10 @@ type engineBundle struct {
 	// embedders holds the speaker models meetings use, one per model
 	// (see models.ResolveSpeakerModel); nil if none is downloaded.
 	embedders *speaker.EmbedderSet
+	// micEmbedders are the same models again for the mic pipeline
+	// (config mic_voices): it runs alongside the monitor's, and an
+	// Embedder isn't safe for concurrent use.
+	micEmbedders *speaker.EmbedderSet
 }
 
 // buildEngines builds an engineBundle for cfg. Anything whose models
@@ -346,11 +361,15 @@ func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
 
 	// Load the speaker model each meeting language uses, if downloaded.
 	set := speaker.NewEmbedderSet()
+	micSet := speaker.NewEmbedderSet()
 	loaded := false
 	for _, lang := range cfg.MeetingLanguages() {
 		if m, path, _ := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, lang); status.SpeakerModelReady(m) {
 			if _, err := set.Get(path); err == nil {
 				loaded = true
+				if cfg.Meeting.MicVoices {
+					_, _ = micSet.Get(path)
+				}
 			} else {
 				fmt.Printf("Warning: failed to load speaker embedding model: %v\n", err)
 			}
@@ -358,6 +377,9 @@ func buildEngines(cfg *config.Config, status *models.Status) engineBundle {
 	}
 	if loaded {
 		b.embedders = set
+		if micSet.Len() > 0 {
+			b.micEmbedders = micSet
+		}
 	}
 	return b
 }
@@ -373,6 +395,9 @@ func (b engineBundle) close() {
 	}
 	if b.embedders != nil {
 		b.embedders.Close()
+	}
+	if b.micEmbedders != nil {
+		b.micEmbedders.Close()
 	}
 }
 
@@ -620,6 +645,18 @@ func (a *App) StartSession(micDevice, monitorDevice, lang, platform string) erro
 		VADPath:            status.VADPath,
 		SegmentBufferSize:  64,
 	}
+	// The user's voice on their own mic (config mic_voices): only once
+	// their voice is known; until then the mic is "You", as before.
+	if a.cfg.Meeting.MicVoices && micDevice != "" && bundle.micEmbedders != nil {
+		m, _, _ := status.SpeakerModelFor(a.cfg.Meeting.SpeakerModel, lang)
+		owner := ownerFor(m.ID)
+		if c := owner.centroid(); c != nil {
+			if e := meetingEmbedder(a.cfg, status, bundle.micEmbedders, lang); e != nil {
+				cfg.MicEmbedder, cfg.OwnerVoice, cfg.MicOtherBelow, cfg.HeardOwner = e, c, a.cfg.Meeting.MicOtherBelow, owner.heard
+			}
+		}
+	}
+
 	// Realtime pass is English-only (see internal/transcribe's
 	// StreamingEngine); other languages keep today's single-pass path.
 	if lang == "en" {

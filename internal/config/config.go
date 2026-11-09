@@ -99,6 +99,17 @@ type MeetingConfig struct {
 	// the user's typical level on their own microphone (background
 	// sounds, people further away). 0 turns it off.
 	MicLevelMarginDB float64 `toml:"mic_level_margin_db"`
+	// MicVoices tells the user's voice from others' on their own
+	// microphone (someone beside them, or everyone in an in-person
+	// meeting): an utterance unlike the user's saved voice is labeled as
+	// another speaker. false labels everything on the mic "You", the
+	// earlier behaviour.
+	MicVoices bool `toml:"mic_voices"`
+	// MicOtherBelow is the cosine similarity to the user's voice below
+	// which a mic utterance is someone else's. On 14 meetings (2026-11-09)
+	// the user's own utterances scored 0.57 or more in 95 of 100 (lowest
+	// 0.41) and other people's 0.31 or less in 95 of 100 (highest 0.41).
+	MicOtherBelow float64 `toml:"mic_other_below"`
 	// TurnMode transcribes a speaker's turn at once instead of each
 	// pause-separated utterance: lines keep growing across pauses until
 	// the other side speaks, the diarizer or meeting window signals a
@@ -352,6 +363,8 @@ func DefaultConfig() *Config {
 			MinSilenceDuration:      0.5,
 			MinSpeechLevelDB:        -50,
 			MicLevelMarginDB:        20,
+			MicVoices:               true,
+			MicOtherBelow:           0.35,
 			TurnMode:                true,
 			TurnMaxSeconds:          30,
 			TurnMaxGap:              2,

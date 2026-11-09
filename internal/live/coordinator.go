@@ -33,6 +33,19 @@ type Config struct {
 	Embedder *speaker.Embedder
 	// Tracker is the speaker clustering tracker (optional, nil to skip speaker ID for monitor).
 	Tracker *speaker.Tracker
+	// MicEmbedder, OwnerVoice and MicOtherBelow tell the user's voice from
+	// others' on the microphone (config mic_voices): an utterance whose
+	// fingerprint is less like OwnerVoice (the user's, L2-normalized) than
+	// MicOtherBelow is clustered with Tracker as another speaker. Any of
+	// them unset labels the mic "You", as before. MicEmbedder is the mic
+	// pipeline's own (an Embedder isn't safe for concurrent use).
+	MicEmbedder   *speaker.Embedder
+	OwnerVoice    []float32
+	MicOtherBelow float64
+	// HeardOwner, if set, is given fingerprints that are surely the
+	// user's, so their saved voice keeps up with them. Called from one
+	// goroutine at a time.
+	HeardOwner func(emb []float32)
 	// VADPath is the path to the Silero VAD model file.
 	VADPath string
 	// SegmentBufferSize is the channel buffer for output segments.
