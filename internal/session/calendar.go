@@ -24,11 +24,22 @@ const (
 )
 
 // calendarFile is the part of calendar.json Tomoe uses. The file also
-// carries the event's times, join link, organizer and invitees.
+// carries the event's times and join link.
 type calendarFile struct {
-	Writer  string `json:"writer"`
-	Subject string `json:"subject"`
+	Writer    string           `json:"writer"`
+	Subject   string           `json:"subject"`
+	Organizer calendarPerson   `json:"organizer"`
+	Invitees  []calendarPerson `json:"invitees"`
 }
+
+// calendarPerson is the event's organizer or an invitee.
+type calendarPerson struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// maxCalendarPeople bounds how many invitees are read.
+const maxCalendarPeople = 2000
 
 // CalendarSubject is the subject of the calendar event the session with
 // this id was matched to (its folder's calendar.json, written by the
@@ -41,19 +52,55 @@ func (s *Store) CalendarSubject(id string) string {
 	return readCalendarSubject(filepath.Join(s.baseDir, id))
 }
 
-// readCalendarSubject reads calendar.json in dir; see CalendarSubject.
-func readCalendarSubject(dir string) string {
+// readCalendar reads calendar.json in dir, or nil when there is none, it
+// is unreadable or it is from another writer.
+func readCalendar(dir string) *calendarFile {
 	f, err := os.Open(filepath.Join(dir, calendarFileName))
 	if err != nil {
-		return ""
+		return nil
 	}
 	defer f.Close()
 	data, err := io.ReadAll(io.LimitReader(f, maxCalendarFileBytes+1))
 	if err != nil || len(data) > maxCalendarFileBytes {
-		return ""
+		return nil
 	}
 	var c calendarFile
 	if json.Unmarshal(data, &c) != nil || c.Writer != calendarWriter {
+		return nil
+	}
+	return &c
+}
+
+// ReadCalendarInvitees is the names of the people invited to the calendar
+// event a session folder's calendar.json matched (the organizer and the
+// invitees, each once, as one printable line), or nil when there is no
+// such file, it is unreadable or from another writer.
+func ReadCalendarInvitees(dir string) []string {
+	c := readCalendar(dir)
+	if c == nil {
+		return nil
+	}
+	people := append([]calendarPerson{c.Organizer}, c.Invitees...)
+	if len(people) > maxCalendarPeople {
+		people = people[:maxCalendarPeople]
+	}
+	var names []string
+	seen := map[string]bool{}
+	for _, p := range people {
+		name := cleanName(p.Name, maxTeamsSpeaker)
+		if name == "" || seen[strings.ToLower(name)] {
+			continue
+		}
+		seen[strings.ToLower(name)] = true
+		names = append(names, name)
+	}
+	return names
+}
+
+// readCalendarSubject reads calendar.json in dir; see CalendarSubject.
+func readCalendarSubject(dir string) string {
+	c := readCalendar(dir)
+	if c == nil {
 		return ""
 	}
 	subject := strings.Join(strings.Fields(c.Subject), " ") // one line

@@ -65,7 +65,7 @@ var sessionRediarizeCmd = &cobra.Command{
 					return err
 				}
 			}
-			res, err := diarize.Rediarize(dir, sess, savedHints(dir, sess), o)
+			res, err := diarize.Rediarize(dir, sess, savedHints(dir, sess, cfg.Meeting.SnapReadsToInvitees), o)
 			if err != nil {
 				fmt.Printf("%s: %v\n", id[:8], err)
 				continue
