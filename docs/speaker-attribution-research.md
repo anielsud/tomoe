@@ -1399,6 +1399,13 @@ the user's 5th, leaning to "You" (the asked-for high bar). Utterances
 under 1.5 s stay "You" (their fingerprints are unreliable), and only
 utterances of 2 s or more scoring 0.6 or above teach the voice.
 
+First calls with it (2026-11-09, nobody beside the user): of 121 mic
+utterances, 2 were labelled someone else, both the user: "No. No. No. No."
+(5 s) and laughter (2.2 s). Laughter and a word repeated don't sound like
+the user's speaking voice. A mic utterance now needs at least 4 different
+words to be someone else's (checked once the words are known); both
+would have stayed "You".
+
 Not measured yet: someone in the same room through the same mic will
 sound more like the user than a call participant does (same room and
 microphone), so the others' scores above are likely optimistic. To check

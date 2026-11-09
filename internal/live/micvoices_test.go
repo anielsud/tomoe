@@ -43,3 +43,12 @@ func TestMicLabel(t *testing.T) {
 		t.Errorf("mic_voices off: %q", l)
 	}
 }
+
+// A few different words aren't enough to be someone else on the mic.
+func TestDistinctWords(t *testing.T) {
+	for text, want := range map[string]int{"No. No. No. No.": 1, "Ha ha ha ha ha. Yeah.": 2, "I'll send the deck over tonight": 6, "": 0} {
+		if got := distinctWords(text); got != want {
+			t.Errorf("%q: %d, want %d", text, got, want)
+		}
+	}
+}

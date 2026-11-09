@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
@@ -671,6 +672,12 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 	if job.unannounced {
 		spk, decision = c.speakerLabel(job.source, job.embedding, sampleDuration(job.samples))
 	}
+	// The voice was judged before the words were known: laughter or one
+	// word said over and over sounds unlike the user's speaking voice, so
+	// on the mic it takes enough different words to be someone else.
+	if job.source == SourceMic && spk != "You" && distinctWords(text) < micMinOtherWords {
+		spk, decision = "You", ""
+	}
 	return session.Segment{
 		ID:        job.id,
 		Speaker:   spk,
@@ -851,6 +858,21 @@ const (
 	micLearnFrom   = 2 * time.Second
 	micSurelyOwner = 0.6
 )
+
+// micMinOtherWords is the fewest different words a mic utterance needs to
+// be someone else's: the two utterances first labelled so on calls with
+// nobody beside the user (2026-11-09) were "No. No. No. No." and laughter.
+const micMinOtherWords = 4
+
+// distinctWords counts the different words in text, ignoring case and
+// punctuation.
+func distinctWords(text string) int {
+	seen := map[string]bool{}
+	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '\'' }) {
+		seen[w] = true
+	}
+	return len(seen)
+}
 
 func (c *Coordinator) micVoices() bool {
 	return c.cfg.MicEmbedder != nil && len(c.cfg.OwnerVoice) > 0 && c.cfg.MicOtherBelow > 0
