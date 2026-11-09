@@ -74,6 +74,12 @@ type Look struct {
 	// was learnt from.
 	TileCrop []byte `json:"-"`
 	HasTile  bool   `json:"tile,omitempty"`
+	// Portrait is the speaker's tile at up to portraitWidth (a JPEG saved
+	// as looks/<id>-portrait.jpg; HasPortrait says there is one): a few
+	// per name per session, each kept only when the tile is clearly larger
+	// than the last one kept, for a companion app's people pages.
+	Portrait    []byte `json:"-"`
+	HasPortrait bool   `json:"portrait,omitempty"`
 	// tileRect is where the speaker's tile is in the frame, in pixels.
 	tileRect image.Rectangle
 	// Content is the shared screen when it changed since the last one
@@ -152,6 +158,11 @@ func (l *LookLog) Write(look Look) error {
 	}
 	if len(look.TileCrop) > 0 {
 		if err := os.WriteFile(filepath.Join(l.dir, "looks", fmt.Sprintf("%d-tile.jpg", look.ID)), look.TileCrop, 0o644); err != nil {
+			return err
+		}
+	}
+	if len(look.Portrait) > 0 {
+		if err := os.WriteFile(filepath.Join(l.dir, "looks", fmt.Sprintf("%d-portrait.jpg", look.ID)), look.Portrait, 0o644); err != nil {
 			return err
 		}
 	}
