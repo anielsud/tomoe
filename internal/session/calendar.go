@@ -41,15 +41,46 @@ type calendarPerson struct {
 // maxCalendarPeople bounds how many invitees are read.
 const maxCalendarPeople = 2000
 
-// CalendarSubject is the subject of the calendar event the session with
-// this id was matched to (its folder's calendar.json, written by the
-// companion app), or "" when there is no such file, it is unreadable or
-// from another writer, or its subject is empty.
+// CalendarSubject is the name the companion app knows the session with
+// this id by: the subject of the calendar event it was matched to (its
+// folder's calendar.json), or, for a recording with no calendar event, the
+// name the companion app gave it from what was said (title.json). "" when
+// neither file is there, readable and from the companion app.
 func (s *Store) CalendarSubject(id string) string {
 	if id == "" || id != filepath.Base(id) {
 		return "" // a session ID is a single folder name
 	}
-	return readCalendarSubject(filepath.Join(s.baseDir, id))
+	dir := filepath.Join(s.baseDir, id)
+	if subject := readCalendarSubject(dir); subject != "" {
+		return subject
+	}
+	return readGivenTitle(dir)
+}
+
+// givenTitleFileName is a name the companion app gave a recording that has
+// no calendar event: {"writer": "musubi", "title": "...", "source": "generated"}.
+const givenTitleFileName = "title.json"
+
+// readGivenTitle reads title.json in dir; see CalendarSubject.
+func readGivenTitle(dir string) string {
+	f, err := os.Open(filepath.Join(dir, givenTitleFileName))
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	data, err := io.ReadAll(io.LimitReader(f, maxCalendarFileBytes+1))
+	if err != nil || len(data) > maxCalendarFileBytes {
+		return ""
+	}
+	var t struct{ Writer, Title string }
+	if json.Unmarshal(data, &t) != nil || t.Writer != calendarWriter {
+		return ""
+	}
+	title := strings.Join(strings.Fields(t.Title), " ")
+	if r := []rune(title); len(r) > maxCalendarSubject {
+		title = strings.TrimSpace(string(r[:maxCalendarSubject]))
+	}
+	return title
 }
 
 // readCalendar reads calendar.json in dir, or nil when there is none, it
