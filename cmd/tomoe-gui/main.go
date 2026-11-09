@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"embed"
 
 	"github.com/wailsapp/wails/v2"
@@ -36,8 +37,11 @@ func main() {
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup:     app.Startup,
-		OnShutdown:    app.Shutdown,
+		OnStartup: app.Startup,
+		OnShutdown: func(ctx context.Context) {
+			app.Shutdown(ctx)
+			logStopped() // after the saves: a quit that hangs in them never reads as clean
+		},
 		OnBeforeClose: app.BeforeClose,
 		Bind: []interface{}{
 			app,

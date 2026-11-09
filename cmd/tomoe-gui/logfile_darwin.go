@@ -52,5 +52,23 @@ func setupLogFile() {
 	_ = syscall.Dup2(out, 1)
 	_ = syscall.Dup2(out, 2)
 	_ = debug.SetCrashOutput(f, debug.CrashOptions{})
+	logFile = f
 	fmt.Printf("\n===== Tomoe started %s (pid %d) =====\n", time.Now().Format(time.RFC3339), os.Getpid())
+}
+
+// logFile is the open log, for logStopped.
+var logFile *os.File
+
+// logStopped marks a clean quit in the log. A start banner with no stop
+// after it means the app died, which is what packaging/macos's relaunch
+// agent looks for. It writes to the file directly and syncs: the process
+// may end before the stamping reader gets to anything sent through the
+// pipe.
+func logStopped() {
+	if logFile == nil {
+		return
+	}
+	now := time.Now()
+	fmt.Fprintf(logFile, "%s===== Tomoe stopped %s (pid %d) =====\n", now.Format(stampFormat), now.Format(time.RFC3339), os.Getpid())
+	_ = logFile.Sync()
 }

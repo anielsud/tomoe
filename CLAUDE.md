@@ -129,6 +129,7 @@ make download-model   # Download models (~375MB; plus ~310MB for the English str
 make install          # Install to $GOPATH/bin
 make dev-cert-mac     # One-time: create a stable local code-signing identity (macOS only)
 make install-gui-mac  # Rebuild GUI, (re)install /Applications/Tomoe.app + Dock icon (macOS only)
+make install-relaunch-mac  # Reopen Tomoe within a minute if it crashes, not when quit (macOS only)
 make install-gpu      # Install CUDA toolkit + sherpa-onnx GPU libraries
 ```
 
