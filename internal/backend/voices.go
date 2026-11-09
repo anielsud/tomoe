@@ -503,7 +503,7 @@ func (a *App) LearnVoicesFromSavedSessions() (int, error) {
 		}
 		dir := filepath.Join(config.SessionDir(), s.ID)
 		_, _ = videohint.BackfillTiles(dir)
-		names, err := diarize.LearnSaved(m, dir, full, savedHints(dir, full))
+		names, err := diarize.LearnSaved(m, dir, full, savedHints(dir, full, m.SnapReadsToInvitees))
 		if err != nil {
 			continue
 		}
@@ -522,14 +522,16 @@ func (a *App) learnNamedLater(sess *session.Session) {
 	}
 	go func() {
 		dir := filepath.Join(config.SessionDir(), sess.ID)
-		if _, err := diarize.LearnSaved(a.config().Meeting, dir, sess, savedHints(dir, sess)); err != nil {
+		if _, err := diarize.LearnSaved(a.config().Meeting, dir, sess, savedHints(dir, sess, a.config().Meeting.SnapReadsToInvitees)); err != nil {
 			fmt.Printf("session %s: voice profiles not updated: %v\n", sess.ID, err)
 		}
 	}()
 }
 
-// savedHints are a saved session's name reads from the meeting window.
-func savedHints(dir string, sess *session.Session) []diarize.Hint {
+// savedHints are a saved session's name reads from the meeting window,
+// each snapped to the meeting's invitees' spelling when snap is set (see
+// MeetingConfig.SnapReadsToInvitees).
+func savedHints(dir string, sess *session.Session, snap bool) []diarize.Hint {
 	looks, _ := videohint.ReadLooks(dir)
 	var hints []diarize.Hint
 	for _, l := range looks {
@@ -539,6 +541,9 @@ func savedHints(dir string, sess *session.Session) []diarize.Hint {
 		} else if len(candidates) > 1 {
 			hints = append(hints, diarize.Hint{T: t, Candidates: candidates})
 		}
+	}
+	if snap {
+		diarize.SnapHints(hints, session.ReadCalendarInvitees(dir))
 	}
 	return hints
 }
@@ -882,7 +887,7 @@ func (a *App) MoveVoiceMeeting(model, id, sessionID, toName string) error {
 		return err
 	}
 	names := append([]string{prof.Name}, prof.Aliases...)
-	for _, l := range diarize.VoicesFromTiles(p, savedHints(dir, sess), info.Offset) {
+	for _, l := range diarize.VoicesFromTiles(p, savedHints(dir, sess, a.config().Meeting.SnapReadsToInvitees), info.Offset) {
 		for _, n := range names {
 			if diarize.SameName(l.Name, n) {
 				return store.Move(id, sessionID, sess.CreatedAt, l.Voice, toName)
@@ -915,7 +920,7 @@ func (a *App) DiscardedVoiceClip(model, id, sessionID string) (VoiceClip, error)
 	if err != nil {
 		return VoiceClip{}, err
 	}
-	for _, l := range diarize.VoicesFromTiles(p, savedHints(dir, sess), info.Offset) {
+	for _, l := range diarize.VoicesFromTiles(p, savedHints(dir, sess, a.config().Meeting.SnapReadsToInvitees), info.Offset) {
 		for _, n := range names {
 			if diarize.SameName(l.Name, n) {
 				return VoiceClip{sessionID, l.Clip.Start, l.Clip.End}, nil

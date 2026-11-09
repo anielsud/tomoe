@@ -82,7 +82,7 @@ func runVoicesLearn(cmd *cobra.Command, args []string) error {
 		if n, err := videohint.BackfillTiles(dir); err == nil && n > 0 {
 			tiles += n
 		}
-		names, err := diarize.LearnSaved(cfg.Meeting, dir, sess, savedHints(dir, sess))
+		names, err := diarize.LearnSaved(cfg.Meeting, dir, sess, savedHints(dir, sess, cfg.Meeting.SnapReadsToInvitees))
 		if err != nil {
 			fmt.Printf("%s: skipped: %v\n", id, err)
 			continue
@@ -99,8 +99,10 @@ func runVoicesLearn(cmd *cobra.Command, args []string) error {
 	return nil
 }
 
-// savedHints are a saved session's name reads from the meeting window.
-func savedHints(dir string, sess *session.Session) []diarize.Hint {
+// savedHints are a saved session's name reads from the meeting window,
+// each snapped to the meeting's invitees' spelling when snap is set (see
+// MeetingConfig.SnapReadsToInvitees).
+func savedHints(dir string, sess *session.Session, snap bool) []diarize.Hint {
 	looks, _ := videohint.ReadLooks(dir)
 	var hints []diarize.Hint
 	for _, l := range looks {
@@ -110,6 +112,9 @@ func savedHints(dir string, sess *session.Session) []diarize.Hint {
 		} else if len(candidates) > 1 {
 			hints = append(hints, diarize.Hint{T: t, Candidates: candidates})
 		}
+	}
+	if snap {
+		diarize.SnapHints(hints, session.ReadCalendarInvitees(dir))
 	}
 	return hints
 }

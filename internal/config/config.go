@@ -167,6 +167,19 @@ type MeetingConfig struct {
 	VoiceProfiles         bool    `toml:"voice_profiles"`
 	VoiceProfileThreshold float64 `toml:"voice_profile_threshold"`
 	VoiceProfileMargin    float64 `toml:"voice_profile_margin"`
+	// SnapReadsToInvitees corrects a name read from the meeting window on
+	// a saved meeting to the spelling of the meeting's invitee it is a
+	// misread of (the companion app's calendar.json in the session's
+	// folder): the one invitee within an edit or two (a fifth of the
+	// name's letters, at most two). A read close to no invitee, or to two,
+	// is left as read; nothing is ever named outside the invitee list.
+	// Applies wherever saved meetings' reads are used (rediarizing,
+	// learning voice profiles, their clips); a meeting being recorded has
+	// no calendar.json yet. On 25 saved meetings with a Teams transcript,
+	// every one of the 27 read spellings it changed became a name in the
+	// transcript, and none moved away from one. false: reads as the
+	// window showed them.
+	SnapReadsToInvitees bool `toml:"snap_reads_to_invitees"`
 	// VoiceProfileMinMeetings: a profile names nobody until it's been
 	// heard in this many meetings, unless the user confirmed it or named
 	// the person themselves (1: any profile names voices, as before).
@@ -353,6 +366,7 @@ func DefaultConfig() *Config {
 			VoiceProfileThreshold:   0.7,
 			VoiceProfileMargin:      0.1,
 			VoiceProfileMinMeetings: 2,
+			SnapReadsToInvitees:     true,
 			AutoSave:                true,
 			AutoDetect:              true,
 			SpeakerModel:            "auto",

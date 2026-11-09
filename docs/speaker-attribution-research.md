@@ -1249,6 +1249,82 @@ bias (the speakers' voices are taken from the saved labels, which may mix
 people; the window may be too long for short turns), and gate refining on
 evidence that the cut is wrong before moving it.
 
+## Teams transcripts as speaker ground truth (2026-11-09)
+
+The companion app now writes the Teams transcript of a recorded meeting
+into its session folder (`teams.json`: each turn's speaker, offset and
+text; Tomoe only reads it). `tomoe session teams-align` lines a saved
+meeting up with it and proposes a Teams name per speaker label; it changes
+nothing without `--apply`, and `--all` reports every session that has one.
+
+**Placing the clock.** Teams' clock and the recording's differ. Every
+three-word sequence said exactly once in both transcripts gives one
+estimate of the offset (Teams' word times are spread evenly over each
+turn); the offset is the 5 s window most estimates fall in, refined to
+their median, within ±300 s. When fewer than 20 sequences agree, the
+offset falls back to the shift that best concentrates each label on one
+Teams name, and **nothing is proposed**: on saved meetings that only
+happened where the transcript wasn't this recording's.
+
+**The naming rule.** A label gets a name when one Teams name covers at
+least 30 s of its speech, at least 60% of its overlapped speech, and at
+least twice the runner-up's. A name goes to one label; another label may
+share it (one person split in two) only at 80% or more. A turn lasts until
+the next turn starts, at most 60 s. `--apply` writes `Person N (Teams
+name)`, only over Tomoe's own labels (`Person N`, `Person N (Name)`), never
+over "You", a name the user gave or a room label, and never puts a room's
+name over a person's: Teams credits all of a room's speech to the room's
+tile. `session.json` is backed up first.
+
+On the 25 saved meetings with a transcript (177 labels, 17.1 h of speech),
+dry run only:
+
+| | |
+|---|---|
+| clock placed from the text | 18 of 25 (49 to 8,075 agreeing sequences) |
+| text doesn't line up | 7 (at most 2 agreeing sequences; the transcript is another meeting's or covers another part of the day) |
+| offsets from the text | −39 s; −18 to −1 s (14 meetings); +129, +157, +158 s (transcripts whose start is the calendar time, not when transcription began) |
+| labels | 123 named by Tomoe, 12 named by the user, 23 "You", 19 placeholders |
+| labels with a proposal | 87, holding 76% of the speech |
+| proposal's share of the label's overlapped speech | 60–70%: 10, 70–80%: 27, 80–90%: 20, 90–95%: 8, 95–100%: 22 |
+
+What the 87 proposals say about the labels Tomoe has:
+
+| Outcome | Labels |
+|---|---|
+| agrees with the name Tomoe gave | 60 |
+| agrees with the name the user gave | 4 |
+| same name, completed (a room's name cut off on its tile) | 3 |
+| "You": the same person in all 11 meetings (the owner) | 11 |
+| Tomoe or the user named a person, Teams the room they were in | 9 (4 user-given, 5 Tomoe's) |
+| would fill a placeholder | 0 |
+| would change one person's name to another's | 0 |
+
+The 90 labels without a proposal: 58 too little overlap (54 of them under
+30 s of speech in all), 16 no clear majority, 3 runner-up too close, 4
+sharing a name already taken (at 67–73%), 1 not overlapped, and 8 whose
+proposal was dropped because the text didn't line up. Without that
+check, the speaker-only offset gave 6 names on those meetings (4 on "You",
+1 a room), and one would have replaced a person's name with someone
+else's.
+
+So on these meetings, where the window named most speakers, every name
+Teams could check was already right, or differed only where Teams can't
+tell a room's people apart. The placeholders left are short (none reaches
+30 s with one Teams name). Teams' value here is as a check and as a
+labelled set for measuring changes, more than as a fixer.
+
+**Invitee spelling for window reads** (`snap_reads_to_invitees`, on). On
+saved meetings with the companion app's `calendar.json`, a name read from
+the meeting window is corrected to the one invitee within a small edit
+distance (a fifth of the letters, at most two; short names none; a tie
+with two invitees leaves it alone). Over the 74 such meetings with reads,
+3,826 of 171,583 reads changed (61 distinct spellings, 30 meetings). On
+the 25 with a Teams transcript, all 27 spellings it changed became a name
+in the transcript, and none moved away from one. It applies where saved
+meetings' reads are used (rediarizing, learning voice profiles, their
+clips); a meeting being recorded has no `calendar.json` yet.
+
 ## Open questions
 
 - **Short turns.** Words in 1–3 word turns are right 30–55% of the time
