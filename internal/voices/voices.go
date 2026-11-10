@@ -858,3 +858,46 @@ func removeString(xs []string, x string) []string {
 	}
 	return out
 }
+
+// OwnerPath is where the user's own voice (from their microphone) is kept
+// for model.
+func OwnerPath(dataDir, model string) string {
+	return filepath.Join(dataDir, "voices", model+"-you.json")
+}
+
+// LoadOwner reads the user's voice; a missing file is an empty voice.
+func LoadOwner(path string) (Voice, error) {
+	var v Voice
+	b, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return v, nil
+	}
+	if err != nil {
+		return v, err
+	}
+	return v, json.Unmarshal(b, &v)
+}
+
+// SaveOwner writes the user's voice.
+func SaveOwner(path string, v Voice) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return err
+	}
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, b, 0o600); err != nil {
+		return err
+	}
+	return os.Rename(tmp, path)
+}
+
+// Normalized is emb scaled to unit length (nil if empty or zero), so
+// fingerprints of different loudness add up evenly.
+func Normalized(emb []float32) []float32 {
+	var v Voice
+	v.Add(emb)
+	return v.Centroid()
+}

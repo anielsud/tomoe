@@ -7,6 +7,7 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode"
 
 	sherpa "github.com/k2-fsa/sherpa-onnx-go/sherpa_onnx"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/sigfix"
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
+	"github.com/sosuke-ai/tomoe-pc/internal/voices"
 )
 
 const (
@@ -514,27 +516,37 @@ type decodeJob struct {
 	source             SourceType
 	samples            []float32
 	startTime, endTime float64
+	// speaker, if set, is the line's speaker already (a mic turn labelled
+	// utterance by utterance, see addTurnPart).
+	speaker  string
+	decision speaker.AssignDecision
 }
 
 // singlePass decodes a finished line: on decodeWorker (DecodeAsync), so
 // the pipeline goes on reading audio, else at once.
 func (c *Coordinator) singlePass(source SourceType, samples []float32, startTime, endTime float64) {
+	c.singlePassAs(source, samples, startTime, endTime, "", "")
+}
+
+// singlePassAs is singlePass for a line whose speaker is known (spk "":
+// worked out from its audio).
+func (c *Coordinator) singlePassAs(source SourceType, samples []float32, startTime, endTime float64, spk string, decision speaker.AssignDecision) {
 	if !c.cfg.DecodeAsync {
-		c.transcribeSinglePass(source, samples, startTime, endTime)
+		c.transcribeSinglePass(source, samples, startTime, endTime, spk, decision)
 		return
 	}
-	c.decodeCh <- decodeJob{source, samples, startTime, endTime}
+	c.decodeCh <- decodeJob{source, samples, startTime, endTime, spk, decision}
 }
 
 // decodeWorker decodes single-pass lines in the order they finished.
 func (c *Coordinator) decodeWorker() {
 	defer c.decodeWG.Done()
 	for j := range c.decodeCh {
-		c.transcribeSinglePass(j.source, j.samples, j.startTime, j.endTime)
+		c.transcribeSinglePass(j.source, j.samples, j.startTime, j.endTime, j.speaker, j.decision)
 	}
 }
 
-func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32, startTime, endTime float64) {
+func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32, startTime, endTime float64, spk string, decision speaker.AssignDecision) {
 	began := time.Now()
 	defer c.cfg.Timings.utterance(began)
 	c.transcribeMu.Lock()
@@ -548,7 +560,10 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 
 	// Only after the text check: a segment that decodes to nothing (noise,
 	// a cough) must not create or move a speaker centroid.
-	spk, decision := c.assignSpeaker(source, samples, startTime)
+	if spk == "" {
+		spk, decision = c.assignSpeaker(source, samples, startTime)
+	}
+	spk, decision = c.micWords(source, spk, decision, result.Text)
 
 	seg := session.Segment{
 		ID:        c.nextSegID(),
@@ -670,6 +685,7 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 	if job.unannounced {
 		spk, decision = c.speakerLabel(job.source, job.embedding, sampleDuration(job.samples))
 	}
+	spk, decision = c.micWords(job.source, spk, decision, text)
 	return session.Segment{
 		ID:        job.id,
 		Speaker:   spk,
@@ -693,7 +709,7 @@ func (c *Coordinator) assignSpeaker(source SourceType, samples []float32, startT
 
 // probePrefixes records Config.ProbePrefixes labels for an utterance.
 func (c *Coordinator) probePrefixes(source SourceType, samples []float32, startTime float64) {
-	if len(c.cfg.ProbePrefixes) == 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
+	if source == SourceMic || len(c.cfg.ProbePrefixes) == 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
 		return
 	}
 	var labels []ProbeLabel
@@ -712,7 +728,7 @@ func (c *Coordinator) probePrefixes(source SourceType, samples []float32, startT
 // probeWindows records Config.WindowSize labels for an utterance.
 func (c *Coordinator) probeWindows(source SourceType, samples []float32, startTime float64) {
 	size, step := c.cfg.WindowSize, c.cfg.WindowStep
-	if size <= 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
+	if source == SourceMic || size <= 0 || c.cfg.Probes == nil || c.cfg.Tracker == nil {
 		return
 	}
 	if step <= 0 {
@@ -750,6 +766,7 @@ func sampleDuration(samples []float32) time.Duration {
 // utterance is complete.
 func (c *Coordinator) provisionalSpeaker(source SourceType, samples []float32) string {
 	if source == SourceMic {
+		// Settled once the utterance is complete (micLabel).
 		return "You"
 	}
 	if c.cfg.SkipMonitorDiarization {
@@ -766,7 +783,20 @@ func (c *Coordinator) provisionalSpeaker(source SourceType, samples []float32) s
 // can be computed on the pipeline goroutine (the Embedder is not safe for
 // concurrent use) while the label is decided later by refineWorker.
 func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []float32 {
-	if source == SourceMic || c.cfg.SkipMonitorDiarization || c.cfg.Embedder == nil || c.cfg.Tracker == nil {
+	if source == SourceMic {
+		if !c.micVoices() || sampleDuration(samples) < micMinOther {
+			return nil
+		}
+		// Lines are labelled from either pipeline and the decode worker.
+		c.micEmbedMu.Lock()
+		emb, err := c.cfg.MicEmbedder.Extract(samples)
+		c.micEmbedMu.Unlock()
+		if err != nil {
+			return nil
+		}
+		return emb
+	}
+	if c.cfg.SkipMonitorDiarization || c.cfg.Embedder == nil || c.cfg.Tracker == nil {
 		return nil
 	}
 	embedBegan := time.Now()
@@ -787,7 +817,7 @@ func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []f
 // computed from (see minAssignDuration's doc comment in internal/speaker).
 func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, duration time.Duration) (string, speaker.AssignDecision) {
 	if source == SourceMic {
-		return "You", ""
+		return c.micLabel(embedding, duration)
 	}
 
 	if c.cfg.SkipMonitorDiarization {
@@ -828,6 +858,69 @@ func (c *Coordinator) speakerLabel(source SourceType, embedding []float32, durat
 	}
 
 	return "Other", ""
+}
+
+// micMinOther is the shortest mic utterance that can be someone else's:
+// a short one's fingerprint is unreliable, and the mic is mostly the
+// user. micSurelyOwner is the similarity above which (for an utterance of
+// at least micLearnFrom) a fingerprint is added to the user's voice.
+const (
+	micMinOther    = 1500 * time.Millisecond
+	micLearnFrom   = 2 * time.Second
+	micSurelyOwner = 0.6
+)
+
+// micMinOtherWords is the fewest different words a mic utterance needs to
+// be someone else's: the two utterances first labelled so on calls with
+// nobody beside the user (2026-11-09) were "No. No. No. No." and laughter.
+const micMinOtherWords = 4
+
+// micWords settles a mic line's speaker once its words are known: the
+// voice was judged before, and laughter or one word said over and over
+// sounds unlike the user's speaking voice, so it takes enough different
+// words to be someone else.
+func (c *Coordinator) micWords(source SourceType, spk string, decision speaker.AssignDecision, text string) (string, speaker.AssignDecision) {
+	if source == SourceMic && spk != "You" && distinctWords(text) < micMinOtherWords {
+		return "You", ""
+	}
+	return spk, decision
+}
+
+// distinctWords counts the different words in text, ignoring case and
+// punctuation.
+func distinctWords(text string) int {
+	seen := map[string]bool{}
+	for _, w := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return !unicode.IsLetter(r) && !unicode.IsDigit(r) && r != '\'' }) {
+		seen[w] = true
+	}
+	return len(seen)
+}
+
+func (c *Coordinator) micVoices() bool {
+	return c.cfg.MicEmbedder != nil && len(c.cfg.OwnerVoice) > 0 && c.cfg.MicOtherBelow > 0
+}
+
+// micLabel labels a mic utterance: "You" unless it's long enough to tell
+// and its voice is unlike the user's (config mic_other_below), then a
+// speaker clustered with the monitor's (no video hint is sought: the
+// person is in the room, not on screen).
+func (c *Coordinator) micLabel(embedding []float32, duration time.Duration) (string, speaker.AssignDecision) {
+	if len(embedding) == 0 || !c.micVoices() {
+		return "You", ""
+	}
+	norm := voices.Normalized(embedding)
+	sim := voices.Similarity(c.cfg.OwnerVoice, norm)
+	if sim >= c.cfg.MicOtherBelow || duration < micMinOther {
+		if sim >= micSurelyOwner && duration >= micLearnFrom && c.cfg.HeardOwner != nil {
+			c.cfg.HeardOwner(norm)
+		}
+		return "You", ""
+	}
+	if c.cfg.Tracker == nil {
+		return "Other", ""
+	}
+	label, _ := c.cfg.Tracker.Assign(embedding, duration)
+	return label, c.cfg.Tracker.LastDecision()
 }
 
 // hasSignal reports whether a window holds anything above about -80
@@ -932,6 +1025,103 @@ func (c *Coordinator) splitAtHighlight(source SourceType, u turnPart) []turnPart
 	return pieces
 }
 
+// The mic's voice split (splitAtVoice): micVoiceWindow-second windows
+// every micVoiceHop seconds; micVoiceRun windows in a row must agree
+// before the voice counts as changed; no piece is shorter than
+// micVoicePiece seconds.
+const (
+	micVoiceWindow = 2.0
+	micVoiceHop    = 1.0
+	micVoiceRun    = 2
+	micVoicePiece  = 3.0
+)
+
+// splitAtVoice cuts a mic utterance where the voice changes between the
+// user's and someone else's (mic_voices). The VAD only ends an utterance
+// at a pause, and in a room two people often leave none, so one utterance
+// can hold both. Each piece is labelled by its own voice (micLabel); the
+// first keeps the utterance's pending line. Returns nil when there's
+// nothing to cut.
+func (c *Coordinator) splitAtVoice(source SourceType, u turnPart) []turnPart {
+	if source != SourceMic || u.speaker != "" || !c.micVoices() || !c.cfg.TurnMode || u.end-u.start < 2*micVoicePiece {
+		return nil
+	}
+	win, hop := int(micVoiceWindow*vadSampleRate), int(micVoiceHop*vadSampleRate)
+	var other []bool // per window: unlike the user's voice
+	for a := 0; a+win <= len(u.samples); a += hop {
+		c.micEmbedMu.Lock()
+		emb, err := c.cfg.MicEmbedder.Extract(u.samples[a : a+win])
+		c.micEmbedMu.Unlock()
+		if err != nil || len(emb) == 0 {
+			return nil
+		}
+		other = append(other, voices.Similarity(c.cfg.OwnerVoice, voices.Normalized(emb)) < c.cfg.MicOtherBelow)
+	}
+	cuts := voiceCuts(other, u.start, u.end)
+	if len(cuts) == 0 {
+		return nil
+	}
+	var pieces []turnPart
+	from := u.start
+	for i, at := range append(cuts, u.end) {
+		a := int((from - u.start) * vadSampleRate)
+		b := min(len(u.samples), int((at-u.start)*vadSampleRate))
+		if at == u.end {
+			b = len(u.samples)
+		}
+		p := turnPart{samples: u.samples[a:b], start: from, end: at, twoPass: u.twoPass}
+		if i == 0 {
+			p.id, p.pass1 = u.id, u.pass1
+		}
+		if emb := c.speakerEmbedding(source, p.samples); len(emb) > 0 {
+			p.speaker, p.decision = c.micLabel(emb, sampleDuration(p.samples))
+		} else {
+			p.speaker = "You"
+		}
+		pieces = append(pieces, p)
+		from = at
+	}
+	c.turnMu.Lock()
+	if c.turnCuts == nil {
+		c.turnCuts = map[string]int{}
+	}
+	c.turnCuts["voice change inside an utterance"] += len(cuts)
+	c.turnMu.Unlock()
+	return pieces
+}
+
+// voiceCuts is where splitAtVoice cuts an utterance from start to end,
+// given which of its windows sound unlike the user. The voice changes at
+// the first of micVoiceRun windows in a row that disagree with the
+// current one; the cut goes mid-way into the window overlap, where the
+// new voice most likely began.
+func voiceCuts(other []bool, start, end float64) []float64 {
+	if len(other) < micVoiceRun {
+		return nil
+	}
+	var cuts []float64
+	last, cur := start, other[0]
+	for i := 1; i+micVoiceRun <= len(other); i++ {
+		if other[i] == cur {
+			continue
+		}
+		run := true
+		for _, o := range other[i : i+micVoiceRun] {
+			run = run && o != cur
+		}
+		if !run {
+			continue
+		}
+		at := start + float64(i)*micVoiceHop + (micVoiceWindow-micVoiceHop)/2
+		if at-last >= micVoicePiece && end-at >= micVoicePiece {
+			cuts = append(cuts, at)
+			last = at
+		}
+		cur = other[i]
+	}
+	return cuts
+}
+
 // decode transcribes samples with Config.DecodePad seconds of silence on
 // each side, and gives token times relative to samples' own start.
 // Cohere drops the last syllable of audio that stops abruptly ("What'"
@@ -981,6 +1171,22 @@ func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
 		}
 		return
 	}
+	if pieces := c.splitAtVoice(source, u); len(pieces) > 1 {
+		for _, p := range pieces {
+			c.addTurnPart(source, p)
+		}
+		return
+	}
+	// On the mic (mic_voices), each utterance long enough to tell is
+	// labelled by its own voice, and a change of voice ends the line: in a
+	// room there's no other side to end it, so one line would hold both
+	// people and take the voice of whoever spoke more. Too short to tell:
+	// it joins whatever line is going.
+	if source == SourceMic && u.speaker == "" && c.micVoices() {
+		if emb := c.speakerEmbedding(source, u.samples); len(emb) > 0 {
+			u.speaker, u.decision = c.micLabel(emb, sampleDuration(u.samples))
+		}
+	}
 	c.turnMu.Lock()
 	if c.turns == nil {
 		c.turns = map[SourceType]*turnBuf{}
@@ -1013,9 +1219,12 @@ func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
 		maxSecs, maxGap := c.turnLimits()
 		changed := c.cfg.SpeakerChanged != nil && source == SourceMonitor && c.cfg.SpeakerChanged(t.end-0.25, u.start+1)
 		cut := true
+		voice := source == SourceMic && c.micVoices() && t.speaker != "" && u.speaker != "" && u.speaker != t.speaker
 		switch {
 		case changed:
 			c.turnCuts["speaker-change signal"]++
+		case voice:
+			c.turnCuts["voice changed"]++
 		case u.start-t.end > maxGap:
 			c.turnCuts["pause"]++
 		case (t.end-t.start)+(u.end-u.start) > maxSecs:
@@ -1068,7 +1277,11 @@ func (c *Coordinator) turnLimits() (maxSecs, maxGap float64) {
 // pending line and withdraws the others (see refineWorker).
 func (c *Coordinator) sendTurn(source SourceType, t *turnBuf) {
 	if !t.twoPass {
-		c.singlePass(source, t.samples, t.start, t.end)
+		spk, decision := "", speaker.AssignDecision("")
+		if source == SourceMic && c.micVoices() {
+			spk, decision = t.speaker, t.decision
+		}
+		c.singlePassAs(source, t.samples, t.start, t.end, spk, decision)
 		return
 	}
 	job := refinementJob{

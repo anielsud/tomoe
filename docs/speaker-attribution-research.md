@@ -1372,3 +1372,69 @@ taskpolicy -b tomoe eval meeting.mp4 --ref meeting.reviewed.txt --no-cache --ski
 
 The reference format is a Teams transcript export (`Name   0:12` header
 lines followed by the text). Turns that overlap share a start time.
+
+## The user's voice on their own microphone (2026-11-09)
+
+Everything on the mic was labelled "You", which is wrong in an in-person
+meeting (the laptop hears the whole room) and when someone sits beside
+the user. `meeting.mic_voices` keeps a saved voice for the user
+(`voices/<model>-you.json`), seeded from their mic track in recent
+meetings and topped up from utterances that are surely theirs, and labels
+a mic utterance as someone else when its fingerprint is less like that
+voice than `meeting.mic_other_below`.
+
+Measured with eres2net-en on the last 14 meetings with a separate mic
+track: a voice from up to 12 mic utterances of 2.5 s or more from each of
+9 meetings (96 fingerprints), tested on the other 5 meetings' mic
+utterances (56) and on other speakers' utterances from the call side
+(168), all L2-normalized:
+
+| | min | p05 | p25 | p50 | p75 | p95 | max |
+|---|---|---|---|---|---|---|---|
+| user, held out | 0.41 | 0.57 | 0.86 | 0.89 | 0.91 | 0.92 | 0.93 |
+| others | -0.11 | -0.04 | 0.04 | 0.10 | 0.22 | 0.31 | 0.41 |
+
+`mic_other_below` is 0.35: above the others' 95th percentile and below
+the user's 5th, leaning to "You" (the asked-for high bar). Utterances
+under 1.5 s stay "You" (their fingerprints are unreliable), and only
+utterances of 2 s or more scoring 0.6 or above teach the voice.
+
+First calls with it (2026-11-09, nobody beside the user): of 121 mic
+utterances, 2 were labelled someone else, both the user: "No. No. No. No."
+(5 s) and laughter (2.2 s). Laughter and a word repeated don't sound like
+the user's speaking voice. A mic utterance now needs at least 4 different
+words to be someone else's (checked once the words are known); both
+would have stayed "You".
+
+Not measured yet: someone in the same room through the same mic will
+sound more like the user than a call participant does (same room and
+microphone), so the others' scores above are likely optimistic. To check
+on the first in-person recording.
+
+First in-person recording (2026-11-10, 75 min, two people at a table,
+one laptop mic). Scored by 2 s windows (1 s hop) against the user's
+voice: same-room speech from the other person still scored low (median
+0.07 in windows labelled as them), so the threshold holds. The failure
+was the cut, not the score. The VAD ends an utterance only at a pause,
+and two people talking across a table leave few: utterances ran to the
+30 s cap and held both voices, taking the label of whoever spoke more.
+39% of the "You" windows (1,397 s) sounded unlike the user, and the other
+person got 742 s against an estimated 36 minutes. Labelling each
+utterance by its own voice before joining turns changed nothing (the
+utterances themselves were mixed).
+
+The fix cuts a mic utterance of 6 s or more where the voice changes:
+2 s windows every second, each unlike the user or not; two windows in a
+row must disagree before the voice counts as changed; no piece under
+3 s; each piece is then labelled by its own fingerprint. Replay of the
+same recording:
+
+| | "You" | other person | unlike-user time inside "You" lines |
+|---|---|---|---|
+| before | 3,680 s | 742 s | 1,397 s (39% of windows) |
+| voice split | 2,327 s | 2,099 s | 98 s (5%) |
+
+158 cuts inside utterances. Three short lines (15 s) from the other
+person were clustered as extra speakers rather than with the rest of
+their speech. Cost: one fingerprint per second of long mic speech;
+decoding the replay took 49% of the audio's length against 43%.
