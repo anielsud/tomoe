@@ -196,8 +196,12 @@ endif
 	done
 	sed 's/__VERSION__/$(VERSION)/g' packaging/macos/Info.plist.template > $(APP_BUNDLE)/Contents/Info.plist
 	codesign --sign "$(CODESIGN_IDENTITY)" --force --deep $(APP_BUNDLE)
-	rm -rf "$(APPLICATIONS_DIR)/$(APP_NAME).app"
-	ditto $(APP_BUNDLE) "$(APPLICATIONS_DIR)/$(APP_NAME).app"
+	# Updated in place: macOS can refuse to remove an app's own folder
+	# from /Applications after its contents are gone, which left an empty
+	# app. rsync --delete replaces the contents and drops stale files.
+	mkdir -p "$(APPLICATIONS_DIR)/$(APP_NAME).app"
+	rsync -a --delete $(APP_BUNDLE)/ "$(APPLICATIONS_DIR)/$(APP_NAME).app/"
+	codesign --verify --deep "$(APPLICATIONS_DIR)/$(APP_NAME).app"
 	@echo "Installed $(APPLICATIONS_DIR)/$(APP_NAME).app (version $(VERSION)), signed with '$(CODESIGN_IDENTITY)'."
 	@echo "First install with this identity still needs Screen Recording/Microphone/Accessibility granted once in System Settings > Privacy & Security -- after that, rebuilds should keep working without re-granting."
 
