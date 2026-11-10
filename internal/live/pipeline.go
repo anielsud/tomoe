@@ -516,27 +516,37 @@ type decodeJob struct {
 	source             SourceType
 	samples            []float32
 	startTime, endTime float64
+	// speaker, if set, is the line's speaker already (a mic turn labelled
+	// utterance by utterance, see addTurnPart).
+	speaker  string
+	decision speaker.AssignDecision
 }
 
 // singlePass decodes a finished line: on decodeWorker (DecodeAsync), so
 // the pipeline goes on reading audio, else at once.
 func (c *Coordinator) singlePass(source SourceType, samples []float32, startTime, endTime float64) {
+	c.singlePassAs(source, samples, startTime, endTime, "", "")
+}
+
+// singlePassAs is singlePass for a line whose speaker is known (spk "":
+// worked out from its audio).
+func (c *Coordinator) singlePassAs(source SourceType, samples []float32, startTime, endTime float64, spk string, decision speaker.AssignDecision) {
 	if !c.cfg.DecodeAsync {
-		c.transcribeSinglePass(source, samples, startTime, endTime)
+		c.transcribeSinglePass(source, samples, startTime, endTime, spk, decision)
 		return
 	}
-	c.decodeCh <- decodeJob{source, samples, startTime, endTime}
+	c.decodeCh <- decodeJob{source, samples, startTime, endTime, spk, decision}
 }
 
 // decodeWorker decodes single-pass lines in the order they finished.
 func (c *Coordinator) decodeWorker() {
 	defer c.decodeWG.Done()
 	for j := range c.decodeCh {
-		c.transcribeSinglePass(j.source, j.samples, j.startTime, j.endTime)
+		c.transcribeSinglePass(j.source, j.samples, j.startTime, j.endTime, j.speaker, j.decision)
 	}
 }
 
-func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32, startTime, endTime float64) {
+func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32, startTime, endTime float64, spk string, decision speaker.AssignDecision) {
 	began := time.Now()
 	defer c.cfg.Timings.utterance(began)
 	c.transcribeMu.Lock()
@@ -550,7 +560,10 @@ func (c *Coordinator) transcribeSinglePass(source SourceType, samples []float32,
 
 	// Only after the text check: a segment that decodes to nothing (noise,
 	// a cough) must not create or move a speaker centroid.
-	spk, decision := c.assignSpeaker(source, samples, startTime)
+	if spk == "" {
+		spk, decision = c.assignSpeaker(source, samples, startTime)
+	}
+	spk, decision = c.micWords(source, spk, decision, result.Text)
 
 	seg := session.Segment{
 		ID:        c.nextSegID(),
@@ -672,12 +685,7 @@ func (c *Coordinator) refine(job refinementJob) (seg session.Segment, ok bool) {
 	if job.unannounced {
 		spk, decision = c.speakerLabel(job.source, job.embedding, sampleDuration(job.samples))
 	}
-	// The voice was judged before the words were known: laughter or one
-	// word said over and over sounds unlike the user's speaking voice, so
-	// on the mic it takes enough different words to be someone else.
-	if job.source == SourceMic && spk != "You" && distinctWords(text) < micMinOtherWords {
-		spk, decision = "You", ""
-	}
+	spk, decision = c.micWords(job.source, spk, decision, text)
 	return session.Segment{
 		ID:        job.id,
 		Speaker:   spk,
@@ -779,7 +787,10 @@ func (c *Coordinator) speakerEmbedding(source SourceType, samples []float32) []f
 		if !c.micVoices() || sampleDuration(samples) < micMinOther {
 			return nil
 		}
+		// Lines are labelled from either pipeline and the decode worker.
+		c.micEmbedMu.Lock()
 		emb, err := c.cfg.MicEmbedder.Extract(samples)
+		c.micEmbedMu.Unlock()
 		if err != nil {
 			return nil
 		}
@@ -863,6 +874,17 @@ const (
 // be someone else's: the two utterances first labelled so on calls with
 // nobody beside the user (2026-11-09) were "No. No. No. No." and laughter.
 const micMinOtherWords = 4
+
+// micWords settles a mic line's speaker once its words are known: the
+// voice was judged before, and laughter or one word said over and over
+// sounds unlike the user's speaking voice, so it takes enough different
+// words to be someone else.
+func (c *Coordinator) micWords(source SourceType, spk string, decision speaker.AssignDecision, text string) (string, speaker.AssignDecision) {
+	if source == SourceMic && spk != "You" && distinctWords(text) < micMinOtherWords {
+		return "You", ""
+	}
+	return spk, decision
+}
 
 // distinctWords counts the different words in text, ignoring case and
 // punctuation.
@@ -1052,6 +1074,16 @@ func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
 		}
 		return
 	}
+	// On the mic (mic_voices), each utterance long enough to tell is
+	// labelled by its own voice, and a change of voice ends the line: in a
+	// room there's no other side to end it, so one line would hold both
+	// people and take the voice of whoever spoke more. Too short to tell:
+	// it joins whatever line is going.
+	if source == SourceMic && u.speaker == "" && c.micVoices() {
+		if emb := c.speakerEmbedding(source, u.samples); len(emb) > 0 {
+			u.speaker, u.decision = c.micLabel(emb, sampleDuration(u.samples))
+		}
+	}
 	c.turnMu.Lock()
 	if c.turns == nil {
 		c.turns = map[SourceType]*turnBuf{}
@@ -1084,9 +1116,12 @@ func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
 		maxSecs, maxGap := c.turnLimits()
 		changed := c.cfg.SpeakerChanged != nil && source == SourceMonitor && c.cfg.SpeakerChanged(t.end-0.25, u.start+1)
 		cut := true
+		voice := source == SourceMic && c.micVoices() && t.speaker != "" && u.speaker != "" && u.speaker != t.speaker
 		switch {
 		case changed:
 			c.turnCuts["speaker-change signal"]++
+		case voice:
+			c.turnCuts["voice changed"]++
 		case u.start-t.end > maxGap:
 			c.turnCuts["pause"]++
 		case (t.end-t.start)+(u.end-u.start) > maxSecs:
@@ -1139,7 +1174,11 @@ func (c *Coordinator) turnLimits() (maxSecs, maxGap float64) {
 // pending line and withdraws the others (see refineWorker).
 func (c *Coordinator) sendTurn(source SourceType, t *turnBuf) {
 	if !t.twoPass {
-		c.singlePass(source, t.samples, t.start, t.end)
+		spk, decision := "", speaker.AssignDecision("")
+		if source == SourceMic && c.micVoices() {
+			spk, decision = t.speaker, t.decision
+		}
+		c.singlePassAs(source, t.samples, t.start, t.end, spk, decision)
 		return
 	}
 	job := refinementJob{

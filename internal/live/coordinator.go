@@ -193,6 +193,8 @@ type Stats struct {
 
 // Coordinator manages one or two live transcription pipelines (mic + monitor).
 type Coordinator struct {
+	// micEmbedMu serializes the mic embedder (Config.MicEmbedder).
+	micEmbedMu sync.Mutex
 	// pass2 is the last minute of pass 2, for the log (see logPass2).
 	pass2Mu    sync.Mutex
 	pass2      pass2Stats

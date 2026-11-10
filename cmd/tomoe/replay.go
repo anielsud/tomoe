@@ -20,6 +20,7 @@ import (
 	"github.com/sosuke-ai/tomoe-pc/internal/speaker"
 	"github.com/sosuke-ai/tomoe-pc/internal/transcribe"
 	"github.com/sosuke-ai/tomoe-pc/internal/videohint"
+	"github.com/sosuke-ai/tomoe-pc/internal/voices"
 )
 
 // sessionReplayCmd re-runs a saved session's recorded audio through the live
@@ -58,6 +59,10 @@ was heard live, but both runs hear the same audio.`,
 		o.maxSpeech, _ = cmd.Flags().GetFloat64("max-speech")
 		o.decodePad, _ = cmd.Flags().GetFloat64("decode-pad")
 		o.interjection, _ = cmd.Flags().GetFloat64("turn-interjection")
+		if cmd.Flags().Changed("mic-voices") {
+			on, _ := cmd.Flags().GetBool("mic-voices")
+			o.micVoices = &on
+		}
 		if cmd.Flags().Changed("turn-mode") {
 			on, _ := cmd.Flags().GetBool("turn-mode")
 			o.turnMode = &on
@@ -99,7 +104,9 @@ type replayOptions struct {
 	// speaker-change signals end a turn, rebuilt from the session's saved
 	// diarization windows and meeting-window looks: "diarizer", "teams",
 	// "both" (as the app had them) or "none".
-	turnMode         *bool
+	turnMode *bool
+	// micVoices overrides mic_voices for this replay (nil: as configured).
+	micVoices        *bool
 	turnMax, turnGap float64
 	turnSignals      string
 }
@@ -117,6 +124,7 @@ func init() {
 	sessionReplayCmd.Flags().Float64("max-speech", 0, "Longest utterance (s) before it's cut (default: your max_speech_duration)")
 	sessionReplayCmd.Flags().Float64("turn-interjection", -1, "Utterances up to this many seconds don't end the other side's turn (default: your turn_interjection)")
 	sessionReplayCmd.Flags().Float64("decode-pad", -1, "Seconds of silence added before and after every decode (default: your decode_pad)")
+	sessionReplayCmd.Flags().Bool("mic-voices", false, "Tell the user's voice from others on the mic, or not with =false (default: your mic_voices)")
 	sessionReplayCmd.Flags().Bool("turn-mode", false, "Decode whole speaker turns, or each utterance with =false (default: your turn_mode)")
 	sessionReplayCmd.Flags().Float64("turn-max", 0, "Turn mode: longest line in seconds (default: your turn_max_seconds)")
 	sessionReplayCmd.Flags().Float64("turn-gap", 0, "Turn mode: a pause longer than this many seconds ends a turn (default: your turn_max_gap)")
@@ -214,8 +222,33 @@ func runSessionReplay(sessID, outDir string, mainThreshold float64, o replayOpti
 
 	fmt.Printf("Replaying %q (%s of audio)...\n", sess.Title, formatDuration(float64(max(len(mic), len(monitor)))/16000))
 	signals := speakerChangeSignals(sess, o.turnSignals)
+	// The user's voice on the mic, as the app has it: the meeting's speaker
+	// model for both sides, so mic and meeting voices cluster together.
+	micVoices := cfg.Meeting.MicVoices
+	if o.micVoices != nil {
+		micVoices = *o.micVoices
+	}
+	var micEmb, meetEmb *speaker.Embedder
+	var owner []float32
+	if micVoices && mic != nil {
+		m, path, _ := status.SpeakerModelFor(cfg.Meeting.SpeakerModel, lang)
+		ov, err := voices.LoadOwner(voices.OwnerPath(config.DataDir(), m.ID))
+		if err == nil && ov.N > 0 {
+			if micEmb, err = speaker.NewEmbedder(path); err == nil {
+				defer micEmb.Close()
+				if meetEmb, err = speaker.NewEmbedder(path); err == nil {
+					defer meetEmb.Close()
+				}
+				owner = ov.Centroid()
+				fmt.Printf("Mic voices: on (%s, %d fingerprints)\n", m.ID, ov.N)
+			}
+		}
+	}
 	for _, run := range runs {
 		lc := pipe.liveConfig(run.tuning, run.twoPass)
+		if micEmb != nil && meetEmb != nil {
+			lc.Embedder, lc.MicEmbedder, lc.OwnerVoice, lc.MicOtherBelow = meetEmb, micEmb, owner, cfg.Meeting.MicOtherBelow
+		}
 		lc.MinSpeechLevelDB, lc.MicLevelMarginDB = cfg.Meeting.MinSpeechLevelDB, cfg.Meeting.MicLevelMarginDB
 		lc.TurnMode, lc.TurnMaxSeconds, lc.TurnMaxGap = cfg.Meeting.TurnMode, cfg.Meeting.TurnMaxSeconds, cfg.Meeting.TurnMaxGap
 		if o.turnMode != nil {
