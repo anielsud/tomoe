@@ -1410,3 +1410,31 @@ Not measured yet: someone in the same room through the same mic will
 sound more like the user than a call participant does (same room and
 microphone), so the others' scores above are likely optimistic. To check
 on the first in-person recording.
+
+First in-person recording (2026-11-10, 75 min, two people at a table,
+one laptop mic). Scored by 2 s windows (1 s hop) against the user's
+voice: same-room speech from the other person still scored low (median
+0.07 in windows labelled as them), so the threshold holds. The failure
+was the cut, not the score. The VAD ends an utterance only at a pause,
+and two people talking across a table leave few: utterances ran to the
+30 s cap and held both voices, taking the label of whoever spoke more.
+39% of the "You" windows (1,397 s) sounded unlike the user, and the other
+person got 742 s against an estimated 36 minutes. Labelling each
+utterance by its own voice before joining turns changed nothing (the
+utterances themselves were mixed).
+
+The fix cuts a mic utterance of 6 s or more where the voice changes:
+2 s windows every second, each unlike the user or not; two windows in a
+row must disagree before the voice counts as changed; no piece under
+3 s; each piece is then labelled by its own fingerprint. Replay of the
+same recording:
+
+| | "You" | other person | unlike-user time inside "You" lines |
+|---|---|---|---|
+| before | 3,680 s | 742 s | 1,397 s (39% of windows) |
+| voice split | 2,327 s | 2,099 s | 98 s (5%) |
+
+158 cuts inside utterances. Three short lines (15 s) from the other
+person were clustered as extra speakers rather than with the rest of
+their speech. Cost: one fingerprint per second of long mic speech;
+decoding the replay took 49% of the audio's length against 43%.

@@ -1025,6 +1025,103 @@ func (c *Coordinator) splitAtHighlight(source SourceType, u turnPart) []turnPart
 	return pieces
 }
 
+// The mic's voice split (splitAtVoice): micVoiceWindow-second windows
+// every micVoiceHop seconds; micVoiceRun windows in a row must agree
+// before the voice counts as changed; no piece is shorter than
+// micVoicePiece seconds.
+const (
+	micVoiceWindow = 2.0
+	micVoiceHop    = 1.0
+	micVoiceRun    = 2
+	micVoicePiece  = 3.0
+)
+
+// splitAtVoice cuts a mic utterance where the voice changes between the
+// user's and someone else's (mic_voices). The VAD only ends an utterance
+// at a pause, and in a room two people often leave none, so one utterance
+// can hold both. Each piece is labelled by its own voice (micLabel); the
+// first keeps the utterance's pending line. Returns nil when there's
+// nothing to cut.
+func (c *Coordinator) splitAtVoice(source SourceType, u turnPart) []turnPart {
+	if source != SourceMic || u.speaker != "" || !c.micVoices() || !c.cfg.TurnMode || u.end-u.start < 2*micVoicePiece {
+		return nil
+	}
+	win, hop := int(micVoiceWindow*vadSampleRate), int(micVoiceHop*vadSampleRate)
+	var other []bool // per window: unlike the user's voice
+	for a := 0; a+win <= len(u.samples); a += hop {
+		c.micEmbedMu.Lock()
+		emb, err := c.cfg.MicEmbedder.Extract(u.samples[a : a+win])
+		c.micEmbedMu.Unlock()
+		if err != nil || len(emb) == 0 {
+			return nil
+		}
+		other = append(other, voices.Similarity(c.cfg.OwnerVoice, voices.Normalized(emb)) < c.cfg.MicOtherBelow)
+	}
+	cuts := voiceCuts(other, u.start, u.end)
+	if len(cuts) == 0 {
+		return nil
+	}
+	var pieces []turnPart
+	from := u.start
+	for i, at := range append(cuts, u.end) {
+		a := int((from - u.start) * vadSampleRate)
+		b := min(len(u.samples), int((at-u.start)*vadSampleRate))
+		if at == u.end {
+			b = len(u.samples)
+		}
+		p := turnPart{samples: u.samples[a:b], start: from, end: at, twoPass: u.twoPass}
+		if i == 0 {
+			p.id, p.pass1 = u.id, u.pass1
+		}
+		if emb := c.speakerEmbedding(source, p.samples); len(emb) > 0 {
+			p.speaker, p.decision = c.micLabel(emb, sampleDuration(p.samples))
+		} else {
+			p.speaker = "You"
+		}
+		pieces = append(pieces, p)
+		from = at
+	}
+	c.turnMu.Lock()
+	if c.turnCuts == nil {
+		c.turnCuts = map[string]int{}
+	}
+	c.turnCuts["voice change inside an utterance"] += len(cuts)
+	c.turnMu.Unlock()
+	return pieces
+}
+
+// voiceCuts is where splitAtVoice cuts an utterance from start to end,
+// given which of its windows sound unlike the user. The voice changes at
+// the first of micVoiceRun windows in a row that disagree with the
+// current one; the cut goes mid-way into the window overlap, where the
+// new voice most likely began.
+func voiceCuts(other []bool, start, end float64) []float64 {
+	if len(other) < micVoiceRun {
+		return nil
+	}
+	var cuts []float64
+	last, cur := start, other[0]
+	for i := 1; i+micVoiceRun <= len(other); i++ {
+		if other[i] == cur {
+			continue
+		}
+		run := true
+		for _, o := range other[i : i+micVoiceRun] {
+			run = run && o != cur
+		}
+		if !run {
+			continue
+		}
+		at := start + float64(i)*micVoiceHop + (micVoiceWindow-micVoiceHop)/2
+		if at-last >= micVoicePiece && end-at >= micVoicePiece {
+			cuts = append(cuts, at)
+			last = at
+		}
+		cur = other[i]
+	}
+	return cuts
+}
+
 // decode transcribes samples with Config.DecodePad seconds of silence on
 // each side, and gives token times relative to samples' own start.
 // Cohere drops the last syllable of audio that stops abruptly ("What'"
@@ -1069,6 +1166,12 @@ func (c *Coordinator) addToTurn(source SourceType, samples []float32, start, end
 // than TurnMaxGap, or the line would pass TurnMaxSeconds.
 func (c *Coordinator) addTurnPart(source SourceType, u turnPart) {
 	if pieces := c.splitAtHighlight(source, u); len(pieces) > 1 {
+		for _, p := range pieces {
+			c.addTurnPart(source, p)
+		}
+		return
+	}
+	if pieces := c.splitAtVoice(source, u); len(pieces) > 1 {
 		for _, p := range pieces {
 			c.addTurnPart(source, p)
 		}
